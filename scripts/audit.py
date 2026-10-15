@@ -55,9 +55,9 @@ for repo in MODULES:
     # 4) README 门面
     check("🤖 AI Agent" in t and "AGENTS.md" in t, f"{repo}: README 缺 AI Agent 行")
     if repo not in EXEMPT_QUICKUSE:
-        # README 深化后的模板：能做什么 + 使用示例（取代旧的单一「快速使用」段）
-        check("## 能做什么" in t and "## 使用示例" in t,
-              f"{repo}: README 缺能做什么/使用示例")
+        # README 重写后的统一模板（2026-10-15「README 重写」批次）：这个仓库做什么 + 快速使用
+        check("## 这个仓库做什么" in t and "## 快速使用" in t,
+              f"{repo}: README 缺这个仓库做什么/快速使用段")
     if repo not in EXEMPT_TABLE:
         check("## 矩阵总览（23 活跃模块，自动生成）" in t,
               f"{repo}: 矩阵总览表过期或缺失（跑 gen_tables.py）")
