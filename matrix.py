@@ -26,8 +26,8 @@ SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
 
 DESC = {
-    "pkg": "微工具集 16 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache）",
-    "concurrency": "并发与流控原语（async/group/singleflight/progress/syncx/ratelimit/retry）",
+    "pkg": "微工具集 18 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）",
+    "concurrency": "并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）",
     "logx": "统一日志门面（多后端可替换 + Sink + caller 归属）+ 优雅关停",
     "core": "应用基建件（governance 治理 schema / config 配置加载 / lifecycle 契约 / network IP 工具 / version）",
     "istio": "Istio Proxyless——Kitex xDS 动态熔断",

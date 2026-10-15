@@ -12,8 +12,8 @@ BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(_
 def repo_path(r): return BASE / "pkg" if r == "pkg" else BASE / f"ekit-{r}"
 
 DESC = {  # 各仓一句话定位（matrix.py 亦有副本）
-    "pkg": "微工具集 16 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache）",
-    "concurrency": "并发与流控原语（async GoSafe 系列 / group / singleflight / progress / syncx / ratelimit / retry）",
+    "pkg": "微工具集 18 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）",
+    "concurrency": "并发与流控原语（async GoSafe 系列 / gopool 协程池 / group / singleflight / progress / syncx / ratelimit / retry）",
     "logx": "统一日志门面（接口分层 / 多后端 / Sink / caller 归属）+ shutdown 优雅关停",
     "core": "应用基建件：governance 治理 schema、lifecycle 契约、network IP 工具、version",
     "istio": "Istio Proxyless——Kitex xDS 动态熔断（InitXDS / NewXDSClientOption）",
