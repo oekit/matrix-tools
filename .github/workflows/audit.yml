@@ -28,6 +28,7 @@ jobs:
             git clone --quiet "https://github.com/oekit/$m.git" "repos/$m"
           done
           git clone --quiet "https://github.com/oekit/oekit.github.io.git" "repos/oekit.github.io"
+          git clone --quiet "https://github.com/oekit/oekit.git" "repos/oekit"
       - name: Run audit
         id: audit
         run: |

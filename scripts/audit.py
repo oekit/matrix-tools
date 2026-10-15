@@ -55,7 +55,9 @@ for repo in MODULES:
     # 4) README 门面
     check("🤖 AI Agent" in t and "AGENTS.md" in t, f"{repo}: README 缺 AI Agent 行")
     if repo not in EXEMPT_QUICKUSE:
-        check("## 快速使用" in t, f"{repo}: README 缺快速使用")
+        # README 深化后的模板：能做什么 + 使用示例（取代旧的单一「快速使用」段）
+        check("## 能做什么" in t and "## 使用示例" in t,
+              f"{repo}: README 缺能做什么/使用示例")
     if repo not in EXEMPT_TABLE:
         check("## 矩阵总览（23 活跃模块，自动生成）" in t,
               f"{repo}: 矩阵总览表过期或缺失（跑 gen_tables.py）")
@@ -94,6 +96,22 @@ try:
         check((site / "docs" / "guide" / f"{g}.md").exists(), f"site: 缺指南 {g}")
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
+
+# ---------- 架构图（生成器产物一致性） ----------
+try:
+    from gen_diagram import render_svg, targets as diagram_targets  # noqa: 延迟导入
+    svg = render_svg()
+    tgts = diagram_targets()
+    if not tgts:
+        print("[warn] 架构图两处目标仓均未检出，跳过一致性检查")
+    for label, p in tgts:
+        check(p.exists() and p.read_bytes() == svg,
+              f"{label}: architecture.svg 与生成器不一致（跑 gen_diagram.py）")
+    home = repo_dir("oekit", BASE)
+    check("docs/assets/architecture.svg" in (home / "README.md").read_text(),
+          "oekit 主仓: README 未嵌入架构图")
+except SystemExit as e:
+    issues.append(f"diagram: {e}")
 
 # ---------- 报告 ----------
 if issues:

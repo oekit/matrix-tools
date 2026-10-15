@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """各仓 README 安装行版本刷新到最新 tag。用法：python3 scripts/refresh_versions.py [--push]"""
 import os, pathlib, re, sys
-sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
-from matrix import MODULES, repo_dir, latest_tag
+sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
+from matrix import MODULES, repo_dir, latest_tag, sh
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 PUSH = "--push" in sys.argv
 for repo in MODULES:

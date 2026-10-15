@@ -1,4 +1,4 @@
-.PHONY: audit fix-tables fix-agents fix-changelog fix-versions
+.PHONY: audit fix-tables fix-agents fix-changelog fix-versions gen-diagram fix-diagram
 
 audit:
 	python3 scripts/audit.py
@@ -14,3 +14,9 @@ fix-changelog:
 
 fix-versions:
 	python3 scripts/refresh_versions.py --push
+
+gen-diagram:
+	python3 scripts/gen_diagram.py
+
+fix-diagram:
+	python3 scripts/gen_diagram.py --push
