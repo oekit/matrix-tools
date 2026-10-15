@@ -97,19 +97,19 @@ try:
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
 
-# ---------- 架构图（生成器产物一致性） ----------
+# ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
     from gen_diagram import render_svg, targets as diagram_targets  # noqa: 延迟导入
-    svg = render_svg()
     tgts = diagram_targets()
     if not tgts:
         print("[warn] 架构图两处目标仓均未检出，跳过一致性检查")
-    for label, p in tgts:
-        check(p.exists() and p.read_bytes() == svg,
-              f"{label}: architecture.svg 与生成器不一致（跑 gen_diagram.py）")
+    for label, p, theme in tgts:
+        check(p.exists() and p.read_bytes() == render_svg(theme),
+              f"{label}: 与生成器不一致（跑 gen_diagram.py）")
     home = repo_dir("oekit", BASE)
-    check("docs/assets/architecture.svg" in (home / "README.md").read_text(),
-          "oekit 主仓: README 未嵌入架构图")
+    ht = (home / "README.md").read_text()
+    check("docs/assets/architecture.svg" in ht, "oekit 主仓: README 未嵌入架构图")
+    check("architecture-dark.svg" in ht, "oekit 主仓: README 缺暗色架构图 source")
 except SystemExit as e:
     issues.append(f"diagram: {e}")
 
