@@ -1,0 +1,31 @@
+# matrix-tools
+
+oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检。
+
+## 本地用法
+
+```bash
+# 全量审计（module 行/残留引用/门面/AGENTS/CHANGELOG/安装行版本/矩阵表新鲜度/站点）
+python3 scripts/audit.py
+
+# 修复类生成器（--push 直接提交推送）
+python3 scripts/gen_tables.py            # 各仓 README 矩阵总览表
+python3 scripts/gen_agents.py            # 各仓 AGENTS.md
+python3 scripts/gen_changelog.py --push  # 各仓 CHANGELOG
+python3 scripts/refresh_versions.py --push  # README 安装行对齐最新 tag
+```
+
+`MATRIX_BASE` 环境变量指定矩阵检出根目录（默认 `~/my_project/ekit-split`；
+支持 `<base>/<name>`、`<base>/ekit-<name>`、`<base>/repos/<name>` 三种布局）。
+
+## 自动巡检
+
+`.github/workflows/audit.yml`：每周一 03:00 UTC + 手动触发。
+Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-remote），
+发现漂移自动创建/更新 `matrix-drift` 标签的 issue 并 @ 维护者。
+
+## 规范
+
+- 模块清单与描述的唯一事实源在本仓 `matrix.py` 的 `MODULES`/`DESC`
+- 新增模块：改 `matrix.py` → 跑 `gen_tables.py --push` → 跑 `audit.py` 确认全绿
+- 发版后：跑 `refresh_versions.py --push` 对齐各仓安装行

@@ -1,0 +1,68 @@
+name: Matrix audit
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # 每周一 03:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: matrix-audit
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Clone all matrix repos
+        run: |
+          mkdir -p repos
+          for m in pkg concurrency logx core istio metrics tracing registry timertask data gorm redis httpx network middleware nns nns-endpoint bootstrap handler hertz kitex workflow kitex-examples; do
+            git clone --quiet "https://github.com/oekit/$m.git" "repos/$m"
+          done
+          git clone --quiet "https://github.com/oekit/oekit.github.io.git" "repos/oekit.github.io"
+      - name: Run audit
+        id: audit
+        run: |
+          MATRIX_BASE="$PWD/repos" python3 scripts/audit.py --remote-tags > audit-report.txt || true
+          cat audit-report.txt
+          echo "drift=$(grep -c '❌' audit-report.txt || true)" >> "$GITHUB_OUTPUT"
+      - name: Close previous drift issue
+        if: steps.audit.outputs.drift == '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-drift'
+            });
+            for (const i of issues) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: i.number, state: 'closed' });
+            }
+      - name: Open drift issue
+        if: steps.audit.outputs.drift != '0'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = '矩阵审计发现漂移，本地跑 `matrix-tools` 的对应生成器修复：\n\n```\n'
+              + fs.readFileSync('audit-report.txt', 'utf8') + '\n```';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-drift'
+            });
+            if (issues.length) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: issues[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner,
+                repo: context.repo.repo, title: '矩阵漂移报告', body, labels: ['matrix-drift'] });
+            }
