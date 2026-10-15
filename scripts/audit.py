@@ -59,6 +59,8 @@ for repo in MODULES:
         check("## 这个仓库做什么" in t and "## 快速使用" in t,
               f"{repo}: README 缺这个仓库做什么/快速使用段")
     if repo not in EXEMPT_TABLE:
+        check(t.count("## 矩阵总览") == 1,
+              f"{repo}: 矩阵总览段重复（历史遗留旧段未清理，跑 gen_tables.py）")
         check("## 矩阵总览（23 活跃模块，自动生成）" in t,
               f"{repo}: 矩阵总览表过期或缺失（跑 gen_tables.py）")
         # 5) 表新鲜度：重新生成并与现状比对

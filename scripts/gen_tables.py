@@ -41,14 +41,40 @@ for repo in MODULES:
     d = repo_dir(repo, BASE)
     readme = d / "README.md"
     t = readme.read_text()
-    m = re.search(r"## 矩阵总览.*?(?=\n## |\Z)", t, flags=re.S)
-    if m:
-        # 全局视角表直接覆盖（含标题行以内全部）
-        new_section = render_global()
-        t = t[:m.start()] + new_section + t[m.end():]
-        # 本仓自己的依赖行保留原样（audit 用每仓视角比对，见下）
+    # 行级扫描定位全部矩阵段（标题行 + 其后连续的空行/表格行）。
+    # 此前用非贪婪正则只替换第一段，历史遗留的旧段永远残留
+    # （2026-10-16 发现 22 仓均有重复矩阵段），改为全删后写入一份。
+    lines = t.splitlines(keepends=True)
+    spans: list[tuple[int, int]] = []
+    i = 0
+    while i < len(lines):
+        if lines[i].startswith("## 矩阵总览"):
+            j = i + 1
+            while j < len(lines) and (lines[j].strip() == "" or lines[j].startswith("|")):
+                j += 1
+            spans.append((i, j))
+            i = j
+        else:
+            i += 1
+    if spans:
+        # 第一段位置写入新生成的全局视角表，其余段整段删除
+        s0, e0 = spans[0]
+        drop: set[int] = set()
+        for s, e in spans[1:]:
+            drop.update(range(s, e))
+        out = []
+        for x, line in enumerate(lines):
+            if x in drop:
+                continue
+            if s0 <= x < e0:
+                if x == s0:
+                    out.append(render_global() + "\n")
+                continue
+            out.append(line)
+        t = "".join(out)
     else:
         t = t.rstrip() + "\n\n" + render_table_for(repo) + "\n"
+    assert t.count("## 矩阵总览") == 1, f"{repo}: 矩阵段去重失败"
     readme.write_text(t)
     print(f"✓ oekit/{repo}", flush=True)
 
