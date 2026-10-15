@@ -87,6 +87,12 @@ def latest_tag(repo: str, base: str | None = None, remote: bool = False) -> str 
                            cwd=d, capture_output=True, text=True)
         tags = [ln.rsplit("/", 1)[-1] for ln in r.stdout.splitlines()
                 if ln.strip() and not ln.rstrip().endswith("^{}")]
+        def key(v):
+            try:
+                return tuple(int(x) for x in v[1:].split("."))
+            except ValueError:
+                return (0, 0, 0)
+        tags = sorted(set(tags), key=key, reverse=True)
     else:
         r = subprocess.run(["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
                            capture_output=True, text=True)
