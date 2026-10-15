@@ -17,8 +17,8 @@ jobs:
   audit:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Clone all matrix repos
@@ -37,7 +37,7 @@ jobs:
           echo "drift=$(grep -c '❌' audit-report.txt || true)" >> "$GITHUB_OUTPUT"
       - name: Close previous drift issue
         if: steps.audit.outputs.drift == '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const issues = await github.paginate(github.rest.issues.listForRepo, {
@@ -50,7 +50,7 @@ jobs:
             }
       - name: Open drift issue
         if: steps.audit.outputs.drift != '0'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
