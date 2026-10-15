@@ -40,6 +40,7 @@ DESC = {
     "redis": "Redis 全家——客户端封装、缓存后端、分布式锁",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断/重试/指标/OTel 透传",
     "middleware": "Hertz 自研标准中间件栈 + contrib 桥接 + hmw",
+    "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具、Octopus 推送",
     "nns": "NNS 服务治理客户端——provider 无关发现/配置/实例缓存",
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",
     "bootstrap": "应用生命周期引导——bootstrap.Run 骨架 + healthz",

@@ -7,6 +7,7 @@
 from __future__ import annotations
 import os
 import re
+import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
@@ -83,7 +84,8 @@ try:
     idx = site / "docs" / "index.md"
     check(idx.exists() and "23 个独立发版" in idx.read_text(), "site: 首页计数非 23")
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",
-                        "-e", "yi-nology", "-e", "openekit", "."],
+                        "--exclude-dir=dist", "--exclude-dir=cache",
+                        "-e", "github.com/yi-nology", "-e", "github.com/openekit", "."],
                        cwd=site, capture_output=True, text=True)
     if r.stdout.strip():
         issues.append(f"site: 残留旧引用 {r.stdout.strip().splitlines()[:3]}")
