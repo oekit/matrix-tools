@@ -80,6 +80,14 @@ for repo in MODULES:
     else:
         print(f"[warn] {repo}: README 无安装行（仅提示）")
 
+# ---------- 门面壳同步（data 八壳 ← 源包导出符号） ----------
+# 「源仓新增导出符号时本壳需同步」的跟版税此前靠人记（2026-10-16 曾漏
+# pkg v0.6.0 的 BatchGetter），现为 audit 硬门禁。
+from shell_sync import check_sync  # noqa: E402 延迟导入同目录脚本
+
+for d in check_sync(BASE):
+    issues.append(d)
+
 # ---------- 站点仓 ----------
 try:
     site = repo_dir(SITE_REPO, BASE)
