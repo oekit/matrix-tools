@@ -61,7 +61,7 @@ for repo in MODULES:
     if repo not in EXEMPT_TABLE:
         check(t.count("## 矩阵总览") == 1,
               f"{repo}: 矩阵总览段重复（历史遗留旧段未清理，跑 gen_tables.py）")
-        check("## 矩阵总览（23 活跃模块，自动生成）" in t,
+        check(f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）" in t,
               f"{repo}: 矩阵总览表过期或缺失（跑 gen_tables.py）")
         # 5) 表新鲜度：重新生成并与现状比对
         m = re.search(r"## 矩阵总览.*?(?=\n## |\Z)", t, flags=re.S)

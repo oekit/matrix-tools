@@ -27,13 +27,13 @@ def render_table_for(repo: str) -> str:
     tail = ""
     if repo == "bootstrap":
         tail = "\n\n> 依赖严格自底向上；微库已于 2026-10 合并为 [pkg](https://github.com/oekit/pkg)，旧微库仓已删除。"
-    return f"## 矩阵总览（23 活跃模块，自动生成）\n\n" + "\n".join(lines) + tail
+    return f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）\n\n" + "\n".join(lines) + tail
 
 def render_global() -> str:
     lines = ["| 模块 | 内容 | 矩阵内依赖 |", "|---|---|---|"]
     for r in MODULES:
         lines.append(f"| [{r}](https://github.com/oekit/{r}) | {DESC[r]} | {deps_link(r)} |")
-    return "## 矩阵总览（23 活跃模块，自动生成）\n\n" + "\n".join(lines)
+    return f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）\n\n" + "\n".join(lines)
 
 NEW_GLOBAL = render_global()
 

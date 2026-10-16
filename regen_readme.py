@@ -5,7 +5,7 @@ sys.path.insert(0, '/Users/zhangyi/my_project/ekit-split/matrix-tools')
 from matrix import MODULES, ORG, DESC, repo_dir, sibling_deps, DEFAULT_BASE
 from pathlib import Path
 
-HEADING = "## 矩阵总览（23 活跃模块，自动生成）"
+HEADING = f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）"
 
 def build_table(base=None):
     lines = [HEADING, "", "| 模块 | 内容 | 矩阵内依赖 |", "|---|---|---|"]

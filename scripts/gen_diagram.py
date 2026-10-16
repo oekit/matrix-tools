@@ -28,12 +28,10 @@ HOMEPAGE_REPO = "oekit"
 # ---------- 展示层配置（与 matrix.py 的 DESC 解耦：DESC 面向表格全量，SHORT 面向芯片一行） ----------
 SHORT = {
     "bootstrap": "组合根 · App/Run · healthz",
-    "hertz": "SSE/health/metrics · OTel",
-    "kitex": "治理热更 · BizError 桥接",
+    "hertz": "SSE/health · CRUD Handler · OTel",
+    "kitex": "治理热更 · BizError 桥接 · xDS 熔断",
     "middleware": "标准栈 · contrib 桥接",
-    "handler": "CRUD Handler · 绑定",
     "workflow": "串行/并行/异步编排 · Hook",
-    "istio": "xDS 熔断 · 零内部依赖",
     "kitex-examples": "echo 示例 · 治理配置",
     "httpx": "LB · 熔断/重试 · OTel 透传",
     "nns-endpoint": "per-service 熔断 · 换实例重试",
@@ -89,8 +87,8 @@ THEMES = {
 
 LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），注释框固定驻留 note_row 行右侧
     {"name": "应用引导 · 框架生态", "scheme": "indigo",
-     "rows": [["workflow", "istio", "kitex-examples"],
-              ["hertz", "bootstrap", "middleware", "handler", "kitex"]],
+     "rows": [["workflow", "kitex-examples"],
+              ["hertz", "bootstrap", "middleware", "kitex"]],
      "note": ["hertz.RunServer / kitex.RunServer → bootstrap 组合根",
               "统一组合与优雅关停：排空连接 → 释放资源"],
      "emph": {"bootstrap"}, "dashed": {"kitex-examples"}},
