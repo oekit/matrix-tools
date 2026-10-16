@@ -14,11 +14,11 @@ from pathlib import Path
 
 # 规范模块清单（23 个，依赖自底向上的顺序）
 MODULES = [
-    "pkg", "concurrency", "logx", "core", "istio",
+    "pkg", "concurrency", "logx", "core",
     "metrics", "tracing", "registry",
     "data", "gormx", "redisx", "httpx", "network", "timertask", "middleware",
     "nns", "nns-endpoint",
-    "bootstrap", "handler", "hertz", "kitex", "workflow", "kitex-examples",
+    "bootstrap", "hertz", "kitex", "workflow", "kitex-examples",
 ]
 
 ORG = "oekit"
@@ -30,7 +30,6 @@ DESC = {
     "concurrency": "并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口 / breaker 自适应熔断（规范哨兵 ErrCircuitOpen）/ shedding CPU 自适应降载 / batch 攒批执行器（满条数/满字节/窗口去重）/ timewheel 单级时间轮",
     "logx": "统一日志门面（多后端可替换 + Sink + caller 归属）+ 优雅关停；桥接子包 hlog/hertzlog/kitexlog 为嵌套模块按需引入",
     "core": "应用基建件（governance 治理 schema / config 配置加载 + default/env/range/options tag 校验 / lifecycle 契约 / network IP 工具 / version）",
-    "istio": "Istio Proxyless——Kitex xDS 动态熔断",
     "metrics": "Prometheus 门面 + 弹性指标族",
     "tracing": "OpenTelemetry 追踪 + trace_id 真相源",
     "registry": "注册发现核心 + Nacos 实现 + Nacos 配置源 + sdbridge",
@@ -44,9 +43,8 @@ DESC = {
     "nns": "NNS 服务治理客户端——provider 无关发现/配置/实例缓存",
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",
     "bootstrap": "应用生命周期引导——bootstrap.Run 骨架 + healthz",
-    "handler": "HTTP handler 层——通用 CRUD Handler、参数绑定、版本端点",
-    "hertz": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel",
-    "kitex": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel",
+    "hertz": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel、crudh/validatorh/versionh（原 handler 微库收编）",
+    "kitex": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel、istio（xDS 动态熔断，原 istio 微库收编）",
     "workflow": "组合式流程编排——串行/并行/异步/条件分支 + Hook AOP",
     "kitex-examples": "Kitex echo 示例——client/server + IDL + 治理配置",
 }
