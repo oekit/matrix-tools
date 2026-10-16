@@ -16,9 +16,9 @@ from pathlib import Path
 MODULES = [
     "pkg", "concurrency", "logx", "core", "istio",
     "metrics", "tracing", "registry",
-    "data", "gorm", "redisx", "httpx", "network", "timertask", "middleware",
+    "data", "gormx", "redisx", "httpx", "network", "timertask", "middleware",
     "nns", "nns-endpoint",
-    "bootstrap", "handler", "hertz", "kitex", "workflow", "kitex-examples",
+    "bootstrap", "handler", "hertzx", "kitexx", "workflow", "kitex-examples",
 ]
 
 ORG = "oekit"
@@ -36,7 +36,7 @@ DESC = {
     "registry": "注册发现核心 + Nacos 实现 + Nacos 配置源 + sdbridge",
     "timertask": "分片定时任务（FNV-1a、心跳续约）",
     "data": "LocalCache（TTL/容量/空值防穿透）+ SingleFlightCache + 缓存键构造（刷新检查器 Checker 在 pkg/cache）",
-    "gorm": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储",
+    "gormx": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名）",
     "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传",
     "middleware": "Hertz 自研标准中间件栈 + contrib 桥接 + hmw + SheddingMiddleware 自适应降载",
@@ -45,8 +45,8 @@ DESC = {
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",
     "bootstrap": "应用生命周期引导——bootstrap.Run 骨架 + healthz",
     "handler": "HTTP handler 层——通用 CRUD Handler、参数绑定、版本端点",
-    "hertz": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel",
-    "kitex": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel",
+    "hertzx": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel（原 oekit/hertz，v0.4.0 更名）",
+    "kitexx": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel（原 oekit/kitex，v0.4.0 更名）",
     "workflow": "组合式流程编排——串行/并行/异步/条件分支 + Hook AOP",
     "kitex-examples": "Kitex echo 示例——client/server + IDL + 治理配置",
 }
