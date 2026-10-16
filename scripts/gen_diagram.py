@@ -114,7 +114,7 @@ ARROWS = [("hertz", "bootstrap", "h", "blue"),
           ("redisx", "data", "h", "amber")]
 
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif"
-W, BAND_X, BAND_W, CHIP_H, GAP_X, ROW_GAP = 1240, 32, 1176, 64, 20, 12
+W, BAND_X, BAND_W, CHIP_H, GAP_X, ROW_GAP = 1240, 32, 1176, 72, 20, 26
 INNER_L, INNER_R = 48, 1192
 
 
@@ -213,11 +213,11 @@ def render_svg(theme: str = "light") -> bytes:
                 if mid == "pkg":
                     out.append(f'  <text x="{x + 16:.0f}" y="{ry + 22:.0f}" font-size="15"{nwt} fill="{nfill}">{nm}'
                                f'<tspan font-size="11.5" font-weight="400" fill="{P["pkgsub"]}"> {esc(SHORT[mid])}</tspan></text>')
-                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 38:.0f}" font-size="10" fill="{P["pkgsub"]}">{esc(PKG_SUBS[0])}</text>')
-                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 52:.0f}" font-size="10" fill="{P["pkgsub"]}">{esc(PKG_SUBS[1])}</text>')
+                    for i, sub in enumerate(PKG_SUBS):
+                        out.append(f'  <text x="{x + 16:.0f}" y="{ry + 37 + i * 12:.0f}" font-size="10" fill="{P["pkgsub"]}">{esc(sub)}</text>')
                 else:
-                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 24:.0f}" font-size="15"{nwt} fill="{nfill}">{nm}</text>')
-                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 46:.0f}" font-size="11.5" fill="{P["desc"]}">{esc(SHORT[mid])}</text>')
+                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 27:.0f}" font-size="15"{nwt} fill="{nfill}">{nm}</text>')
+                    out.append(f'  <text x="{x + 16:.0f}" y="{ry + 50:.0f}" font-size="11.5" fill="{P["desc"]}">{esc(SHORT[mid])}</text>')
                 pos[mid] = (x, ry, w)
         # 层内注释（框或裸文本），固定驻留 note_row 行右侧
         if ly.get("note"):
@@ -228,14 +228,14 @@ def render_svg(theme: str = "light") -> bytes:
             ny = by + 36 + nri * (CHIP_H + ROW_GAP)
             out.append(f'  <rect x="{nx:.0f}" y="{ny:.0f}" width="{nw:.0f}" height="{CHIP_H}" rx="8" fill="{sc["note"]}" stroke="{sc["border"]}"/>')
             for i, l in enumerate(lines):
-                out.append(f'  <text x="{nx + 16:.0f}" y="{ny + 26 + i * 20:.0f}" font-size="11.5" fill="{sc["notec"]}">{esc(l)}</text>')
+                out.append(f'  <text x="{nx + 16:.0f}" y="{ny + 27 + i * 21:.0f}" font-size="11.5" fill="{sc["notec"]}">{esc(l)}</text>')
         elif ly.get("plain_note"):
             lines = ly["plain_note"]
             nw = note_width(lines, False)
             nx = INNER_R - nw
             ry = by + 36
             for i, l in enumerate(lines):
-                out.append(f'  <text x="{nx:.0f}" y="{ry + 26 + i * 20:.0f}" font-size="11.5" fill="{sc["notec"]}">{esc(l)}</text>')
+                out.append(f'  <text x="{nx:.0f}" y="{ry + 28 + i * 21:.0f}" font-size="11.5" fill="{sc["notec"]}">{esc(l)}</text>')
         # 层间箭头
         if li < len(LAYERS) - 1:
             gy = by + bh + 2
@@ -293,7 +293,7 @@ def _layout_layers():
 _layout = _layout_layers()
 _layer_h = [36 + CHIP_H * len(_layout[i]["rows"]) + ROW_GAP * (len(_layout[i]["rows"]) - 1) + 14 for i in range(len(LAYERS))]
 LAY_Y0 = 178.0
-_LAYER_GAP = 24
+_LAYER_GAP = 30
 _layer_span = [_layer_h[i] + _LAYER_GAP for i in range(len(LAYERS))]     # 层高 + 层间隙
 LAY_TOPS = [LAY_Y0 + sum(_layer_span[:i]) for i in range(len(LAYERS))]   # 各层纵向起点（前缀和）
 H_TOTAL = LAY_TOPS[-1] + _layer_h[-1] + 62                               # 末层后接页脚
