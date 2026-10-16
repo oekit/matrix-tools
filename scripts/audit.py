@@ -101,7 +101,7 @@ try:
                        cwd=site, capture_output=True, text=True)
     if r.stdout.strip():
         issues.append(f"site: 残留旧引用 {r.stdout.strip().splitlines()[:3]}")
-    for g in ["getting-started", "logging", "errors", "http-service",
+    for g in ["getting-started", "logging", "errors", "caching", "http-service",
               "rpc-service", "observability", "migration", "ai-agent"]:
         check((site / "docs" / "guide" / f"{g}.md").exists(), f"site: 缺指南 {g}")
 except FileNotFoundError as e:
