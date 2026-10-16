@@ -21,7 +21,7 @@ DESC = {  # 各仓一句话定位（matrix.py 亦有副本）
     "tracing": "OpenTelemetry Init + trace_id 真相源（traceid 包）+ httpotel / redisotel 插桩",
     "registry": "注册发现 SPI（Registrar/Discoverer/Subscriber/ConfigStore）+ Nacos 实现 + nacos 门面 + config 配置加载 + sdbridge + registrymocks",
     "timertask": "分片定时任务（LocalBackend / RedisBackend，FNV-1a 分片）",
-    "data": "缓存检查器（NewChecker：TTL/failTTL/inflight 合并）+ LocalCache + SingleFlightCache",
+    "data": "数据访问门面——八子包 re-export（cache/rediscache/crud/distlock/gormx/redisx/timertask/cachetest）+ cached 缓存读写编排（写后失效/事务提交后失效/查询缓存版本号失效）",
     "gorm": "gormx 连接池增强 + crud 框架无关 CRUD Service（TxRepository 事务防丢更新）+ gormrepo 仓储",
     "redis": "redisx 客户端封装 + distlock 分布式锁 + data/cache 的 Redis 后端",
     "httpx": "Hertz Client 高层封装——服务发现/熔断/指数退避重试/弹性指标/OTel 透传 + loadbalance",
