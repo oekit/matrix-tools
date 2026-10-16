@@ -16,7 +16,7 @@ from pathlib import Path
 MODULES = [
     "pkg", "concurrency", "logx", "core", "istio",
     "metrics", "tracing", "registry",
-    "data", "gorm", "redis", "httpx", "network", "timertask", "middleware",
+    "data", "gorm", "redisx", "httpx", "network", "timertask", "middleware",
     "nns", "nns-endpoint",
     "bootstrap", "handler", "hertz", "kitex", "workflow", "kitex-examples",
 ]
@@ -37,7 +37,7 @@ DESC = {
     "timertask": "分片定时任务（FNV-1a、心跳续约）",
     "data": "LocalCache（TTL/容量/空值防穿透）+ SingleFlightCache + 缓存键构造（刷新检查器 Checker 在 pkg/cache）",
     "gorm": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储",
-    "redis": "Redis 全家——客户端封装、缓存后端、分布式锁 + ratelimit 分布式限流（Lua 三态 + 故障本地兜底）",
+    "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传",
     "middleware": "Hertz 自研标准中间件栈 + contrib 桥接 + hmw + SheddingMiddleware 自适应降载",
     "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具、Octopus 推送",
