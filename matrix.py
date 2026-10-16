@@ -35,7 +35,7 @@ DESC = {
     "tracing": "OpenTelemetry 追踪 + trace_id 真相源",
     "registry": "注册发现核心 + Nacos 实现 + Nacos 配置源 + sdbridge",
     "timertask": "分片定时任务（FNV-1a、心跳续约）",
-    "data": "LocalCache（TTL/容量/空值防穿透）+ SingleFlightCache + 缓存键构造（刷新检查器 Checker 在 pkg/cache）",
+    "data": "LocalCache（TTL/容量/空值防穿透）+ SingleFlightCache + 缓存键构造；嵌套聚合模块 all/ 一键拉齐数据全家桶 + TwoLevelCache 两级缓存（Checker 在 pkg/cache）",
     "gormx": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名）",
     "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传",
