@@ -40,8 +40,8 @@ SHORT = {
     "network": "WS/NATS/MQ · 连接工具",
     "nns": "发现/配置/实例缓存 · 降级",
     "registry": "注册发现核心 + Nacos 实现",
-    "gorm": "连接池增强 · CRUD Service",
-    "redis": "客户端 · 缓存后端 · 分布式锁",
+    "gormx": "连接池增强 · CRUD Service",
+    "redisx": "客户端 · 缓存后端 · 分布式锁",
     "data": "LocalCache · 缓存检查器",
     "timertask": "分片定时 · 心跳续约",
     "logx": "统一门面 · 多后端 · Sink",
@@ -100,7 +100,7 @@ LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），�
      "note": ["hertz / kitex → nns → registry（服务发现链）",
               "nns-endpoint → httpx（端点级弹性）"]},
     {"name": "数据访问", "scheme": "amber",
-     "rows": [["gorm", "redis", "data", "timertask"]]},
+     "rows": [["gormx", "redisx", "data", "timertask"]]},
     {"name": "可观测性", "scheme": "violet",
      "rows": [["logx", "tracing", "metrics"]],
      "plain_note": ["全矩阵统一可观测门面", "结构化日志 / OTel 链路 / 指标"]},
@@ -112,7 +112,7 @@ LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），�
 ARROWS = [("hertz", "bootstrap", "h", "blue"),
           ("kitex", "bootstrap", "arc", "blue"),
           ("nns", "registry", "h", "teal"),
-          ("redis", "data", "h", "amber")]
+          ("redisx", "data", "h", "amber")]
 
 FONT = "-apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Noto Sans CJK SC', sans-serif"
 W, BAND_X, BAND_W, CHIP_H, GAP_X, ROW_GAP = 1240, 32, 1176, 64, 20, 12
