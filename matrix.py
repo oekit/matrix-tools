@@ -18,7 +18,7 @@ MODULES = [
     "metrics", "tracing", "registry",
     "data", "gormx", "redisx", "httpx", "network", "timertask", "middleware",
     "nns", "nns-endpoint",
-    "bootstrap", "handler", "hertzx", "kitexx", "workflow", "kitex-examples",
+    "bootstrap", "handler", "hertz", "kitex", "workflow", "kitex-examples",
 ]
 
 ORG = "oekit"
@@ -45,8 +45,8 @@ DESC = {
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",
     "bootstrap": "应用生命周期引导——bootstrap.Run 骨架 + healthz",
     "handler": "HTTP handler 层——通用 CRUD Handler、参数绑定、版本端点",
-    "hertzx": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel（原 oekit/hertz，v0.4.0 更名）",
-    "kitexx": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel（原 oekit/kitex，v0.4.0 更名）",
+    "hertz": "Hertz 运行时集成——日志桥接、生命周期、SSE/health/metrics、适配器、OTel",
+    "kitex": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel",
     "workflow": "组合式流程编排——串行/并行/异步/条件分支 + Hook AOP",
     "kitex-examples": "Kitex echo 示例——client/server + IDL + 治理配置",
 }
