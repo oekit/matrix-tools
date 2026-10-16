@@ -86,7 +86,7 @@ try:
     llms = site / "docs" / "public" / "llms.txt"
     check(llms.exists(), "site: 缺 docs/public/llms.txt")
     idx = site / "docs" / "index.md"
-    check(idx.exists() and "23 个独立发版" in idx.read_text(), "site: 首页计数非 23")
+    check(idx.exists() and "21 个独立发版" in idx.read_text(), "site: 首页计数非 21")
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",
                         "--exclude-dir=dist", "--exclude-dir=cache",
                         "-e", "github.com/yi-nology", "-e", "github.com/openekit", "."],

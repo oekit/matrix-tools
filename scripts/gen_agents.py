@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""为 22 个活跃仓生成 oekit 适配版 AGENTS.md（共享规范 + 本仓信息）"""
+"""为 21 个活跃仓生成 oekit 适配版 AGENTS.md（共享规范 + 本仓信息）"""
 import os
 import pathlib
 import re
@@ -12,7 +12,7 @@ BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(_
 def repo_path(r): return BASE / "pkg" if r == "pkg" else BASE / f"ekit-{r}"
 
 DESC = {  # 各仓一句话定位（matrix.py 亦有副本）
-    "pkg": "微工具集 18 合 1（errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）",
+    "pkg": "微工具集 21 合 1（bloomx/collectionx/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）",
     "concurrency": "并发与流控原语（async GoSafe 系列 / gopool 协程池 / group / singleflight / progress / syncx / ratelimit / retry）",
     "logx": "统一日志门面（接口分层 / 多后端 / Sink / caller 归属）+ shutdown 优雅关停",
     "core": "应用基建件：governance 治理 schema、lifecycle 契约、network IP 工具、version",

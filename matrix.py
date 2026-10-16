@@ -12,7 +12,7 @@ import re
 import subprocess
 from pathlib import Path
 
-# 规范模块清单（23 个，依赖自底向上的顺序）
+# 规范模块清单（21 个，依赖自底向上的顺序）
 MODULES = [
     "pkg", "concurrency", "logx", "core",
     "metrics", "tracing", "registry",
