@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""为 21 个活跃仓生成 oekit 适配版 AGENTS.md（共享规范 + 本仓信息）"""
+"""为 21 个活跃仓生成 oekit 适配版 AGENTS.md（共享规范 + 本仓信息）。
+
+⚠️ 重跑会整文件覆写各仓 AGENTS.md——各仓文件生成后已在人工维护演进
+（如 data 的 cached/twolevel 硬规则段、门面壳同步规则等，本工具模板不含），
+**仅在新增仓冷启动或明确决定全量重生成时使用**；日常修订请直接改各仓文件。
+"""
 import os
 import pathlib
 import re
@@ -7,34 +12,11 @@ import subprocess
 
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
-from matrix import MODULES
+from matrix import MODULES, DESC  # 一句话定位唯一事实源在 matrix.py
 BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 def repo_path(r): return BASE / "pkg" if r == "pkg" else BASE / f"ekit-{r}"
 
-DESC = {  # 各仓一句话定位（matrix.py 亦有副本）
-    "pkg": "微工具集 21 合 1（bloomx/collectionx/contextx/errors/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）",
-    "concurrency": "并发与流控原语（async GoSafe 系列 / gopool 协程池 / group / singleflight / progress / syncx / ratelimit / retry）",
-    "logx": "统一日志门面（接口分层 / 多后端 / Sink / caller 归属）+ shutdown 优雅关停",
-    "core": "应用基建件：governance 治理 schema、lifecycle 契约、network IP 工具、version",
-    "istio": "Istio Proxyless——Kitex xDS 动态熔断（InitXDS / NewXDSClientOption）",
-    "metrics": "Prometheus 门面（Registry / Init）+ metrics/resilience 弹性指标族",
-    "tracing": "OpenTelemetry Init + trace_id 真相源（traceid 包）+ httpotel / redisotel 插桩",
-    "registry": "注册发现 SPI（Registrar/Discoverer/Subscriber/ConfigStore）+ Nacos 实现 + nacos 门面 + config 配置加载 + sdbridge + registrymocks",
-    "timertask": "分片定时任务（LocalBackend / RedisBackend，FNV-1a 分片）",
-    "data": "数据访问门面——八子包 re-export（cache/rediscache/crud/distlock/gormx/redisx/timertask/cachetest）+ cached 缓存读写编排（写后失效/事务提交后失效/查询缓存版本号失效）",
-    "gorm": "gormx 连接池增强 + crud 框架无关 CRUD Service（TxRepository 事务防丢更新）+ gormrepo 仓储",
-    "redis": "redisx 客户端封装 + distlock 分布式锁 + data/cache 的 Redis 后端",
-    "httpx": "Hertz Client 高层封装——服务发现/熔断/指数退避重试/弹性指标/OTel 透传 + loadbalance",
-    "middleware": "自研标准中间件栈（包名 mw：Recovery/Response/AccessLog/RateLimit/Auth/I18n/Fail）+ contrib 桥接 + hmw",
-    "nns": "NNS 服务治理门面——nns.New 一行创建（mock 模式 / ServiceClient 逃生口）",
-    "nns-endpoint": "端点工厂——HTTPEndpointFactory/GRPCEndpointFactory：per-service 熔断、换实例重试、gRPC 池",
-    "bootstrap": "bootstrap.Run 应用骨架（App ctx + AddResource + GoBackground）+ healthz 健康检查",
-    "handler": "crudh 通用 CRUD HTTP Handler（泛型）+ validatorh 参数绑定 + versionh",
-    "hertz": "Hertz 运行时集成——hlog 桥接、RunServer 生命周期、Shutdown Hook + health/metrics/sse/render/adaptor + registry/hertz + nns/hertz + hertzotel/hertztracer + governance/hertz",
-    "kitex": "Kitex 生态——klog 桥接、GovernanceConfig 治理热更、RunServer、WithBizErrorBridge、kitexmeta 透传、registry/kitex + nns/kitex + kitexprom + kitexotel",
-    "workflow": "组合式流程编排——PipeFlow/ParallelFlow/AsyncFlow/SwitchFlow + Hook AOP",
-    "kitex-examples": "Kitex echo 示例——client/server + IDL + 治理配置样例",
-}
+# DESC 本地副本已删除（2026-10-16 发现漂移：istio/gorm/redis 死键 + 各仓口径过期）
 
 BODY = """
 ## 硬规则速览（全矩阵适用）
@@ -91,6 +73,9 @@ def pkg_list(repo):
         if str(rel) not in pkgs:
             pkgs.append(str(rel))
     return "、".join(f"`{p}/`" for p in sorted(set(pkgs)))
+
+if __name__ != "__main__":
+    raise SystemExit("gen_agents 会整文件覆写各仓 AGENTS.md——请显式运行，不要 import")
 
 count = 0
 for repo in MODULES:
