@@ -36,39 +36,70 @@ BREAK_RE = re.compile(r"(?m)^- \*\*breaking\*\*", re.I)
 BREAK_ANY = re.compile(r"(?i)breaking|不兼容|破坏性")
 
 
-def _git_tags(d: Path) -> list[str]:
+def _remote_tags(repo: str) -> list[str]:
+    """读远端仓库的全部 tag（#5 根因修复：本地 clone 的 tag 可能没 fetch，
+    生成「generatedAt 很新但内容陈旧」的 versions.json——比明显陈旧更有害）。
+    URL 用本地 clone 的 origin（失败回退 github.com/oekit/<repo>）。
+    返回按版本降序的 tag 名（含嵌套前缀）。"""
+    origin = None
+    d = repo_dir(repo, BASE)
+    try:
+        origin = subprocess.check_output(
+            ["git", "-C", str(d), "remote", "get-url", "origin"],
+            text=True, stderr=subprocess.DEVNULL,
+        ).strip()
+    except Exception:
+        origin = None
+    url = origin or f"https://github.com/oekit/{repo}.git"
     try:
         out = subprocess.check_output(
-            ["git", "-C", str(d), "tag", "-l", "v*", "--sort=-v:refname"],
-            text=True,
-            stderr=subprocess.DEVNULL,
+            ["git", "ls-remote", "--tags", url],
+            text=True, stderr=subprocess.DEVNULL, timeout=60,
+        )
+    except Exception:
+        # 远端不可达时回退本地 tag（降级而非失败）
+        return _local_tags(d)
+    tags = []
+    for line in out.splitlines():
+        # "<sha>\trefs/tags/v0.1.0" 或 "refs/tags/nacos/v0.3.0^{}"
+        ref = line.split("\t")[-1].strip()
+        if ref.startswith("refs/tags/") and not ref.endswith("^{}"):
+            tags.append(ref[len("refs/tags/"):])
+    return _sort_tags_desc(tags)
+
+
+def _local_tags(d: Path) -> list[str]:
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
+            text=True, stderr=subprocess.DEVNULL,
         )
     except Exception:
         return []
     return [t.strip() for t in out.splitlines() if t.strip()]
 
 
-def _nested_tags(d: Path) -> list[str]:
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(d), "tag", "-l", "*/*", "--sort=-v:refname"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        return []
-    return [t.strip() for t in out.splitlines() if t.strip()]
+def _sort_tags_desc(tags: list[str]) -> list[str]:
+    def key(t: str):
+        # 取最后一段做 semver 排序（嵌套前缀 hlog/v0.1.2 → v0.1.2）
+        ver = t.rsplit("/", 1)[-1]
+        m = re.match(r"v(\d+)\.(\d+)\.(\d+)", ver)
+        if not m:
+            return (0, 0, 0, t)
+        return (-int(m.group(1)), -int(m.group(2)), -int(m.group(3)), t)
+    return sorted(tags, key=key)
 
 
 def latest_version(repo: str) -> str | None:
-    tags = _git_tags(repo_dir(repo, BASE))
-    return tags[0] if tags else None
+    for t in _remote_tags(repo):
+        if "/" not in t:  # 根模块 tag
+            return t
+    return None
 
 
 def nested_versions(repo: str) -> list[dict]:
-    d = repo_dir(repo, BASE)
     by_path: dict[str, str] = {}
-    for tag in _nested_tags(d):
+    for tag in _remote_tags(repo):
         # 格式: hlog/v0.1.1
         if "/" not in tag:
             continue

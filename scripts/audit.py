@@ -123,6 +123,37 @@ try:
 except SystemExit as e:
     issues.append(f"diagram: {e}")
 
+# ---------- Go 注释内模块路径引用校验（matrix-tools#4） ----------
+# 背景：registry/nns/kitex/workflow 包提升至模块根时发现多仓注释仍引用旧路径
+# （registry/kitex、network/loadbalance 等）——文本漂移人工难发现，收进门禁。
+
+def check_go_comment_paths():
+    """扫描各仓 *.go 注释/文本中的 github.com/oekit/<name> 引用：
+    <name> 不在 MODULES（已删除仓/旧路径）即报漂移。"""
+    known = set(MODULES) | {"matrix-tools", "oekit", "oekit.github.io", "profile"}
+    pat = re.compile(r"github\.com/oekit/([A-Za-z0-9_-]+)")
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for dirpath, dirs, files in os.walk(root):
+            dirs[:] = [d for d in dirs if d != ".git"]
+            for fn in files:
+                if not fn.endswith(".go"):
+                    continue
+                path = os.path.join(dirpath, fn)
+                try:
+                    text = open(path, encoding="utf-8", errors="ignore").read()
+                except OSError:
+                    continue
+                for m in pat.finditer(text):
+                    name = m.group(1)
+                    if name not in known:
+                        rel = os.path.relpath(path, BASE)
+                        check(False, f"{repo}: 引用不存在的模块路径 "
+                                     f"github.com/oekit/{name}（{rel}，注释或文本陈旧）")
+
+
+check_go_comment_paths()
+
 # ---------- 报告 ----------
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
