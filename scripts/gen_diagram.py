@@ -47,7 +47,8 @@ SHORT = {
     "logx": "统一门面 · 多后端 · Sink",
     "tracing": "OpenTelemetry · trace_id",
     "metrics": "Prometheus · 弹性指标族",
-    "pkg": "微工具集 21 合 1",
+    "pkg": "微工具集 19 合 1",
+    "kitx": "UUID/雪花 · 校验门面",
     "concurrency": "GoSafe · singleflight · retry",
     "core": "governance · lifecycle · IP 工具",
 }
@@ -106,7 +107,7 @@ LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），�
      "rows": [["logx", "tracing", "metrics"]],
      "plain_note": ["全矩阵统一可观测门面", "结构化日志 / OTel 链路 / 指标"]},
     {"name": "基础库", "scheme": "slate",
-     "rows": [["pkg", "concurrency", "core"]]},
+     "rows": [["pkg", "concurrency", "core", "kitx"]]},
 ]
 
 # 芯片间依赖箭头：(from, to, style, 颜色 kind)；h=同行相邻水平，arc=同行经行顶间隙的弧线

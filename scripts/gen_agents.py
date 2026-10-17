@@ -11,7 +11,7 @@ import re
 import subprocess
 
 import sys
-sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 from matrix import MODULES, DESC  # 一句话定位唯一事实源在 matrix.py
 BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 def repo_path(r): return BASE / r
@@ -80,8 +80,9 @@ if __name__ != "__main__":
 count = 0
 for repo in MODULES:
     d = repo_path(repo)
-    lt = subprocess.run(["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
-                        capture_output=True, text=True).stdout.split()[0]
+    tags = subprocess.run(["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
+                          capture_output=True, text=True).stdout.split()
+    lt = tags[0] if tags else "v0.1.0"
     content = f"""# AGENTS.md — oekit/{repo}
 
 > {DESC[repo]}

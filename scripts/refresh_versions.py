@@ -10,6 +10,8 @@ for repo in MODULES:
     readme = d / "README.md"
     t = readme.read_text()
     lt = latest_tag(repo, BASE)
+    if lt is None:  # 无 tag 的新仓跳过，避免写入 @None
+        continue
     t2 = re.sub(r"(go get github\.com/oekit/%s@)v[0-9.]+" % re.escape(repo), rf"\g<1>{lt}", t)
     if t2 != t:
         readme.write_text(t2)
