@@ -14,7 +14,7 @@ import sys
 sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
 from matrix import MODULES, DESC  # 一句话定位唯一事实源在 matrix.py
 BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
-def repo_path(r): return BASE / "pkg" if r == "pkg" else BASE / f"ekit-{r}"
+def repo_path(r): return BASE / r
 
 # DESC 本地副本已删除（2026-10-16 发现漂移：istio/gorm/redis 死键 + 各仓口径过期）
 
@@ -64,7 +64,7 @@ BODY = """
 """
 
 def pkg_list(repo):
-    d = BASE / f"ekit-{repo}"
+    d = repo_path(repo)
     pkgs = []
     for p in sorted(d.rglob("*.go")):
         if ".git" in p.parts or "_test.go" in p.name or "/testdata/" in str(p):
