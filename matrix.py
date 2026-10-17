@@ -26,7 +26,7 @@ SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
 
 DESC = {
-    "pkg": "微工具集 21 合 1（errors/bloomx/contextx/collectionx/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；collectionx（v0.5.0 起）泛型容器 Set/Ring/Queue/SafeMap；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩",
+    "pkg": "微工具集 21 合 1（errors/bloomx/contextx/container/validator/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/uidgen/cache/bufiox/strmap）；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约 + Checker；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）",
     "concurrency": "并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口 / breaker 自适应熔断（规范哨兵 ErrCircuitOpen）/ shedding CPU 自适应降载 / batch 攒批执行器（满条数/满字节/窗口去重）/ timewheel 单级时间轮",
     "logx": "统一日志门面（多后端可替换 + Sink + caller 归属）+ 优雅关停；桥接子包 hlog/hertzlog/kitexlog 为嵌套模块按需引入",
     "core": "应用基建件（governance 治理 schema / config 配置加载 + default/env/range/options tag 校验 / lifecycle 契约 / network IP 工具 / version）",
@@ -39,7 +39,7 @@ DESC = {
     "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传/一致性哈希（权重感知虚拟副本）",
     "middleware": "Hertz 自研标准中间件栈 + contrib 桥接 + hmw + SheddingMiddleware 自适应降载",
-    "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具、Octopus 推送",
+    "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具",
     "nns": "NNS 服务治理客户端——provider 无关发现/配置/实例缓存",
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",
     "bootstrap": "应用生命周期引导——bootstrap.Run 骨架 + healthz",
