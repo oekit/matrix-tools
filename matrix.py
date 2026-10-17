@@ -12,11 +12,11 @@ import re
 import subprocess
 from pathlib import Path
 
-# 规范模块清单（21 个，依赖自底向上的顺序）
+# 规范模块清单（23 个，依赖自底向上的顺序）
 MODULES = [
     "pkg", "concurrency", "logx", "core",
     "metrics", "tracing", "registry",
-    "data", "gormx", "redisx", "httpx", "network", "timertask", "middleware",
+    "data", "gormx", "redisx", "etcdx", "httpx", "network", "timertask", "middleware", "k8s",
     "nns", "nns-endpoint",
     "bootstrap", "hertz", "kitex", "workflow", "kitex-examples",
 ]
@@ -37,8 +37,10 @@ DESC = {
     "data": "数据访问门面——复刻 ekit data/ 能力面：cache/rediscache/crud/distlock/gormx/redisx/timertask/cachetest 八子包 re-export（类型同一，实现住 pkg 与各子仓）+ cached 缓存读写编排（写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量点读 MGet 快路径/bloom 防穿透）+ twolevel 两级缓存与跨实例失效广播（v0.7.0 起本仓唯二非 re-export 实现）；all/ 聚合模块已废弃 retract",
     "gormx": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名）",
     "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）",
+    "etcdx": "etcd 全家——客户端封装（根包：生产默认值/Health 探活/Close(ctx) 幂等）、registry 注册发现实现（SPI 对接 registry/nacos 链路：Lease KeepAlive 注册 + 丢约指数退避自动重注册、prefix Watch 订阅推送、ConfigStore KV 配置监听）、distlock 分布式锁（Session+concurrency.Mutex 公平排队，接口与 redisx/distlock.Locker 同形可互换，可选无 etcd 降级放行）",
     "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传/一致性哈希（权重感知虚拟副本）",
     "middleware": "Hertz 自研标准中间件栈 + contrib 桥接 + hmw + SheddingMiddleware 自适应降载",
+    "k8s": "Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → in-cluster 自动 → KUBECONFIG/~/.kube/config 逐级回退，QPS/Burst 限流默认 50/100）+ leaderelection 子包 Lease 选主简化封装（OnStartedLeading/OnStoppedLeading/OnNewLeader 回调，主备单活，仅要求 Lease CRUD 权限）",
     "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具",
     "nns": "NNS 服务治理客户端——provider 无关发现/配置/实例缓存",
     "nns-endpoint": "NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池",

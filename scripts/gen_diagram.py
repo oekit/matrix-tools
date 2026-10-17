@@ -31,6 +31,7 @@ SHORT = {
     "hertz": "SSE/health · CRUD Handler · OTel",
     "kitex": "治理热更 · BizError 桥接 · xDS 熔断",
     "middleware": "标准栈 · contrib 桥接",
+    "k8s": "客户端构建 · Lease 选主",
     "workflow": "串行/并行/异步编排 · Hook",
     "kitex-examples": "echo 示例 · 治理配置",
     "httpx": "LB · 熔断/重试 · OTel 透传",
@@ -40,6 +41,7 @@ SHORT = {
     "registry": "注册发现核心 + Nacos 实现",
     "gormx": "连接池增强 · CRUD Service",
     "redisx": "客户端 · 缓存后端 · 分布式锁",
+    "etcdx": "客户端 · Lease 注册发现 · 分布式锁",
     "data": "LocalCache · 缓存检查器",
     "timertask": "分片定时 · 心跳续约",
     "logx": "统一门面 · 多后端 · Sink",
@@ -88,7 +90,7 @@ THEMES = {
 
 LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），注释框固定驻留 note_row 行右侧
     {"name": "应用引导 · 框架生态", "scheme": "indigo",
-     "rows": [["workflow", "kitex-examples"],
+     "rows": [["k8s", "workflow", "kitex-examples"],
               ["hertz", "bootstrap", "middleware", "kitex"]],
      "note": ["hertz.RunServer / kitex.RunServer → bootstrap 组合根",
               "统一组合与优雅关停：排空连接 → 释放资源"],
@@ -99,7 +101,7 @@ LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），�
      "note": ["hertz / kitex → nns → registry（服务发现链）",
               "nns-endpoint → httpx（端点级弹性）"]},
     {"name": "数据访问", "scheme": "amber",
-     "rows": [["gormx", "redisx", "data", "timertask"]]},
+     "rows": [["gormx", "redisx", "etcdx", "data", "timertask"]]},
     {"name": "可观测性", "scheme": "violet",
      "rows": [["logx", "tracing", "metrics"]],
      "plain_note": ["全矩阵统一可观测门面", "结构化日志 / OTel 链路 / 指标"]},

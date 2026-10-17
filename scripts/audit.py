@@ -94,7 +94,7 @@ try:
     llms = site / "docs" / "public" / "llms.txt"
     check(llms.exists(), "site: 缺 docs/public/llms.txt")
     idx = site / "docs" / "index.md"
-    check(idx.exists() and "21 个独立发版" in idx.read_text(), "site: 首页计数非 21")
+    check(idx.exists() and f"{len(MODULES)} 个独立发版" in idx.read_text(), f"site: 首页计数非 {len(MODULES)}")
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",
                         "--exclude-dir=dist", "--exclude-dir=cache",
                         "-e", "github.com/yi-nology", "-e", "github.com/openekit", "."],
