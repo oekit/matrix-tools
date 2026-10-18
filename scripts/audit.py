@@ -47,6 +47,13 @@ for repo in MODULES:
     # 3) AGENTS / CHANGELOG
     check((d / "AGENTS.md").exists(), f"{repo}: 缺 AGENTS.md")
     check((d / "CHANGELOG.md").exists(), f"{repo}: 缺 CHANGELOG.md")
+    # 占位/畸形版本头门禁（2026-10-18 事故：批量写版时版本号替换失败，15 仓 36 处
+    # 「## [- 描述」与 vv 双 v 笔误残留——已手工填实，此处防复发）
+    cl_bad = [l for l in (d / "CHANGELOG.md").read_text().splitlines()
+              if l.startswith("## [-") or re.match(r"## \[.*vv\d", l)]
+    if cl_bad:
+        check(False, f"{repo}: CHANGELOG 占位/畸形版本头 {len(cl_bad)} 处"
+                     f"（如 {cl_bad[0][:48]!r}；填实为已发布 tag）")
     readme = d / "README.md"
     if not readme.exists():
         issues.append(f"{repo}: 缺 README")
