@@ -151,7 +151,9 @@ def build() -> dict:
             }
         )
     return {
-        "generatedAt": __import__("datetime").datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "generatedAt": __import__("datetime").datetime.now(
+            __import__("datetime").timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "org": ORG,
         "modules": modules,
     }
