@@ -5,6 +5,7 @@
   MATRIX_BASE=repos python3 scripts/audit.py --remote-tags   # Actions 克隆布局
 输出：stdout 报告；发现漂移时 exit 1（供 CI 判定）。"""
 from __future__ import annotations
+import json
 import os
 import re
 import subprocess
@@ -118,6 +119,22 @@ try:
     for g in ["getting-started", "logging", "errors", "caching", "http-service",
               "rpc-service", "observability", "migration", "ai-agent"]:
         check((site / "docs" / "guide" / f"{g}.md").exists(), f"site: 缺指南 {g}")
+    # versions.json 新鲜度：这是站点对外发布的版本口径，陈旧比缺失更有害
+    # （消费方照着站点选版本会装到旧版）。此前靠"发版后记得重跑"，
+    # 2026-10-18 实测从 06:04 起累积 6/24 条陈旧（concurrency v0.14.0、
+    # redisx v0.8.0 等），现为硬门禁。
+    vfile = site / "docs" / "public" / "versions.json"
+    if not vfile.exists():
+        check(False, "site: 缺 docs/public/versions.json")
+    else:
+        live = json.loads(vfile.read_text())
+        cur = {m["module"]: m.get("latest") for m in live.get("modules", [])}
+        stale = []
+        for repo in MODULES:
+            lt = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+            if lt and cur.get(repo) != lt:
+                stale.append(f"{repo}(站点 {cur.get(repo)} ≠ 最新 {lt})")
+        check(not stale, f"site: versions.json 陈旧 {len(stale)} 项（跑 gen_versions.py）：{'; '.join(stale[:4])}")
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
 
