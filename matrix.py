@@ -39,7 +39,7 @@ DESC = {
     "gormx": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名）",
     "redisx": "Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock（Locker 同形可互换；Renew 手动续期（false=锁丢失，不进 Locker 接口保 etcdx 互换）+ WithAutoRenew 覆盖 TryLock 自动续期（v0.8.0 feat!：此前组合不续期）；Semaphore ZSET 槽位信号量（v0.8.0：Acquire 同 identifier 幂等刷新 + Lua 内原子清过期槽崩溃自愈、Renew 仅未过期槽可续、Cleanup 返条数、无 Redis 降级 fail-fast））、分布式限流 ratelimit（Lua 三态 + 故障本地兜底）；v0.9.0 起 distlock Lockout 分布式防爆破锁（Redis 侧 fail2ban：滑窗失败计数→阈值锁定 Penalty→Reset 清零，与 concurrency/ratelimit.Lockout 进程内孪生——多实例共享计数是存在理由；惩罚只按首次触发计算、nil client fail-fast 不降级，#6）",
     "etcdx": "etcd 全家——客户端封装（根包：生产默认值/Health 探活/Close(ctx) 幂等）、registry 注册发现实现（SPI 对接 registry/nacos 链路：Lease KeepAlive 注册 + 丢约指数退避自动重注册、prefix Watch 订阅推送、ConfigStore KV 配置监听）、distlock 分布式锁（Session+concurrency.Mutex 公平排队，接口与 redisx/distlock.Locker 同形可互换，可选无 etcd 降级放行）",
-    "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传；loadbalance Selector 形态（RoundRobin/Random/Weighted/一致性哈希权重感知虚拟副本/p2c 自适应——EWMA 经 DoneFunc 回写建立、Err 计 1s 惩罚；WithFilter 按元数据过滤；v0.4.0 起 Balancer 全家族删除无兼容路径）；codec 注册制编解码器（json 内置 + form 表单，DoCodec 请求按 codec 序列化、响应按 Content-Type 反查回退请求 codec）；v0.6.0 起 net/http 桥接层 NewRoundTripper/StdClient——存量标准库外呼一行 Transport 接入熔断/重试/指标/链路（重试缺省关显式开、非 2xx 非错误、hop-by-hop 隔离，#8）",
+    "httpx": "HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传；loadbalance Selector 形态（RoundRobin/Random/Weighted/一致性哈希权重感知虚拟副本/p2c 自适应——EWMA 经 DoneFunc 回写建立、Err 计 1s 惩罚；WithFilter 按元数据过滤；v0.4.0 起 Balancer 全家族删除无兼容路径）；codec 注册制编解码器（json 内置 + form 表单，DoCodec 请求按 codec 序列化、响应按 Content-Type 反查回退请求 codec）；v0.6.0 起 net/http 桥接层 NewRoundTripper/StdClient——存量标准库外呼一行 Transport 接入熔断/重试/指标/链路（重试缺省关显式开、非 2xx 非错误、hop-by-hop 隔离，#8）；v0.8.0 起 SafeDialFunc/WithSafeDial 出站 SSRF 防护胶水（判定单源 pkg/urlguard v0.15.0：解析 IP 全量预检 + 实际 RemoteAddr 端点核对闭合重解析 TOCTOU、Happy-Eyeballs 覆盖，构造态豁免；v0.7.0 内置的独立 httpx/urlguard 实现收敛删除，#11）",
     "middleware": "Hertz 标准中间件栈（模块根 mw，双层目录已收平）+ contrib 桥接 + hmw + SheddingMiddleware 自适应降载 + chainmw 子包（transport 感知框架无关中间件，基于 core/chain+transport：Recovery 带 panic 隔离上报钩子 WithRecoveryReporter、AccessLog skip+redact+自定义字段、MetadataPropagate——kitex 经 kitex/chainmw.ToKitex 复用同一实现，根包 Recovery/AccessLog 已薄壳化复用 chainmw 内核、下游 handler 可经 transport.FromServerContext 读协议无关传输信息）；v0.6.0 起 accesslog 凭证路径脱敏（WithAccessLogRedactPathPrefixes）、ratelimit 默认 KeyFunc 去端口（连接桶→地址桶）；v0.11.0 起 WithAccessLogSink 落库 sink（AccessRecord{Method,Path,Status,Latency,ClientIP,UserAgent,TraceID} 与日志同源、c 同传可读业务键、error/panic 只记 Warn 不影响主链路、SkipPaths 命中不触发）+ chainmw.WithSink 内核同构（kitex 随 ToKitex 获得）+ StackConfig.DisableResponseWrap 响应自管一键形态（TraceID→Recovery→AccessLog）与 AccessLogOptions 透传 + doc/README「适用边界」段（响应契约统一 vs handler 自管的推荐组合，#18）；v0.12.0 起 AccessLog panic 恢复点产出记录（AccessRecord.Panic 标记 + Err 摘要，Hertz status 按 Recovery 缺省 500）后按原值重抛——panic 请求不再零访问记录，sink/kitex 桥接同步留痕，#20",
     "k8s": "Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → in-cluster 自动 → KUBECONFIG/~/.kube/config 逐级回退，QPS/Burst 限流默认 50/100）+ leaderelection 子包 Lease 选主简化封装（OnStartedLeading/OnStoppedLeading/OnNewLeader 回调，主备单活，仅要求 Lease CRUD 权限）",
     "network": "轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具",
@@ -112,3 +112,31 @@ def sh(args, cwd, check=True):
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(args)}: {r.stderr[-400:]}")
     return r
+
+
+# ---------- 工作树状态守卫（写入型脚本共用） ----------
+
+def git_branch(d) -> str:
+    r = subprocess.run(["git", "-C", str(d), "branch", "--show-current"],
+                       capture_output=True, text=True)
+    return r.stdout.strip()
+
+
+def is_dirty(d) -> bool:
+    r = subprocess.run(["git", "-C", str(d), "status", "--porcelain"],
+                       capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def ensure_clean_all(dirs, what: str) -> None:
+    """写入型生成器/发版守卫：任一仓工作树不干净即整体拒绝（先查后做，不产生半截产物）。
+    生成器产物必须落在已提交的基线上——checkout -f 冲掉未提交产物、tag 打在旧内容上
+    的事故类别的硬约束（2026-10-19 一日三踩后收口）。"""
+    dirty = []
+    for d in dirs:
+        d = Path(d)
+        if d.exists() and is_dirty(d):
+            dirty.append(d.name)
+    if dirty:
+        raise SystemExit(f"{what}: 工作树不干净，拒绝执行：{', '.join(dirty)}"
+                         f"（先提交或 stash——生成器产物必须在干净基线上生成）")
