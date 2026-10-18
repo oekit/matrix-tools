@@ -14,7 +14,7 @@ python3 scripts/release_train.py bootstrap main=v0.6.2 nacos=v0.3.2  # 嵌套发
 python3 scripts/gen_agents.py            # 各仓 AGENTS.md
 python3 scripts/gen_changelog.py --push  # 各仓 CHANGELOG
 python3 scripts/refresh_versions.py --push  # README 安装行对齐最新 tag
-python3 scripts/shell_sync.py            # 门面壳同步检查（已并入 audit 硬门禁）
+python3 scripts/shell_sync.py            # 门面壳同步检查（已并入 audit 硬门禁；含 go.mod 版本地板核对）
 ```
 
 `MATRIX_BASE` 环境变量指定矩阵检出根目录（默认 `~/my_project/ekit-split`；
