@@ -42,20 +42,20 @@ SHORT = {
     "gormx": "连接池增强 · CRUD Service",
     "redisx": "客户端 · 缓存后端 · 分布式锁",
     "etcdx": "客户端 · Lease 注册发现 · 分布式锁",
-    "data": "LocalCache · 缓存检查器",
+    "data": "门面 · cached 编排 · 两级缓存",
     "timertask": "分片定时 · 心跳续约",
     "logx": "统一门面 · 多后端 · Sink",
     "tracing": "OpenTelemetry · trace_id",
     "metrics": "Prometheus · 弹性指标族",
-    "pkg": "微工具集 19 合 1",
+    "pkg": "微工具集 20 合 1",
     "kitx": "UUID/雪花 · 校验门面",
     "concurrency": "GoSafe · singleflight · retry",
-    "core": "governance · lifecycle · IP 工具",
+    "core": "config · transport/chain · lifecycle",
 }
 
-PKG_SUBS = [  # pkg 芯片内的两行微库清单（21 合 1；与 DESC/pkg 仓保持一致）
-    "errors · validator · stringx · slicex · enumx · convert · encoding · jsonrepair · httpjson",
-    "mathx · pathx · pagination · ptrx · timex · uidgen · bloomx",
+PKG_SUBS = [  # pkg 芯片内的三行微库清单（20 合 1；与 DESC/pkg 仓保持一致；uidgen/validator 已拆至 kitx）
+    "errors · stringx · slicex · enumx · convert · encoding · jsonrepair",
+    "httpjson · mathx · pathx · pagination · ptrx · timex · bloomx",
     "cache · container · contextx · bufiox · strmap · singleflighttest",
 ]
 
