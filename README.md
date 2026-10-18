@@ -10,6 +10,7 @@ python3 scripts/audit.py
 
 # 修复类生成器（--push 直接提交推送）
 python3 scripts/gen_tables.py            # 各仓 README 矩阵总览表
+python3 scripts/release_train.py bootstrap main=v0.6.2 nacos=v0.3.2  # 嵌套发布 train（dry-run，--apply 打 tag 推送）
 python3 scripts/gen_agents.py            # 各仓 AGENTS.md
 python3 scripts/gen_changelog.py --push  # 各仓 CHANGELOG
 python3 scripts/refresh_versions.py --push  # README 安装行对齐最新 tag
@@ -39,4 +40,5 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 | `scripts/refresh_versions.py` | 刷新 README 安装行版本号到最新 tag |
 | `scripts/gen_versions.py` | 生成 `versions.json`（最新 tag / 嵌套模块 / 依赖地板 / breaking 索引）供文档站与 llms.txt |
 | `scripts/ekit2oekit.py` | ekit→oekit **import 面**改写（长路径优先，避免前缀互撞）；`--print-rules` 看 23 条种子规则 |
-| `scripts/audit.py` / `gen_agents.py` / `gen_changelog.py` / `shell_sync.py` | 文档审计 / AGENTS 生成 / CHANGELOG / shell 同步 |
+| `scripts/audit.py` / `gen_agents.py` / `gen_changelog.py` / `shell_sync.py` | 文档审计（含嵌套地板门禁）/ AGENTS 生成 / CHANGELOG / shell 同步 |
+| `scripts/release_train.py` | 主模块 + 嵌套模块同 train 按序打 tag（查重/tidy/build/CHANGELOG 四道前置，matrix-tools#6） |

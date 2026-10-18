@@ -161,6 +161,41 @@ def check_go_comment_paths():
 
 check_go_comment_paths()
 
+# ---------- 嵌套模块主模块地板门禁（matrix-tools#6，承接 bootstrap#2） ----------
+# 背景：bootstrap v0.5.1 事故——嵌套依赖地板指向已随结构重置清空的旧 tag，
+# tidy/直连直接失败；「主模块已发新版而嵌套地板滞后」的漂移此前也靠人记。
+
+def parse_semver(v: str):
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)$", v)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
+
+
+def check_nested_module_floors():
+    """嵌套模块 go.mod require 其父模块时，地板不得落后父模块最新 tag。"""
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for gomod in sorted(root.glob("*/go.mod")):
+            sub = gomod.parent.name
+            text = gomod.read_text()
+            for req in re.finditer(r"^\t(github\.com/oekit/(\S+)) (v\S+)$", text, re.M):
+                dep_repo, ver = req.group(2), req.group(3)
+                if dep_repo != repo:  # 只校验对父模块的 require
+                    continue
+                lt = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+                floor, cur = parse_semver(ver), parse_semver(lt) if lt else None
+                if not floor:
+                    check(False, f"{repo}/{sub}: 父模块依赖版本不可解析 {ver}")
+                    continue
+                if not cur:
+                    check(False, f"{repo}/{sub}: 父模块无主模块 tag 可比对（地板 {ver}）")
+                    continue
+                if floor < cur:
+                    check(False, f"{repo}/{sub}: 父模块地板 {ver} 落后最新 {lt}"
+                                 f"（release_train.py 同 train 升版）")
+
+
+check_nested_module_floors()
+
 # ---------- 报告 ----------
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
