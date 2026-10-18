@@ -31,6 +31,8 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 - 模块清单与描述的唯一事实源在本仓 `matrix.py` 的 `MODULES`/`DESC`
 - 新增模块：改 `matrix.py` → 跑 `gen_tables.py --push` → 跑 `audit.py` 确认全绿
 - 发版后：跑 `refresh_versions.py --push` 对齐各仓安装行
+- **合入方式：走 PR，不直推 main**——全 org main 已开 `enforce_admins`，直推会被
+  `GH006 Changes must be made through a pull request` 拒掉；tag 打在合入 main 之后
 
 ## 脚本
 
@@ -38,6 +40,7 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 |---|---|
 | `scripts/gen_tables.py` | 重新生成各仓 README「矩阵总览」表 |
 | `scripts/refresh_versions.py` | 刷新 README 安装行版本号到最新 tag |
+| `scripts/pr_flow.py` | 全 org 铺开 main 分支保护（要求 PR + `enforce_admins` + 讨论解决），`--apply` 生效，默认 dry-run |
 | `scripts/gen_versions.py` | 生成 `versions.json`（最新 tag / 嵌套模块 / 依赖地板 / breaking 索引）供文档站与 llms.txt |
 | `scripts/ekit2oekit.py` | ekit→oekit **import 面**改写（长路径优先，避免前缀互撞）；`--print-rules` 看 23 条种子规则 |
 | `scripts/audit.py` / `gen_agents.py` / `gen_changelog.py` / `shell_sync.py` | 文档审计（含嵌套地板门禁）/ AGENTS 生成 / CHANGELOG / shell 同步 |

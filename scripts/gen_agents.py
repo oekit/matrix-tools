@@ -53,7 +53,13 @@ BODY = """
 - 导出符号 PascalCase + godoc 注释；包文档放 doc.go
 
 ### 版本与发版
-- SemVer；0.x 阶段 minor 允许 breaking；发版 = 打 annotated tag 推远端（CI 自动跑 lint+test）
+- SemVer；0.x 阶段 minor 允许 breaking
+- **main 受分支保护，改动一律走 PR，管理员也不例外**（`enforce_admins=true`，
+  直推会被 `GH006 Changes must be made through a pull request` 拒掉）
+- 发版流程：建分支 → 提交 → 开 PR → CI（`Lint & Test / Lint` + `Lint & Test / Test`）
+  绿 → 合入 main → **合入之后**再打 annotated tag 推远端
+- tag 不走 PR（`protect-release-tags` ruleset 管的是不可删/不可改，不是审批）；
+  tag 必须落在已合入 main 的 commit 上，否则 `go get` 拉到的是没进过 CI 的代码
 - module 路径 = `github.com/oekit/<name>`；**改 module 路径必须同步**：
   全部 import、go.mod、README 安装行、logx caller 启发式（若涉及 logx）
 
