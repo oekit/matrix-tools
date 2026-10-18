@@ -68,17 +68,22 @@ def existing_releases(repo: str) -> set[str]:
 
 def changelog_section(repo_dir_path, version: str, nested: str | None) -> str | None:
     """取 CHANGELOG 同版本小节正文。嵌套 tag 优先 <sub>/CHANGELOG.md 的 [vX.Y.Z]，
-    回退根 CHANGELOG 的 [<sub>/vX.Y.Z]（bootstrap/nacos 形态）。"""
+    回退根 CHANGELOG 的 [<sub>/vX.Y.Z]（bootstrap/nacos 形态）；文件缺失返回 None
+    （调用方回退 CHANGELOG 链接）。"""
     if nested:
         sub_cl = os.path.join(repo_dir_path, nested, "CHANGELOG.md")
         if os.path.exists(sub_cl):
             sec = _extract(open(sub_cl, encoding="utf-8").read(), version)
             if sec is not None:
                 return sec
-        text = open(os.path.join(repo_dir_path, "CHANGELOG.md"), encoding="utf-8").read()
-        return _extract(text, f"{nested}/{version}")
-    text = open(os.path.join(repo_dir_path, "CHANGELOG.md"), encoding="utf-8").read()
-    return _extract(text, version)
+        root_cl = os.path.join(repo_dir_path, "CHANGELOG.md")
+        if not os.path.exists(root_cl):
+            return None
+        return _extract(open(root_cl, encoding="utf-8").read(), f"{nested}/{version}")
+    root_cl = os.path.join(repo_dir_path, "CHANGELOG.md")
+    if not os.path.exists(root_cl):
+        return None
+    return _extract(open(root_cl, encoding="utf-8").read(), version)
 
 
 def _extract(text: str, head: str) -> str | None:
