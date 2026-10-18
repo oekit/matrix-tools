@@ -17,6 +17,7 @@ bootstrap v0.5.1 还曾因地板指向已删 tag + 同名 tag 重推双重事故
 """
 from __future__ import annotations
 import os
+from pathlib import Path
 import re
 import subprocess
 import sys
@@ -117,7 +118,40 @@ def main():
     for name, d, tag in created:
         subprocess.run(["git", "-C", str(d), "push", "origin", tag], check=True)
         print(f"[push] {tag}")
+    create_releases(repo, root, created)
     print(f"\n✓ train 完成：{len(created)} 个 tag 已推送")
+
+
+def create_releases(repo: str, root, created: list) -> None:
+    """tag → GitHub Release 对账（.github#8）：notes=CHANGELOG 同版本小节 + 该 tag
+    go.mod 的矩阵依赖地板。嵌套模块 tag 恒 --latest=false，根模块 tag 成为 latest。
+    失败只告警不回滚（tag 已推送；gen_releases.py --apply 可幂等补齐）。"""
+    import os
+    import tempfile
+
+    sys.path.insert(0, str(Path(__file__).parent))
+    from gen_releases import build_notes  # noqa: E402
+
+    for name, _d, tag in created:
+        path = None
+        try:
+            notes = build_notes(str(root), tag, repo)
+            with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                             encoding="utf-8") as f:
+                f.write(notes)
+                path = f.name
+            args = ["release", "create", tag, "--repo", f"oekit/{repo}",
+                    "--title", tag, "--notes-file", path, "--verify-tag"]
+            if "/" in tag:  # 嵌套模块 tag 不抢根模块的 latest
+                args.append("--latest=false")
+            r = subprocess.run(["gh", *args], capture_output=True, text=True)
+            if r.returncode != 0:
+                print(f"[release] ⚠ {tag}: {(r.stderr or r.stdout).strip()[:200]}（gen_releases.py --apply 可补齐）")
+            else:
+                print(f"[release] {tag}")
+        finally:
+            if path:
+                os.unlink(path)
 
 
 if __name__ == "__main__":
