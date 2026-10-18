@@ -86,6 +86,13 @@ for repo in MODULES:
             check(m.group(1) == lt, f"{repo}: 安装行 {m.group(1)} ≠ 最新 {lt}（跑 refresh_versions.py）")
     else:
         print(f"[warn] {repo}: README 无安装行（仅提示）")
+    # 6b) AGENTS 当前版本行（与 README 安装行同一套对齐纪律）
+    agents = d / "AGENTS.md"
+    ma = re.search(r"当前版本：`(v[0-9.]+)`", agents.read_text()) if agents.exists() else None
+    if ma:
+        lt2 = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+        if lt2:
+            check(ma.group(1) == lt2, f"{repo}: AGENTS 当前版本 {ma.group(1)} ≠ 最新 {lt2}（跑 refresh_versions.py）")
 
 # ---------- 门面壳同步（data 八壳 ← 源包导出符号） ----------
 # 「源仓新增导出符号时本壳需同步」的跟版税此前靠人记（2026-10-16 曾漏
