@@ -15,6 +15,8 @@ python3 scripts/gen_agents.py            # 各仓 AGENTS.md
 python3 scripts/gen_changelog.py --push  # 各仓 CHANGELOG
 python3 scripts/refresh_versions.py --push  # README 安装行对齐最新 tag
 python3 scripts/shell_sync.py            # 门面壳同步检查（已并入 audit 硬门禁；含 go.mod 版本地板核对）
+python3 scripts/gen_releases.py          # GitHub Release 对账/回填：每 tag 一个 Release（--apply 创建，已并入 audit 门禁）
+python3 scripts/gen_matrix_go.py         # oekit 仓 BOM 模块生成（go.mod 地板 + matrix.go 快照；--check 为 audit 门禁）
 ```
 
 `MATRIX_BASE` 环境变量指定矩阵检出根目录（默认 `~/my_project/ekit-split`；
@@ -44,4 +46,6 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 | `scripts/gen_versions.py` | 生成 `versions.json`（最新 tag / 嵌套模块 / 依赖地板 / breaking 索引）供文档站与 llms.txt |
 | `scripts/ekit2oekit.py` | ekit→oekit **import 面**改写（长路径优先，避免前缀互撞）；`--print-rules` 看 23 条种子规则 |
 | `scripts/audit.py` / `gen_agents.py` / `gen_changelog.py` / `shell_sync.py` | 文档审计（含嵌套地板门禁）/ AGENTS 生成 / CHANGELOG / shell 同步 |
-| `scripts/release_train.py` | 主模块 + 嵌套模块同 train 按序打 tag（查重/tidy/build/CHANGELOG 四道前置，matrix-tools#6） |
+| `scripts/release_train.py` | 主模块 + 嵌套模块同 train 按序打 tag（查重/tidy/build/CHANGELOG 四道前置，matrix-tools#6）；推完自动建 GitHub Release（.github#8） |
+| `scripts/gen_releases.py` | GitHub Release 对账/回填：notes = CHANGELOG 同版本小节 + 该 tag go.mod 的矩阵依赖地板，`releases/latest` 全矩阵可解析 |
+| `scripts/gen_matrix_go.py` | 生成 `oekit` 仓 BOM 模块（`go get github.com/oekit/oekit@latest` 一次拉齐兼容组合） |

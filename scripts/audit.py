@@ -220,6 +220,33 @@ def check_nested_module_floors():
 
 check_nested_module_floors()
 
+# ---------- GitHub Release 对账 + oekit BOM 新鲜度（.github#8） ----------
+# Release parity：每个 tag 对应一个 Release（notes=CHANGELOG 小节 + 该 tag 矩阵地板），
+# `releases/latest` 因此全矩阵可解析。CI 里 GITHUB_TOKEN 只对本仓有效时自动降级为
+# 匿名 REST（公开仓可行），限速失败则跳过不红——本地跑才是硬门禁。
+try:
+    from gen_releases import missing_releases  # noqa: E402
+
+    rel_missing, rel_skipped = missing_releases(list(MODULES))
+    for repo, tags in rel_missing.items():
+        check(False, f"{repo}: {len(tags)} 个 tag 缺 GitHub Release（跑 gen_releases.py --apply）：{tags[:3]}…")
+    for s in rel_skipped:
+        print(f"  ⚠ release 对账跳过：{s}")
+except Exception as e:  # noqa: BLE001 对账不可用不阻塞其余门禁
+    print(f"  ⚠ release 对账不可用：{e}")
+
+# oekit BOM（github.com/oekit/oekit）新鲜度：快照必须与各仓远端 tag 一致，
+# 否则 `go get github.com/oekit/oekit@latest` 拉到的是旧组合。
+try:
+    r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                     "gen_matrix_go.py"), "--check"],
+                       capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode != 0:
+        issues.append(out.splitlines()[-1] if out else "oekit: BOM 新鲜度检查失败")
+except Exception as e:  # noqa: BLE001
+    print(f"  ⚠ BOM 检查跳过：{e}")
+
 # ---------- 报告 ----------
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
