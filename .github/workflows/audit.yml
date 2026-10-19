@@ -21,10 +21,11 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: Clone all matrix repos
+      - name: Clone all matrix repos（清单来自 matrix.py——旧硬编码含已删的 istio/handler，clone 404 导致 weekly job 一直起不来）
         run: |
           mkdir -p repos
-          for m in pkg concurrency logx core istio metrics tracing registry timertask data gorm redis httpx network middleware nns nns-endpoint bootstrap handler hertz kitex workflow kitex-examples; do
+          MODS=$(python3 -c "import matrix; print(' '.join(matrix.MODULES))")
+          for m in $MODS; do
             git clone --quiet "https://github.com/oekit/$m.git" "repos/$m"
           done
           git clone --quiet "https://github.com/oekit/oekit.github.io.git" "repos/oekit.github.io"

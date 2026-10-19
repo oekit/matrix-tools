@@ -1,0 +1,79 @@
+name: Maintenance round check
+
+on:
+  schedule:
+    - cron: '0 4 5 * *'   # 每月 5 日 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: matrix-maintenance
+  cancel-in-progress: true
+
+jobs:
+  maintenance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Clone all matrix repos（清单来自 matrix.py，不再手工硬编码）
+        run: |
+          mkdir -p repos
+          MODS=$(python3 -c "import matrix; print(' '.join(matrix.MODULES))")
+          for m in $MODS; do
+            git clone --quiet "https://github.com/oekit/$m.git" "repos/$m"
+          done
+          git clone --quiet "https://github.com/oekit/oekit.github.io.git" "repos/oekit.github.io"
+          git clone --quiet "https://github.com/oekit/oekit.git" "repos/oekit"
+      - name: Count floor drift
+        id: drift
+        run: |
+          MATRIX_BASE="$PWD/repos" python3 scripts/maintenance_check.py --threshold 8 | tee maintenance-report.txt
+          echo "count=$(grep -oE 'MAINTENANCE_COUNT=[0-9]+' maintenance-report.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+      - name: Close previous maintenance issue
+        if: steps.drift.outputs.count == '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-maintenance'
+            });
+            for (const i of issues) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: i.number, state: 'closed' });
+            }
+      - name: Open maintenance round issue
+        if: steps.drift.outputs.count != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const count = '${{ steps.drift.outputs.count }}';
+            const body = '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期。\n\n' +
+              '按需发版模型下这不阻塞任何人；到达期阈值说明组合漂移已可观，建议跑一轮：\n\n' +
+              '```\n' +
+              '# 逐仓对齐 + 开 PR（auto-merge）\n' +
+              'python3 scripts/align_floors.py --apply --pr\n' +
+              '# 合并后逐仓 patch 发版（或按需挑仓）\n' +
+              'python3 scripts/release_train.py <repo> main=vX.Y.Z --apply --changelog "build: 地板对齐"\n' +
+              'python3 scripts/release_post.py <repo>\n' +
+              '```\n\n' +
+              '明细：\n\n```\n' + fs.readFileSync('maintenance-report.txt', 'utf8') + '\n```';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-maintenance'
+            });
+            if (issues.length) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: issues[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner,
+                repo: context.repo.repo, title: '依赖地板维护轮到期（' + count + ' 仓）',
+                body, labels: ['matrix-maintenance'] });
+            }

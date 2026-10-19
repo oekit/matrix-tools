@@ -29,9 +29,10 @@ def sync_main(d) -> None:
 
 
 def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
-            edit: Callable[[], list[str]] | None = None) -> str:
+            edit: Callable[[], list[str]] | None = None, auto_merge: bool = False) -> str:
     """在 repo 上落一个 PR。edit() 在分支上执行并返回要 add 的文件清单（相对仓根）。
-    返回 PR URL。分支用 -B 复用：同名残留分支重置后推送，旧 open PR 自动续用。"""
+    返回 PR URL。分支用 -B 复用：同名残留分支重置后推送，旧 open PR 自动续用。
+    auto_merge=True：创建后立即排程 auto-merge（等 checks 绿自动合，波次免手工合并）。"""
     if is_dirty(d):
         raise SystemExit(f"{repo}: 工作树不干净，拒绝落 PR")
     sync_main(d)
@@ -55,8 +56,15 @@ def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
             "--title", title, "--body", body], d, check=False)
     if r.returncode != 0:
         raise SystemExit(f"{repo}: 开 PR 失败：{(r.stderr or r.stdout).strip()[:200]}")
+    url = r.stdout.strip()
+    suffix = ""
+    if auto_merge:
+        import re as _re
+        m = _re.search(r"/pull/(\d+)", url)
+        if m and merge_pr(repo, int(m.group(1))).startswith("auto"):
+            suffix = "（auto-merge 已排程）"
     sh(["git", "checkout", "main"], d)  # PR 已接管分支内容，本地回 main（分支留在远端供 PR 用）
-    return r.stdout.strip()
+    return url + suffix
 
 
 def open_pr(repo: str, head: str) -> tuple[int, str] | None:

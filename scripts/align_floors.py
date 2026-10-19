@@ -116,7 +116,7 @@ def main() -> None:
                           f"build: 矩阵依赖地板对齐（{'、'.join(tags)}）",
                           f"build: 矩阵依赖地板对齐（{'、'.join(tags)}）",
                           "align_floors.py 不动点对齐。合入后需 patch 发版（release_train）。",
-                          edit=lambda repo=repo: re_apply_for_pr(repo, base))
+                          edit=lambda repo=repo: re_apply_for_pr(repo, base), auto_merge=True)
             print(f"  ✓ {repo}: {url or '无变更'}")
     else:
         for repo in changed:

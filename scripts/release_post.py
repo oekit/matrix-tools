@@ -82,7 +82,7 @@ def main() -> None:
                           f"docs: 版本引用对齐 {lt}",
                           f"docs: 版本引用对齐 {lt}",
                           "release_post.py 发版后自动跟进。",
-                          edit=lambda repo=repo: sync_repo(repo, write=True))
+                          edit=lambda repo=repo: sync_repo(repo, write=True), auto_merge=True)
             print(f"  ✓ {repo}: {url or '无变更'}")
 
     # 3) versions.json
@@ -137,7 +137,7 @@ def main() -> None:
                           f"chore: BOM {bom_next}（发版后推荐组合更新）",
                           f"chore: BOM {bom_next}",
                           "release_post.py 发版后自动跟进（推荐组合锚点，非强制跟版）。",
-                          edit=edit_bom)
+                          edit=edit_bom, auto_merge=True)
             print(f"  ✓ BOM PR: {url or '无变更'}")
             if bom_release and url:
                 pr = open_pr("oekit", "chore/bom-follow")

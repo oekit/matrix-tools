@@ -98,6 +98,33 @@ def main() -> None:
     if not notable:
         print("  （全部干净，均在 main）")
 
+    if "--ci" in sys.argv:
+        print("\n== main CI 健康（各仓最近一次 run）==")
+        bad = 0
+        for name in MODULES:
+            d = local_dir(name)
+            if d is None:
+                continue
+            r = subprocess.run(["gh", "run", "list", "--repo", f"oekit/{name}",
+                                "--branch", "main", "--limit", "1",
+                                "--json", "conclusion,displayTitle,createdAt"],
+                               capture_output=True, text=True)
+            try:
+                run = json.loads(r.stdout or "[]")
+                run = run[0] if run else None
+            except json.JSONDecodeError:
+                run = None
+            if not run:
+                print(f"  ? {name:<16} 无 run 记录")
+                continue
+            c = run["conclusion"]
+            mark = {"success": "✓", "cancelled": "⊘", "skipped": "⊘"}.get(c, "✗")
+            if mark == "✗":
+                bad += 1
+            print(f"  {mark} {name:<16} {run['conclusion']:<10} {run['createdAt'][:16]} {run['displayTitle'][:44]}")
+        if bad:
+            print(f"  → {bad} 仓 main CI 红（先修复再在其上叠发版）")
+
     prs = open_prs()
     print(f"\n== org open PR（{len(prs)}）==")
     for pr in prs[:30]:
