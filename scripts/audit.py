@@ -33,6 +33,59 @@ def expected_table(repo: str) -> str:
     return render_table_for(repo).strip()
 
 
+# ---------- breakingIndex 完整性门禁（matrix-tools#31） ----------
+# 背景：versions.json 的 breakingIndex 靠人工从各模块 CHANGELOG 转抄，实测
+# 24 个模块中 5 个模块 15 条 Breaking 记录未收录——registry 与 nns 的
+# breakingIndex 甚至是**空数组**，而两仓的 v0.4.0 正是「SPI 包提升至模块根」
+# 这一类下游必断的变更。下游照矩阵升版，构建直接红，且报错只说
+# 「no required module provides package X」，完全不提真正原因（路径变了）。
+#
+# 门禁口径：**条目级全量比对**，不比对「有没有」这种粗粒度。
+#   - CHANGELOG 标注的破坏性条目 → 必须在 versions.json 里逐条在位；
+#   - versions.json 里的条目 → 必须在 CHANGELOG 里找得到（反向防手改漂移）。
+# 全量比对（不按已发布 tag 过滤）是刻意的：按 tag 过滤会在「本地没 fetch 到
+# 那些 tag」时把条目误判为未发布而跳过——那是**门禁假通过**的最典型形态。
+# 本地 CHANGELOG 只会写已发布版本，多报最多是提示重跑生成器，漏报是断链。
+def check_breaking_index(live: dict):
+    from gen_versions import breaking_index, breaking_suspects  # noqa: 延迟导入
+
+    indexed = {m["module"]: m.get("breakingIndex") or [] for m in live.get("modules", [])}
+    for repo in MODULES:
+        try:
+            want = breaking_index(repo)
+        except FileNotFoundError:
+            continue
+        have = indexed.get(repo)
+        if have is None:
+            check(False, f"{repo}: versions.json 缺该模块条目（跑 gen_versions.py）")
+            continue
+        have_keys = {(it.get("version"), it.get("line")) for it in have}
+        want_keys = {(it["version"], it["line"]) for it in want}
+        missing = want_keys - have_keys
+        extra = have_keys - want_keys
+        if missing:
+            sample = sorted(missing)[:2]
+            check(False, f"{repo}: breakingIndex 漏收 {len(missing)} 条 CHANGELOG 破坏性变更"
+                         f"（跑 gen_versions.py）：{sample}")
+        if extra:
+            sample = sorted(extra)[:2]
+            check(False, f"{repo}: breakingIndex 多出 {len(extra)} 条 CHANGELOG 里没有的条目"
+                         f"（跑 gen_versions.py）：{sample}")
+
+    # 疑似破坏性（机器判不了语义）：不阻塞，但必须显式提示，不能静默吞掉
+    suspects = []
+    for repo in MODULES:
+        try:
+            s = breaking_suspects(repo)
+        except FileNotFoundError:
+            continue
+        if s:
+            suspects.append(f"{repo}×{len(s)}")
+    if suspects:
+        print(f"  ⚠ 疑似破坏性变更未标注（`**refactor(...)**` / `### Changed` 段等，"
+              f"机器判不了语义，请人工确认是否需进 breakingIndex）：{'; '.join(suspects)}")
+
+
 # ---------- 模块仓 ----------
 for repo in MODULES:
     d = repo_dir(repo, BASE)
@@ -135,6 +188,7 @@ try:
             if lt and cur.get(repo) != lt:
                 stale.append(f"{repo}(站点 {cur.get(repo)} ≠ 最新 {lt})")
         check(not stale, f"site: versions.json 陈旧 {len(stale)} 项（跑 gen_versions.py）：{'; '.join(stale[:4])}")
+        check_breaking_index(live)
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
 

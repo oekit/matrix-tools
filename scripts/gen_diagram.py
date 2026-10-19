@@ -47,16 +47,16 @@ SHORT = {
     "logx": "统一门面 · 多后端 · Sink",
     "tracing": "OpenTelemetry · trace_id",
     "metrics": "Prometheus · 弹性指标族",
-    "pkg": "微工具集 20 合 1",
+    "pkg": "微工具集 23 合 1",
     "kitx": "UUID/雪花 · 校验门面",
     "concurrency": "GoSafe · singleflight · retry",
     "core": "config · transport/chain · lifecycle",
 }
 
-PKG_SUBS = [  # pkg 芯片内的三行微库清单（20 合 1；与 DESC/pkg 仓保持一致；uidgen/validator 已拆至 kitx）
-    "errors · stringx · slicex · enumx · convert · encoding · jsonrepair",
-    "httpjson · mathx · pathx · pagination · ptrx · timex · bloomx",
-    "cache · container · contextx · bufiox · strmap · singleflighttest",
+PKG_SUBS = [  # pkg 芯片内的三行微库清单（23 合 1；与 DESC/pkg 仓保持一致；uidgen/validator 已拆至 kitx）
+    "errors · stringx · slicex · enumx · convert · encoding · jsonrepair · httpjson",
+    "mathx · pathx · pagination · ptrx · timex · bloomx · cache · container",
+    "contextx · bufiox · strmap · singleflighttest · urlguard · cli · pack",
 ]
 
 # 双主题调色板：band/边框/层标题/芯片名/注释框填充/注释文字；另有全局色与箭头四色
