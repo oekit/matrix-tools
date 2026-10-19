@@ -36,7 +36,14 @@ def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
         raise SystemExit(f"{repo}: 工作树不干净，拒绝落 PR")
     sync_main(d)
     sh(["git", "checkout", "-B", branch], d)
-    files = edit() if edit else []
+    try:
+        files = edit() if edit else []
+    except Exception:
+        # 入口时树是干净的，此刻的脏全是本波次半截产物——丢弃并回 main
+        sh(["git", "reset", "--hard", "HEAD"], d)
+        sh(["git", "checkout", "main"], d)
+        sh(["git", "branch", "-D", branch], d)
+        raise
     if not files:
         sh(["git", "checkout", "main"], d)
         sh(["git", "branch", "-D", branch], d)
