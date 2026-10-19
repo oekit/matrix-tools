@@ -32,6 +32,13 @@ jobs:
           git clone --quiet "https://github.com/oekit/oekit.git" "repos/oekit"
       - name: Run audit
         id: audit
+        env:
+          # Release 对账要逐仓读 24 个仓的 releases 列表。匿名 REST 只有 60 次/小时，
+          # 而 Actions runner 共享出口 IP，逐仓一查就打满 → 全矩阵一起「读不到」，
+          # 门禁静默失效（#26：23/24 仓被跳过，报告仍显示通过）。
+          # 跨仓读必须用 org PAT：GITHUB_TOKEN 是本仓 installation token，读不到别的仓。
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
           MATRIX_BASE="$PWD/repos" python3 scripts/audit.py --remote-tags > audit-report.txt || true
           cat audit-report.txt
