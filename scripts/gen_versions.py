@@ -42,7 +42,7 @@ SITE = os.environ.get("MATRIX_SITE", str(Path(BASE) / "oekit.github.io"))
 # 实测 24 个模块中 5 个模块 15 条 Breaking 记录未进矩阵，registry/nns 的
 # breakingIndex 甚至是空数组——下游照矩阵升版直接构建断裂。
 #
-# 现在的口径是四路**确定性信号**并用：
+# 现在的口径是五路**确定性信号**并用：
 #   A) 段标题即语义信号：`### Breaking` / `### BREAKING` / `### 不兼容` /
 #      `### 破坏性`，以及 conventional commits 的破坏性标记段（标题以 `!` 结尾，
 #      如 httpx 的 `### refactor(urlguard)!`）——段内条目一律是破坏性变更；
@@ -52,7 +52,10 @@ SITE = os.environ.get("MATRIX_SITE", str(Path(BASE) / "oekit.github.io"))
 #      （`**核心包提升到模块根**`）——跨仓一致的确定性措辞，覆盖 bootstrap/hertz/
 #      httpx/middleware 等「结构重置但未标 Breaking 段」的仓；
 #   D) 条目加粗前缀含 `!`（conventional commits 破坏性标记，如 `**feat!**`）。
-# 四路按 (version, 条目文本) 去重。
+#   E) **顶格独立成行的破坏性标记**（`**BREAKING**: ...`，不带 bullet 前缀）——
+#      标记行本身即一条条目，其后条目同属该次破坏性变更。gormx v0.6.0 与
+#      hertz v0.7.0 的主键类型泛型化正是这种写法，见下方 STANDALONE_BREAK_RE。
+# 五路按 (version, 条目文本) 去重。
 #
 # 已知边界（机器判不了，不自动收录）：`**refactor(...)**` / `**feat(...)**` /
 # `### Changed` 段里的破坏性变更——语义要看人。audit 会把这类「疑似未标注」
@@ -75,6 +78,48 @@ BOLD_PREFIX_RE = re.compile(r"^\*\*([^*]+)\*\*")
 SUSPECT_ITEM_RE = re.compile(r"^\*\*[^*]*(refactor|fix|change|remove|rename|drop|migrat)[^*]*\*\*", re.I)
 SUSPECT_SECTION_RE = re.compile(r"(?i)^(changed|变更|行为变更)\b")
 SUSPECT_TEXT_RE = re.compile(r"(结构重置|目录正名|路径变更|历史与旧版本号)")
+
+# ---------- 信号 E：独立成行的破坏性标记（matrix-tools#31 复审补漏） ----------
+#
+# 上面四路信号都建立在「条目是 `- ` 开头的 bullet」这个前提上，但 CHANGELOG 里
+# 还有另一种同样常见的写法——**破坏性标记独占一行，不带 bullet 前缀**：
+#
+#     ## [v0.6.0] — 2026-10-19
+#
+#     **BREAKING**: crud/gormrepo 主键类型泛型化（#7 问题 1）——接口全链路加 `ID comparable`
+#     泛型参数，文本主键（TEXT PRIMARY KEY）/UUID 等项目可直接实现 crud 契约，不再被写死 int64。
+#
+#     - crud：`Reader[T]`/`Writer[T]`/... → `[T, ID comparable]`；...
+#     - gormrepo：`GormRepository[T]` → `[T, ID comparable]`；...
+#
+# gormx v0.6.0 与 hertz v0.7.0 的主键类型泛型化正是这种写法。旧实现按
+# `line.strip().startswith("-")` 过滤，**整段（含标记行与其后全部条目）被漏收**——
+# 而这两条恰恰是下游必断的泛型签名变更（`Reader[T]` → `Reader[T, ID comparable]`）。
+# 漏收后 gormx 的 breakingIndex 是空数组，矩阵对下游说谎。
+#
+# 口径：标记行本身即一条破坏性条目；其后紧跟的条目同属该次破坏性变更，
+# 沿用到下一个版本头 / `###` 段头为止（与显式 `### Breaking` 段同一生命周期）。
+# 标记行必须**顶格**（不以空白开头）才作数——缩进的 `**breaking**：...` 多为
+# 上一条 bullet 的续行（logx 即如此），由信号 B 随父条目一并收录。
+STANDALONE_BREAK_RE = re.compile(r"^\*\*[^*]*(?:breaking|不兼容|破坏性)[^*]*\*\*", re.I)
+# 隐式破坏性段里要排除的「别仓说明」类条目：讲的是依赖地板 / 消费方波次，
+# 不是本仓自身的破坏性变更（与信号 C 同一判据）。
+#   hertz v0.7.0: `- gormx 地板 v0.5.5 → **v0.6.0**`
+#   gormx v0.6.0: `- 消费方波次：data v0.14.0（...）、hertz v0.7.0（...）`
+DEP_NOTE_RE = re.compile(
+    r"^(?:[A-Za-z0-9_./-]+\s+)?(?:地板\b|依赖|消费方波次|消费方|升级：)")
+
+
+def _is_dep_note(body: str) -> bool:
+    """条目是否只是「别仓的变更说明」（依赖地板 / 消费方波次）。"""
+    head = body.strip()
+    bold = BOLD_PREFIX_RE.match(head)
+    prefix = bold.group(1) if bold else ""
+    # 判据落在**加粗前缀或行首**上：`- 依赖升级：registry v0.4.0（...）` 讲别仓，
+    # 但 `- 新增 WithIDParser` 讲本仓自身——不能只看正文里有没有「依赖」二字。
+    if prefix and DEP_NOTE_RE.match(prefix):
+        return True
+    return bool(DEP_NOTE_RE.match(head)) and not bold
 
 
 def _remote_tags(repo: str) -> list[str]:
@@ -187,6 +232,7 @@ def parse_changelog_breaking(text: str) -> tuple[list[dict], list[dict]]:
     seen_suspect: set[tuple[str, str]] = set()
     cur_version: str | None = None
     in_break = False
+    implicit_break = False
     in_suspect_section = False
     buf: list[str] = []
     keep = False
@@ -215,20 +261,33 @@ def parse_changelog_breaking(text: str) -> tuple[list[dict], list[dict]]:
         if m:
             flush()
             cur_version = _normalize_version(m.group(1))
-            in_break = in_suspect_section = False
+            in_break = implicit_break = in_suspect_section = False
             continue
         m = VERSION_HEAD_PLAIN_RE.match(raw_line)
         if m:
             flush()
             cur_version = m.group(1)
-            in_break = in_suspect_section = False
+            in_break = implicit_break = in_suspect_section = False
             continue
         m = SECTION_HEAD_RE.match(raw_line)
         if m:
             flush()
             title = m.group(1)
             in_break = _is_break_section(title)
+            # 显式 `### Breaking` 段内的一切条目都算数，包括「别仓说明」——
+            # 是作者**刻意**放进 Breaking 段的。隐式段（信号 E）才排除。
+            implicit_break = False
             in_suspect_section = bool(SUSPECT_SECTION_RE.match(title.strip()))
+            continue
+        # 信号 E：顶格独立成行的破坏性标记（`**BREAKING**: ...`）——标记行本身
+        # 即一条条目，并开启隐式破坏性段（沿用到下一个版本头 / `###` 段头）。
+        m = STANDALONE_BREAK_RE.match(raw_line)
+        if m:
+            flush()
+            in_break = implicit_break = True
+            in_suspect_section = False
+            buf = [raw_line.strip()]
+            keep = True
             continue
         m = ITEM_RE.match(raw_line)
         if m:
@@ -246,6 +305,9 @@ def parse_changelog_breaking(text: str) -> tuple[list[dict], list[dict]]:
                 # 信号 D：conventional commits 的破坏性标记（`**feat!**` / `**fix!**`）
                 or ("!" in prefix)
             )
+            # 隐式段（信号 E）里的「别仓说明」不算本仓的破坏性变更
+            if keep and implicit_break and _is_dep_note(body):
+                keep = False
             suspect = (not keep) and (
                 in_suspect_section or bool(SUSPECT_ITEM_RE.match(body.strip()))
             )
