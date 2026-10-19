@@ -25,6 +25,24 @@ ORG = "oekit"
 SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
 
+# ---------- Go 版本地板三层口径（matrix-tools#33，负责人裁决） ----------
+#
+# 裁决原文：「我接受有些包依赖高版本的 golang。基础包需要依赖低版本的 go1.24，
+# 业务包依赖 1.24 / 1.25 / 1.26 都行。」
+#
+# 因此门禁**只放宽「地板值」，不放宽「成对」**：
+#   · 基础层：go.mod 的 go 指令必须 ≤ 1.24（基础包是所有服务的地基，
+#     地板抬高会传染到全部下游）
+#   · tracing：豁免——go.opentelemetry.io/otel v1.47.0 的 go.mod 明写 go 1.26.0，
+#     属「接受高版本依赖」那一类，门禁不得报它
+#   · 业务层：1.24 / 1.25 / 1.26 均可，不报
+#   · **全矩阵通用**：go.mod 的 go 指令与 CI 的 go-version 必须成对——
+#     CI 用 1.26 构建、go.mod 声明 1.24，等于最低支持版本从来没被验证过
+GO_FLOOR_BASE_MAX = (1, 24)
+GO_FLOOR_BUSINESS_OK = {(1, 24), (1, 25), (1, 26)}
+GO_FLOOR_BASE_LAYER = {"pkg", "concurrency", "logx", "core", "kitx", "metrics"}
+GO_FLOOR_EXEMPT = {"tracing"}
+
 DESC = {
     "pkg": "微工具集 23 合 1（errors/bloomx/contextx/container/stringx/slicex/enumx/convert/encoding/jsonrepair/httpjson/mathx/pathx/pagination/ptrx/timex/cache/bufiox/strmap/singleflighttest/urlguard/cli/pack；v0.10.0 起 uidgen/validator 拆至 kitx）；errors（v0.12.0 起）New/As/Is/Unwrap 与 stdlib 同型透传——下游哨兵/As 判定单 import 即可，类型同一性红线可完整执行；cache（v0.4.0 起）含缓存接口 CacheAside + BatchGetter 批量能力（MGet）+ LocalCache/SingleFlightCache + cachetest 契约（Run 真实时间 + RunWithClock 假时钟确定性 TTL 边界）+ Checker；LocalCache 时钟可注入（LocalConfig.Now——TTL/NullTTL 全路径确定性测试，v0.13.0 起）；v0.16.0 起 LocalCache 可选形状——NoBackgroundSweep 关闭后台清扫 goroutine（嵌入式/短命进程，公开 Sweep 手动清扫口）、CloneOnRead 读命中返回副本（调用方可改写不污染缓存）、EvictPolicy 可选 LRU（默认 FIFO 不变）、GetEx 区分未命中与值为 nil（新增能力以可选接口 Sweeper/HitGetter 外置，不破坏其它后端）；container（v0.9.0 起，收编原 collectionx）泛型容器 Set/Ring/Queue/SafeMap + Map（sync.Map 背书）/Slice（并发安全）；mathx/jsonrepair（v0.11.0）Unstable 单边向上抖动 Upward / 宽松解析 UnmarshalLenient；timex/stringx（v0.7.0 起）时间段边界 BeginningOf/EndOf 七对（分/时/日/周/月/季/年，周起始显式参数）+ trie 多模式替换器 Replacer（最长匹配）/ NewMask 敏感词遮罩；stringx Masker（v0.16.0 起）正则脱敏——按形态分类打码（形态标签进掩码供审计读）+ 保留首尾各 ≤4 字符定位线索且不可复原（保留位封顶不随长度变化），规则表由调用方完全提供；singleflighttest（v0.8.0 起）singleflight 共享契约测试套件（internal 与 concurrency 双侧引用）；urlguard（v0.15.0 起）出站 SSRF 防护原语——CheckURL 字面量校验（私网/loopback/链路本地含云元数据 169.254.169.254/CGNAT/ULA/组播保留、.internal·.local·localhost 域名、scheme 白名单、IPv4-mapped IPv6 归一）+ DialFunc 拨号层预解析校验与实际 RemoteAddr 端点核对闭合 TOCTOU（Happy-Eyeballs 覆盖），构造态豁免 WithAllowPrivate/WithAllowCIDRs/WithAllowDomains，与 httpx WithDialFunc 一行组合（httpx#11）；cli（v0.16.0 起）框架无关可单测的子命令分发原语——App/Command + 退出码 0/1/2 写死在包里、usage 按 Summary 自动生成、不读 os.Args 不调 os.Exit（输出流全由调用方给）；pack（v0.16.0 起）迁移包容器原语——zip + manifest（格式版本/条数/每文件 SHA-256）+ JSONL 流式读写 + Inspect 体检一次列全问题并区分包损坏与版本不认识",
     "kitx": "标识与校验——uidgen（Snowflake 全局单例+Extract 元数据、手写 RFC 4122 v4 UUID 零第三方依赖、RandomHex/RandomString 拒绝采样随机串）+ validator（go-playground/validator v10 接口化门面：struct tag 校验/自定义规则注册/ValidationError Unwrap 为 BizError 400 对接 middleware.Fail）+ hash（v0.2.0 起非密码学哈希助手 Md5Hex/Md5Bytes——缓存键/幂等键/短唯一 code，格式稳定承诺，pkg 2026-09-15 治理移除弱哈希后 kitx 侧收编 pkg#10），自 pkg v0.10.0 拆出",

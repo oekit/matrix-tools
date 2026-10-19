@@ -12,7 +12,10 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag  # noqa: E402
+from matrix import (  # noqa: E402
+    MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
+    GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT,
+)
 
 BASE = os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
 BASE = os.path.abspath(BASE)
@@ -223,9 +226,63 @@ def check_breaking_oracle():
               f"请人工确认是否收错仓：{'; '.join(all_suspect[:8])}")
 
 
+# ---------- Go 版本地板三层口径 + go.mod/CI 成对（matrix-tools#33） ----------
+def _go_directive(d) -> tuple[int, int] | None:
+    """读 go.mod 的 go 指令 → (major, minor)。"""
+    p = d / "go.mod"
+    if not p.exists():
+        return None
+    for line in p.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^go\s+(\d+)\.(\d+)", line)
+        if m:
+            return (int(m.group(1)), int(m.group(2)))
+    return None
+
+
+def _ci_go_version(d) -> str | None:
+    """读各仓 ci.yml 的 go-version（形如 '1.24'）。"""
+    p = d / ".github" / "workflows" / "ci.yml"
+    if not p.exists():
+        return None
+    m = re.search(r"go-version:\s*'?([0-9.]+)'?", p.read_text(encoding="utf-8"))
+    return m.group(1) if m else None
+
+
+def check_go_floor_pairing(repo: str, d):
+    """Go 地板三层口径 + go.mod/CI 成对一致。
+
+    负责人裁决（#33）：「基础包需要依赖低版本的 go1.24，业务包依赖 1.24 / 1.25 / 1.26 都行。」
+    门禁**只放宽「地板值」，不放宽「成对」**——CI 必须用 go.mod 声明的版本构建：
+    CI 用 1.26 构建、go.mod 声明 1.24，等于**最低支持版本从来没被验证过**，
+    下游在 1.24 上装这个包可能到 CI 才第一次发现构建失败。
+    """
+    gm = _go_directive(d)
+    if gm is None:
+        return
+    ci = _ci_go_version(d)
+    if ci:
+        parts = ci.split(".")
+        if len(parts) >= 2 and all(x.isdigit() for x in parts[:2]):
+            ci_m = (int(parts[0]), int(parts[1]))
+            if ci_m != gm:
+                check(False, f"{repo}: go.mod 声明 go {gm[0]}.{gm[1]}，CI 却用 {ci} 构建"
+                             f"——最低支持版本未被验证（CI 版本须与 go.mod 成对）")
+    if repo in GO_FLOOR_EXEMPT:
+        return
+    if repo in GO_FLOOR_BASE_LAYER:
+        if gm > GO_FLOOR_BASE_MAX:
+            check(False, f"{repo}: 基础层 Go 地板 {gm[0]}.{gm[1]} 高于 1.24"
+                         f"（基础包地板抬高会传染全部下游）")
+    elif gm not in GO_FLOOR_BUSINESS_OK:
+        check(False, f"{repo}: 业务层 Go 地板 {gm[0]}.{gm[1]} 不在允许档位 "
+                     f"（1.24 / 1.25 / 1.26）内")
+
+
 # ---------- 模块仓 ----------
 for repo in MODULES:
     d = repo_dir(repo, BASE)
+    # 0) Go 地板三层口径 + go.mod/CI 成对
+    check_go_floor_pairing(repo, d)
     # 1) module 行
     ml = module_line(repo, BASE)
     check(ml == f"module github.com/oekit/{repo}", f"{repo}: module 行 = {ml!r}")
