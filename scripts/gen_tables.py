@@ -16,6 +16,68 @@ from matrix import MODULES, DESC, repo_dir, ensure_clean_all, sibling_deps, sh  
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 PUSH = "--push" in sys.argv
 
+# 门面 BOM 仓：它有根 go.mod，但**不是矩阵模块**（只是各模块版本地板的快照）。
+BOM_REPO = "oekit"
+
+# 站点文案里表示「模块数量」的单位 → 口径键。**单一真相**：门禁
+# verify_site_copy.py 与文案生成器都从这里取，改一处全生效。
+# 只认这几个精确措辞：站点里还有「23 个基础工具包」（pkg 内部包数）这类数字，
+# 模糊匹配会误判（误报多的门禁会被绕过）。
+COUNT_UNITS = {
+    "独立发版的 Go 模块仓库": "matrix_modules",
+    "独立发版的 Go 模块": "matrix_modules",
+    "独立发版的仓库": "matrix_modules",
+    "活跃模块仓库": "matrix_modules",
+    "活跃模块": "matrix_modules",
+    "模块": "matrix_modules",
+    "嵌套模块": "nested_modules",
+    "发版单元": "release_units",
+}
+
+
+def count_units(repos_dir: str | None = None) -> dict:
+    """各口径的计数。
+
+    `repos_dir` 给了 → **独立 oracle**：直接扫文件系统里的 go.mod，不看任何生成物。
+    这是「声明的模块数是否还对得上现实」的判据；不给则只给声明口径。
+
+    三个口径不一样，别选一个当「唯一正确值」：
+      根矩阵模块数 = len(MODULES)（站点文案用这个，与「矩阵总览」表同口径）
+      根 go.mod 数  = 25（24 矩阵模块 + 门面 BOM 仓 oekit）
+      嵌套模块数    = 7（深度 ≥2 的 go.mod，各自独立发版）
+      发版单元总数  = 根矩阵模块 + 嵌套模块（不含门面 BOM 仓）
+    """
+    counts = {
+        "matrix_modules": len(MODULES),
+        "root_gomods": None,
+        "nested_modules": None,
+        "total_gomods": None,
+        "release_units": None,
+    }
+    if not repos_dir:
+        return counts
+    from pathlib import Path
+    base = Path(repos_dir).resolve()
+    roots = [p for p in sorted(base.iterdir()) if p.is_dir() and (p / "go.mod").is_file()]
+    nested = sum(1 for r in roots for g in r.glob("*/go.mod") if ".git" not in g.parts)
+    counts["root_gomods"] = len(roots)
+    counts["nested_modules"] = nested
+    counts["total_gomods"] = len(roots) + nested
+    counts["release_units"] = counts["matrix_modules"] + nested
+    return counts
+
+
+def render_count_sentence(counts: dict) -> str:
+    """规范计数句——文案要改时照抄这句，不用自己算。
+
+    口径齐全时把三个数都写出来（读者不必猜哪个是哪个）；缺嵌套口径时只写根模块数。
+    """
+    n = counts["matrix_modules"]
+    if counts.get("release_units") is None:
+        return f"{n} 个独立发版的 Go 模块"
+    return (f"{n} 个独立发版的 Go 模块（根模块），另有 {counts['nested_modules']} 个嵌套模块"
+            f"各自独立发版，合计 {counts['release_units']} 个发版单元")
+
 def deps_link(repo: str) -> str:
     deps = sibling_deps(repo, BASE)
     return "、".join(f"[{d}](https://github.com/oekit/{d})" for d in deps) or "—"
