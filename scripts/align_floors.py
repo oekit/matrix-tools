@@ -28,11 +28,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import MODULES, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
+from matrix import MODULES, OEKIT_REQ_RE, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
 from prkit import land_pr  # noqa: E402
-
-REQ_RE = re.compile(r"^\t(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)$", re.M)
-
 
 def parse_semver(v: str) -> tuple[int, int, int]:
     a, b, c = v[1:].split(".")
@@ -50,7 +47,7 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
             continue
         text = gm.read_text()
         ups = []
-        for m in REQ_RE.finditer(text):
+        for m in OEKIT_REQ_RE.finditer(text):
             full, dep, ver = m.group(1), m.group(2), m.group(3)
             if dep not in latest_cache:
                 latest_cache[dep] = latest_tag(dep, base)
@@ -67,9 +64,10 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
 def apply_edits(gm: Path, ups: list[tuple[str, str, str]]) -> None:
     text = gm.read_text()
     for full, ver, target in ups:
-        old, new = f"\t{full} {ver}", f"\t{full} {target}"
-        assert text.count(old) == 1, f"{gm}: {old} 不唯一"
-        text = text.replace(old, new)
+        # 保留原行前缀（块内 tab / 单行 require）——logx/bootstrap 是单行形态
+        pat = re.compile(rf"^(\t|require )({re.escape(full)}) {re.escape(ver)}$", re.M)
+        assert len(pat.findall(text)) == 1, f"{gm}: {full} {ver} 行不唯一"
+        text = pat.sub(rf"\g<1>{full} {target}", text)
     gm.write_text(text)
 
 

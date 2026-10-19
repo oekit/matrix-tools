@@ -15,16 +15,13 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from matrix import MODULES, latest_tag, repo_dir  # noqa: E402
-
-REQ_RE = re.compile(r"^\t(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)$", re.M)
-
+from matrix import MODULES, OEKIT_REQ_RE, latest_tag, repo_dir  # noqa: E402
 
 def floors_of(repo: str) -> dict[str, str]:
     """repo 根 go.mod 的全部 oekit 依赖地板（嵌套 go.mod 不计——那是父模块跟随面）。"""
     d = repo_dir(repo)
     text = (d / "go.mod").read_text()
-    return {m.group(2): m.group(3) for m in REQ_RE.finditer(text)}
+    return {m.group(2): m.group(3) for m in OEKIT_REQ_RE.finditer(text)}
 
 
 def semver(v: str) -> tuple[int, int, int]:
