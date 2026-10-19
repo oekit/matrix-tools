@@ -1,0 +1,22 @@
+name: CI
+
+# 薄调用层：规则本体在 oekit/.github（与 Go 仓共用同一套「本体在共享仓」的
+# 约定——改一处全矩阵生效）。
+#   oekit/.github/.github/workflows/python-ci.yml@main
+# 矩阵一致性审计（真正会红的那道）在 audit.yml，见其 pull_request 触发。
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Lint
+    uses: oekit/.github/.github/workflows/python-ci.yml@main
+    with:
+      python-version: '3.12'
