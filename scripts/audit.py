@@ -111,6 +111,8 @@ def check_breaking_index(live: dict):
 ORACLE_WORD_RE = re.compile(r"(?i)breaking|不兼容|破坏性")
 ORACLE_VERHEAD_RE = re.compile(r"^##\s*\[([^\]]+)\]")
 ORACLE_SEMVER_RE = re.compile(r"v\d+\.\d+\.\d+")
+# 归属校验用：条目里出现的 oekit 路径标识（`github.com/oekit/<name>` 或 `<name>/`）
+ORACLE_OWNPATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+)|(?<![\w/])([a-z0-9-]+)/")
 
 
 def _oracle_norm(s: str) -> str:
@@ -185,6 +187,29 @@ def check_breaking_oracle():
                 if not any(k in kk or kk[:60] in k for kk in keys if kk):
                     check(False, f"{repo}: CHANGELOG 有破坏性标记但 breakingIndex 未覆盖"
                                  f"（{kind}，{ver}）：{val[:60]}")
+
+        # (d) 归属校验（查**产物**而非输入，故与解析器逻辑独立）：
+        # breakingIndex 里的每一条，若它提到的 oekit 路径标识**只有别仓**、
+        # 完全没有本仓的路径，那它讲的是别仓的破坏性——收进本仓是噪音。
+        # 这道校验直接守住「路径级移除」这类启发式信号（它靠动作词+归属
+        # 推断破坏性，最容易把别仓的变更收进来）。
+        own = {repo, f"{repo}/"}
+        for it in items:
+            line = it.get("line", "")
+            others = set()
+            for m in ORACLE_OWNPATH_RE.finditer(line):
+                name = m.group(1) or m.group(2) or ""
+                if name:
+                    others.add(name)
+            if not others:
+                continue
+            if others & own:
+                continue
+            # 本仓路径没出现、只提到别仓 → 疑似归属错误
+            if len(others) == 1:
+                other = next(iter(others))
+                check(False, f"{repo}: breakingIndex 收了疑似属于别仓的条目"
+                             f"（提到 {other}/ 而未提到本仓路径）：{line[:70]}")
 
 
 # ---------- 模块仓 ----------

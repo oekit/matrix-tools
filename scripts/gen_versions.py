@@ -55,7 +55,23 @@ SITE = os.environ.get("MATRIX_SITE", str(Path(BASE) / "oekit.github.io"))
 #   E) **顶格独立成行的破坏性标记**（`**BREAKING**: ...`，不带 bullet 前缀）——
 #      标记行本身即一条条目，其后条目同属该次破坏性变更。gormx v0.6.0 与
 #      hertz v0.7.0 的主键类型泛型化正是这种写法，见下方 STANDALONE_BREAK_RE。
-# 五路按 (version, 条目文本) 去重。
+#   F) 本仓自身的路径级移除：公开符号整体迁出、删除重复层/废弃转发层、拆为
+#      独立子模块、目录正名——**符号或路径在本仓消失**，下游 import 直接断。
+#      覆盖 `**refactor(...)**` 段里那些正文不含 breaking 关键词、段标题也
+#      不是 Breaking 的条目（logx v0.2.0 嵌套多模块、logx v0.4.0 Sink 迁至
+#      logx/sink、logx v0.4.0 Manager 迁至 core/lifecycle、
+#      middleware v0.5.0 删除 contrib/ 与 traceid/hmw/）。
+#      F 路的两个护栏（缺一不可，否则会收进大量噪音）：
+#        ① 路径归属：条目里出现的 oekit 路径标识（`github.com/oekit/<repo>`
+#           或 `<repo>/`）必须命中**本仓**。`redisx v0.4.0 import 路径正名
+#           data/data/cache → data/cache` 讲的是 data 仓，破坏归属 data，
+#           收进 redisx 是错的；
+#        ② 方向：只认「移除/迁出/删除/拆分/正名」，不认「迁入/新增」——
+#           `timertask redis/v0.2.0 自根包迁入嵌套模块` 是新增位置，不是破坏
+#           （根包侧的移除已由 timertask v0.2.0 那条收录）。
+#      F 路判定在**合并续行之后**做——路径标识常在续行里（logx v0.2.0 的
+#      `github.com/oekit/logx/hlog` 就在第二行），只看首行会漏。
+# 六路按 (version, 条目文本) 去重。
 #
 # 已知边界（机器判不了，不自动收录）：`**refactor(...)**` / `**feat(...)**` /
 # `### Changed` 段里的破坏性变更——语义要看人。audit 会把这类「疑似未标注」
@@ -73,6 +89,19 @@ BREAK_SECTION_BANG_RE = re.compile(r"!\s*$")
 # 判据要求「加粗前缀」而非正文任意位置：`- 依赖升级：registry v0.4.0（SPI 包提升至模块根）`
 # 讲的是**别仓**的破坏性变更，本仓并无破坏，收进来是噪音。
 BOLD_PREFIX_RE = re.compile(r"^\*\*([^*]+)\*\*")
+# ---------- E 路：路径级移除 ----------
+# 动作词只认「移除/迁出/删除/拆分/正名」——即符号或路径在**本仓**消失。
+# 「迁入」「新增」是新位置而非破坏，不触发 E 路。
+E_ACTION_RE = re.compile(
+    r"(迁至|迁出|"
+    r"删除重复层|删除废弃转发层|删除旧适配别名|"
+    r"嵌套多模块|各自持有独立 go\.mod|拆为独立|"
+    r"目录正名|import 路径正名)"
+)
+# 路径归属：条目里出现的 oekit 路径标识。`github.com/oekit/<name>` 或 `<name>/`。
+E_PATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+)|(?<![\w/])([a-z0-9-]+)/")
+# 跟随依赖升级：本仓 API 未变，破坏性归属被依赖仓。
+E_DEP_UPGRADE_RE = re.compile(r"^\**(依赖升级|build|fix\(deps\)|实现细节|docs|注|说明|doc)")
 # 疑似破坏性但机器判不了的信号（仅用于 audit 提示，不进 breakingIndex）
 # 排除 feat——新增功能本身不破坏兼容（`**feat!**` 已被破坏性标记单独收走）。
 SUSPECT_ITEM_RE = re.compile(r"^\*\*[^*]*(refactor|fix|change|remove|rename|drop|migrat)[^*]*\*\*", re.I)
@@ -219,12 +248,44 @@ def _is_break_section(title: str) -> bool:
     return bool(BREAK_SECTION_BANG_RE.search(title))
 
 
-def parse_changelog_breaking(text: str) -> tuple[list[dict], list[dict]]:
+def _is_path_removal(text: str, repo: str) -> bool:
+    """E 路：本仓自身的路径级移除（符号或路径在本仓消失 → 下游 import 断）。
+
+    `text` 必须是**合并续行后的完整条目**——路径标识常在续行里
+    （logx v0.2.0 的 `github.com/oekit/logx/hlog` 就在第二行），
+    只看首行会漏。
+
+    两个护栏缺一不可：
+      ① 路径归属——条目里出现的 oekit 路径标识必须命中**本仓**。
+         `redisx v0.4.0 import 路径正名 data/data/cache → data/cache` 讲的是
+         data 仓，破坏归属 data，收进 redisx 是错的；
+      ② 方向——只认「移除/迁出/删除/拆分/正名」，不认「迁入/新增」。
+         `timertask redis/v0.2.0 自根包迁入嵌套模块` 是新增位置，不是破坏
+         （根包侧的移除已由 timertask v0.2.0 那条收录）。
+
+    `repo` 为空（无法判定归属）时一律不收——宁可漏，不误收。
+    """
+    if not repo:
+        return False
+    if not E_ACTION_RE.search(text):
+        return False
+    if E_DEP_UPGRADE_RE.match(text.strip()):
+        return False
+    names = set()
+    for m in E_PATH_RE.finditer(text):
+        names.add(m.group(1) or m.group(2) or "")
+    names.discard("")
+    # 路径标识里必须出现本仓，否则是「跟随别仓」的变更
+    return repo in names
+
+
+def parse_changelog_breaking(text: str, repo: str = "") -> tuple[list[dict], list[dict]]:
     """解析 CHANGELOG 文本 → (破坏性条目, 疑似破坏性条目)。
 
     破坏性条目形如 {"version": "v0.4.0", "line": "…"}。
     疑似条目（`**refactor(...)**` / `### Changed` 段——机器判不了语义）单独返回，
     供 audit 打提示，不进 breakingIndex。
+    `repo` 供 E 路判定路径归属（谁的仓）。
     """
     items: list[dict] = []
     suspects: list[dict] = []
@@ -242,7 +303,8 @@ def parse_changelog_breaking(text: str) -> tuple[list[dict], list[dict]]:
         nonlocal buf, keep, suspect
         if buf:
             line = re.sub(r"\s+", " ", " ".join(s.strip() for s in buf)).strip()
-            if cur_version and keep:
+            # 信号 E 在**合并续行后**判定：路径标识常在续行里
+            if cur_version and (keep or _is_path_removal(line, repo)):
                 key = (cur_version, line)
                 if key not in seen:
                     seen.add(key)
@@ -338,12 +400,12 @@ def _prefix_version(v: str, prefix: str) -> str:
     return " + ".join(out)
 
 
-def _scan_changelog(path: Path, prefix: str = "") -> list[dict]:
+def _scan_changelog(path: Path, prefix: str = "", repo: str = "") -> list[dict]:
     """扫一个 CHANGELOG.md 的破坏性条目（版本号按 prefix 加嵌套模块前缀）。"""
     if not path.exists():
         return []
     text = path.read_text(encoding="utf-8")
-    items, _ = parse_changelog_breaking(text)
+    items, _ = parse_changelog_breaking(text, repo=repo)
     for it in items:
         it["version"] = _prefix_version(it["version"], prefix)
     return items
@@ -358,10 +420,11 @@ def breaking_index(repo: str) -> list[dict]:
     只扫根 CHANGELOG 会漏掉它们。
     """
     root = repo_dir(repo, BASE)
-    items = _scan_changelog(root / "CHANGELOG.md")
+    items = _scan_changelog(root / "CHANGELOG.md", repo=repo)
     for gomod in sorted(root.glob("*/go.mod")):
         sub = gomod.parent
-        items.extend(_scan_changelog(sub / "CHANGELOG.md", prefix=f"{sub.name}/"))
+        # 嵌套模块的路径标识是 `github.com/oekit/<root>/<sub>`，归属判据认根仓名
+        items.extend(_scan_changelog(sub / "CHANGELOG.md", prefix=f"{sub.name}/", repo=repo))
     return items
 
 
@@ -374,7 +437,7 @@ def breaking_suspects(repo: str) -> list[dict]:
     ]:
         if not path.exists():
             continue
-        _, suspects = parse_changelog_breaking(path.read_text(encoding="utf-8"))
+        _, suspects = parse_changelog_breaking(path.read_text(encoding="utf-8"), repo=repo)
         for s in suspects:
             s["version"] = _prefix_version(s["version"], prefix)
         out.extend(suspects)
