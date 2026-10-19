@@ -1,16 +1,27 @@
 name: Matrix audit
 
+# 两种触发，两种职责：
+#   - schedule / workflow_dispatch：周报模式，发现漂移开/更新 issue（给人看）；
+#   - pull_request：门禁模式，发现漂移直接让 PR 红（不给漂移合进 main 的机会）。
+#
+# PR 模式是后加的，原因很实际：漂移 issue 是**周报**性质的，它描述的是
+# 「上周一早上世界是什么样」——报告生成与修复之间天然有时间差，报告里的
+# 条目常常在发出后不久就被别的波次带走了（#26 的 8 项漂移即如此，全部是
+# 报告比修复早）。周报能告诉你「该修了」，但拦不住「带着漂移合进来」。
+# 门禁才是那道真正拦人的墙。
 on:
   schedule:
     - cron: '0 3 * * 1'   # 每周一 03:00 UTC
   workflow_dispatch:
+  pull_request:
+    branches: [main, master]
 
 permissions:
   contents: read
   issues: write
 
 concurrency:
-  group: matrix-audit
+  group: matrix-audit-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -44,7 +55,7 @@ jobs:
           cat audit-report.txt
           echo "drift=$(grep -c '❌' audit-report.txt || true)" >> "$GITHUB_OUTPUT"
       - name: Close previous drift issue
-        if: steps.audit.outputs.drift == '0'
+        if: github.event_name != 'pull_request' && steps.audit.outputs.drift == '0'
         uses: actions/github-script@v9
         with:
           script: |
@@ -57,7 +68,7 @@ jobs:
                 repo: context.repo.repo, issue_number: i.number, state: 'closed' });
             }
       - name: Open drift issue
-        if: steps.audit.outputs.drift != '0'
+        if: github.event_name != 'pull_request' && steps.audit.outputs.drift != '0'
         uses: actions/github-script@v9
         with:
           script: |
@@ -75,3 +86,10 @@ jobs:
               await github.rest.issues.create({ owner: context.repo.owner,
                 repo: context.repo.repo, title: '矩阵漂移报告', body, labels: ['matrix-drift'] });
             }
+      - name: Fail on drift (PR only)
+        # PR 门禁：漂移不让合。**不开 issue**——PR 上每推一次提交就开一个
+        # issue 会把 issue 池冲垮，漂移详情留在本步骤的日志里就够了。
+        if: github.event_name == 'pull_request' && steps.audit.outputs.drift != '0'
+        run: |
+          echo "::error::矩阵审计发现 ${{ steps.audit.outputs.drift }} 项漂移——本 PR 不能合。详情见上方 audit-report.txt（本地复现：python3 scripts/audit.py --remote-tags）"
+          exit 1
