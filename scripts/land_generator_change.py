@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -113,6 +114,46 @@ def changed_files(d: Path, files: list[str]) -> list[str]:
     return [l[3:].strip() for l in r.stdout.splitlines() if l.strip()]
 
 
+# 产物里的时间戳字段：每次重生成都会变，但**不代表内容变了**。
+# 判「有没有实质变化」必须剔除它们——否则脚本每次都报「产物有变化」，
+# 排查者会学会忽略这个输出，工具就废了。
+TS_PATTERNS = (
+    re.compile(r'^\s*"generatedAt":.*$', re.M),          # versions.json
+    re.compile(r'^const GeneratedAt = ".*"$', re.M),      # matrix.go
+    re.compile(r"^// 生成时间 .*$", re.M),                 # matrix.go 头注释
+)
+
+
+def _normalize(text: str) -> str:
+    for pat in TS_PATTERNS:
+        text = pat.sub("", text)
+    return text.strip()
+
+
+def substantive_change(d: Path, rel: str) -> bool:
+    """该产物文件相对 HEAD 是否有**实质**变化（剔除时间戳）。"""
+    cur = d / rel
+    if not cur.exists():
+        return True
+    old = subprocess.run(["git", "-C", str(d), "show", f"HEAD:{rel}"],
+                         capture_output=True, text=True).stdout
+    if not old:
+        return True
+    try:
+        return _normalize(cur.read_text(encoding="utf-8")) != _normalize(old)
+    except UnicodeDecodeError:
+        return True
+
+
+def substantive_files(d: Path, files: list[str]) -> list[str]:
+    """变化文件里**剔除**只有时间戳差异的（其余才算要落地）。"""
+    out = []
+    for rel in files:
+        if substantive_change(d, rel):
+            out.append(rel)
+    return out
+
+
 def open_pr(repo: str, branch: str, title: str, body: str, message: str) -> str:
     """建分支 → 提交 → 推 → 开 PR（已存在同分支 PR 时复用）。"""
     d = repo_dir(repo, BASE)
@@ -170,8 +211,12 @@ def main() -> int:
         if not ch:
             print("    产物无变化——无需落地")
             continue
-        print(f"    产物变化：{', '.join(ch)}")
-        todo.append((key, repo, ch))
+        real = substantive_files(d, ch)
+        if not real:
+            print(f"    仅时间戳变化（{', '.join(ch)}）——不算实质变更，无需落地")
+            continue
+        print(f"    产物变化：{', '.join(real)}")
+        todo.append((key, repo, real))
 
     if not todo:
         print("\n✓ 无产物待落地——生成器 PR 可直接合入")
