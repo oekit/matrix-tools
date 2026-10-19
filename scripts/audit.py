@@ -236,8 +236,10 @@ try:
     for repo, tags in rel_missing.items():
         check(False, f"{repo}: {len(tags)} 个 tag 缺 GitHub Release（跑 gen_releases.py --apply）：{tags[:3]}…")
     if rel_skipped:
+        fused = sum(1 for s in rel_skipped if "限速熔断" in s)
+        extra = f"，其中 {fused} 仓因限速熔断**未发起请求**" if fused else ""
         print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(MODULES)} 仓未取到 Release 列表"
-              f"——这部分本门禁无结论（CI 需注入 GH_TOKEN，见 audit.yml）")
+              f"——这部分本门禁无结论（CI 需注入 GH_TOKEN，见 audit.yml）{extra}")
         for s in rel_skipped[:5]:
             print(f"      · {s}")
         if len(rel_skipped) > 5:

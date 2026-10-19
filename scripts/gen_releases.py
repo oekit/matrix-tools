@@ -38,7 +38,16 @@ VER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 
 class ReleaseUnreachable(RuntimeError):
-    """某仓的 Release 列表读不到（权限/限速/网络）。门禁按仓跳过，不红。"""
+    """某仓的 Release 列表读不到（权限/限速/网络）。门禁按仓跳过，不红。
+
+    rate_limited 标记供调用方做**熔断**：限速是全矩阵级的（配额被打满），
+    继续逐仓重试只会把剩下的配额也耗光，且每一仓都会以同样的话失败——
+    既慢又说不清真相。熔断后剩下���仓直接标注「未核对（限速熔断）」。
+    """
+
+    def __init__(self, msg: str, rate_limited: bool = False):
+        super().__init__(msg)
+        self.rate_limited = rate_limited
 
 
 def gh(*args: str, check: bool = True) -> tuple[int, str, str]:
@@ -59,6 +68,11 @@ def semver_key(tag: str):
 RATE_LIMIT_RE = re.compile(r"rate limit|abuse detection|secondary rate|403 Forbidden", re.I)
 
 
+def _has_token() -> bool:
+    """本次进程有没有 GitHub 认证（决定请求是走 5000/h 还是 60/h 的匿名配额）。"""
+    return bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+
+
 def existing_releases(repo: str) -> set[str]:
     """远端已存在的 Release tag 名。
 
@@ -66,28 +80,35 @@ def existing_releases(repo: str) -> set[str]:
     标成「对账跳过」，报告照样收进 issue）。成因是认证：CI 里不注入 GH_TOKEN 时
     `gh` 只能匿名跑，匿名 REST 是 60 次/小时，而 Actions runner 共享出口 IP，
     全矩阵逐仓一查就把它打满，于是所有仓一起「读不到」——门禁看起来绿，
-    实际一仓没查。两点因此是硬要求：
+    实际一仓没查。三点因此是硬要求：
 
     - 报错必须带 **stderr**：gh 把失败原因写 stderr，只取 stdout 会得到
       `无法读取 Release 列表（）` 这种空括号，限速与权限完全分不开；
-    - 限速单独归类，让报告能说清「是没配 token 还是 token 权限不够」。
-
-    audit.yml 必须注入 GH_TOKEN（org PAT：GITHUB_TOKEN 只对本仓有效）。
+    - 限速单独归类，让报告能说清「是没配 token 还是 token 权限不够」；
+    - **无 token 时不要先试 `gh release list`**：匿名读公开仓虽可行，但一旦
+      失败（限速）回退 REST 还要再发一次，等于每仓白烧两次配额（24 仓 = 48 次，
+      逼近 60 的匿名上限）。无 token 直接走 REST，一仓一次。
     """
-    code, out, _err = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
-                         "--json", "tagName", "--jq", ".[].tagName", check=False)
-    if code == 0:
-        return set(out.split())
-    # 回退：匿名 REST（公开仓可行；限速失败则调用方按不可核对跳过）。
+    attempts: list[str] = []
+    if _has_token():
+        # 有认证：release list 一次到位（5000/h），失败再回退 REST。
+        code, out, err = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
+                            "--json", "tagName", "--jq", ".[].tagName", check=False)
+        if code == 0:
+            return set(out.split())
+        attempts.append(err or out)
+    # REST 回退（公开仓可行；限速失败则调用方按不可核对跳过）。
     # --paginate 是必需的：per_page 上限 100，单页会漏判「已存在的 Release」
     # 被误报成缺失（当前各仓最多 26 条，离上限还远，但那是会涨的量）。
     code, out, err = gh("api", "--paginate", f"repos/{ORG}/{repo}/releases?per_page=100",
                         "--jq", ".[].tag_name", check=False)
     if code == 0:
         return set(out.split())
-    reason = (err or out).strip()[:160] or "（gh 未输出 stderr）"
+    attempts.append(err or out)
+    reason = " | ".join(a.strip()[:120] for a in attempts if a.strip())[:240] or "（gh 未输出 stderr）"
     kind = "限速" if RATE_LIMIT_RE.search(reason) else "权限/网络"
-    raise ReleaseUnreachable(f"{repo}: 无法读取 Release 列表（{kind}：{reason}）")
+    raise ReleaseUnreachable(f"{repo}: 无法读取 Release 列表（{kind}：{reason}）",
+                             rate_limited=(kind == "限速"))
 
 
 def changelog_section(repo_dir_path, version: str, nested: str | None) -> str | None:
@@ -183,13 +204,19 @@ def missing_releases(repos: list[str]) -> tuple[dict[str, list[str]], list[str]]
     """
     out: dict[str, list[str]] = {}
     skipped: list[str] = []
+    tripped = False
     for repo in repos:
+        if tripped:
+            skipped.append(f"{repo}: 未核对（限速熔断：配额已耗尽，停止后续请求以免空转）")
+            continue
         try:
             missing, _, _ = plan_repo(repo)
             if missing:
                 out[repo] = missing
         except (RuntimeError, PermissionError) as e:
             skipped.append(str(e))  # 异常消息已自带仓名，不重复拼前缀
+            if getattr(e, "rate_limited", False):
+                tripped = True
     return out, skipped
 
 
@@ -205,11 +232,17 @@ def main() -> int:
     print(f"GitHub Release 对账（{mode}，{len(repos)} 仓）\n")
     total_missing = 0
     skipped: list[str] = []
+    tripped = False
     for repo in repos:
+        if tripped:
+            skipped.append(f"{repo}: 未核对（限速熔断：配额已耗尽，停止后续请求以免空转）")
+            continue
         try:
             missing, latest_root, _ = plan_repo(repo, only_tag)
         except (RuntimeError, PermissionError) as e:
             skipped.append(str(e))  # 异常消息已自带仓名，不重复拼前缀
+            if getattr(e, "rate_limited", False):
+                tripped = True
             continue
         if not missing:
             continue
