@@ -71,13 +71,19 @@ def module_line(repo: str, base: str | None = None) -> str:
     return go_mod(repo, base).splitlines()[0].strip()
 
 
+# go.mod 的 oekit 依赖行两种形态：require( 块内 tab 前缀 + 单行 require。
+# 此前只匹配 tab 形态——logx/bootstrap 的单行 require core 被解析为无依赖
+# （矩阵表依赖列错、地板对齐漏仓），logx#22 揭示。
+OEKIT_REQ_RE = re.compile(
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)$", re.M)
+
+
 def sibling_deps(repo: str, base: str | None = None) -> list[str]:
-    """go.mod 里 require 的其他矩阵模块（排序去重）。"""
+    """go.mod 里 require 的其他矩阵模块（排序去重，块内与单行 require 均识别）。"""
     out = set()
-    for ln in go_mod(repo, base).splitlines():
-        m = re.match(r"^\tgithub\.com/oekit/([a-z-]+) v", ln)
-        if m and m.group(1) != repo:
-            out.add(m.group(1))
+    for m in OEKIT_REQ_RE.finditer(go_mod(repo, base)):
+        if m.group(2) != repo:
+            out.add(m.group(2))
     return sorted(out)
 
 

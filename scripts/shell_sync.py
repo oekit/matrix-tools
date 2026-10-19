@@ -101,7 +101,7 @@ def package_symbols(pkg_dir: str) -> set[str]:
 
 def pinned_version(go_mod_text: str, src_repo: str) -> str | None:
     """从 data/go.mod 文本里取 github.com/oekit/<src_repo> 钉住的版本（无则 None）。"""
-    m = re.search(rf"^\s*github\.com/oekit/{re.escape(src_repo)}\s+(v\S+)", go_mod_text, re.M)
+    m = re.search(rf"^(?:require )?\s*github\.com/oekit/{re.escape(src_repo)}\s+(v\S+)", go_mod_text, re.M)
     return m.group(1) if m else None
 
 

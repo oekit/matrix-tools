@@ -175,22 +175,26 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) ->
             print(f"[changelog] dry-run：{path.name} 缺 {heading}（--apply 时自动生成并落 PR）")
         return
     main_tag = next((t for n, _d, t in specs if n == "main"), "")
-    changed: set[Path] = set()
-    for path, heading in todo:
-        nested_self = path != root / "CHANGELOG.md"
-        bullet = bullets[0] if (not nested_self and bullets) else \
-            f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
-        if insert_top(path, heading, bullet):
-            changed.add(path)
-    for path in sorted(changed):
-        validate_changelog(path)
-    files = [str(p.relative_to(root)) for p in sorted(changed)]
+
+    # 写入必须发生在 land_pr 的分支上（edit 回调）——先写后落 PR 会被干净树守卫拒绝
+    def edit():
+        changed: set[Path] = set()
+        for path, heading in todo:
+            nested_self = path != root / "CHANGELOG.md"
+            bullet = bullets[0] if (not nested_self and bullets) else \
+                f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+            if insert_top(path, heading, bullet):
+                changed.add(path)
+        for path in sorted(changed):
+            validate_changelog(path)
+        return [str(p.relative_to(root)) for p in sorted(changed)]
+
     from prkit import land_pr, merge_pr, open_pr
     url = land_pr(root, repo, f"chore/rel-{main_tag}",
                   f"chore: CHANGELOG 补 {main_tag}（release_train --changelog）",
                   f"chore: CHANGELOG 补 {main_tag}",
                   "release_train 自动生成（版本节置顶，过 changelog_check 预校验）。",
-                  edit=lambda: files, auto_merge=True)
+                  edit=edit, auto_merge=True)
     print(f"[changelog] PR: {url or '无变更'}")
     if not url:
         return

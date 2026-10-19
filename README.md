@@ -66,7 +66,7 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 并行 sweep 连推在途改动）的根因是「新会话不知道现场」。纪律收口成四条命令：
 
 1. **开工**：`handoff.py` 看现场 → 动某仓前 `preflight.py <repo>`（BLOCK 必须先处理）
-2. **占位**：`inflight.py claim <repo> "在做的事"`（preflight 与 release_train --apply 都会查登记）
+2. **占位**：`inflight.py claim <repo> "在做的事"`（preflight 会查登记；release_train --apply 自带登记管理，发版前**不要**手工 claim 同一仓，否则被自己的登记挡住）
 3. **跨仓文档变更**：不手工逐仓 checkout——`doc_wave.py --tables --pr` / `release_post.py` 批量走 PR
 4. **收尾**：`inflight.py release <repo>`；发版 = `release_train.py --apply` + `release_post.py`
 

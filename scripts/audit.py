@@ -201,7 +201,7 @@ def check_nested_module_floors():
         for gomod in sorted(root.glob("*/go.mod")):
             sub = gomod.parent.name
             text = gomod.read_text()
-            for req in re.finditer(r"^\t(github\.com/oekit/(\S+)) (v\S+)$", text, re.M):
+            for req in re.finditer(r"^(?:\t|require )(github\.com/oekit/(\S+)) (v\S+)$", text, re.M):
                 dep_repo, ver = req.group(2), req.group(3)
                 if dep_repo != repo:  # 只校验对父模块的 require
                     continue
