@@ -55,6 +55,7 @@ def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
             "--title", title, "--body", body], d, check=False)
     if r.returncode != 0:
         raise SystemExit(f"{repo}: 开 PR 失败：{(r.stderr or r.stdout).strip()[:200]}")
+    sh(["git", "checkout", "main"], d)  # PR 已接管分支内容，本地回 main（分支留在远端供 PR 用）
     return r.stdout.strip()
 
 

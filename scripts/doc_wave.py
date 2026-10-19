@@ -74,7 +74,7 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
         "docs: 矩阵总览表 DESC 口径同步（matrix-tools doc_wave）" if mode == "tables"
         else "docs: 安装行/当前版本行对齐最新 tag（matrix-tools doc_wave）")
     title = msg
-    landed, skipped = [], []
+    landed, skipped, failed = [], [], []
     for repo in repos:
         d = repo_dir(repo, BASE)
         if is_dirty(d):
@@ -91,7 +91,12 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
             from refresh_versions import sync_repo
             return sync_repo(repo, BASE, write=True)
 
-        url = land_pr(d, repo, branch, msg, title, f"{msg}\n\n由 matrix-tools doc_wave.py 批量生成。", edit)
+        try:
+            url = land_pr(d, repo, branch, msg, title, f"{msg}\n\n由 matrix-tools doc_wave.py 批量生成。", edit)
+        except Exception as e:
+            failed.append(f"{repo}（{str(e)[:80]}）")
+            print(f"✗ {repo}: {str(e)[:100]}")
+            continue
         if url:
             landed.append(f"{repo} {url}")
             print(f"✓ {repo}: PR 已开")
@@ -99,6 +104,8 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
             print(f"= {repo}: 无变更")
     if skipped:
         print(f"\n跳过 {len(skipped)} 仓：{'; '.join(skipped)}（先清现场再单独补）")
+    if failed:
+        print(f"失败 {len(failed)} 仓（网络/远端问题可单独重跑 --repos）：{'; '.join(failed)}")
     print(f"\n{len(landed)} 个 PR 已开；CI 绿后跑：doc_wave.py --{mode} --merge-all"
           + (f" --branch {branch}" if branch != ("docs/matrix-sync" if mode == "tables" else "docs/version-bump") else ""))
 
