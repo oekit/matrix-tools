@@ -82,17 +82,30 @@ def pkg_list(repo):
     return "、".join(f"`{p}/`" for p in sorted(set(pkgs)))
 
 if __name__ != "__main__":
-    raise SystemExit("gen_agents 会整文件覆写各仓 AGENTS.md——请显式运行，不要 import")
+    raise SystemExit("gen_agents 会整文件覆写 AGENTS.md——请显式运行，不要 import")
 
-_dirs = []
-for _r in MODULES:
-    _p = repo_path(_r)
-    if _p.exists():
-        _dirs.append(_p)
+# 拆雷（2026-10-19）：本工具是整文件覆写型，而各仓 AGENTS.md 已大量人工演进
+# （data 的 cached/twolevel 硬规则段、门面壳同步规则等，模板不含）。日常修订
+# 一律直接改各仓文件；本工具仅保留一个用途：新仓冷启动，且必须显式点名：
+#   python3 scripts/gen_agents.py --new-repo <name>
+_targets = None
+_argv = sys.argv[1:]
+if "--new-repo" in _argv:
+    _name = _argv[_argv.index("--new-repo") + 1]
+    if _name not in MODULES:
+        raise SystemExit(f"未知模块仓 {_name}（先加 matrix.py MODULES/DESC 再冷启动）")
+    _targets = [_name]
+else:
+    raise SystemExit(
+        "gen_agents 会整文件覆写 AGENTS.md，已禁用全量生成。\n"
+        "  新仓冷启动：python3 scripts/gen_agents.py --new-repo <name>\n"
+        "  日常修订：直接改各仓 AGENTS.md（人工增量段本工具模板不含，覆写即丢失）")
+
+_dirs = [repo_path(_r) for _r in _targets if repo_path(_r).exists()]
 ensure_clean_all(_dirs, "gen_agents")  # 覆写前必须无未提交改动——人工增量段丢了就是真丢
 
 count = 0
-for repo in MODULES:
+for repo in _targets:
     d = repo_path(repo)
     tags = subprocess.run(["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
                           capture_output=True, text=True).stdout.split()
@@ -108,5 +121,5 @@ for repo in MODULES:
 """
     (d / "AGENTS.md").write_text(content)
     count += 1
-    print(f"✓ oekit/{repo}/AGENTS.md", flush=True)
+    print(f"✓ oekit/{repo}/AGENTS.md（冷启动模板，人工增量段请自行补齐）", flush=True)
 print(f"=== {count} 份 AGENTS.md ===")

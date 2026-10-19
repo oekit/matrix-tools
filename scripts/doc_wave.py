@@ -92,7 +92,7 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
             return sync_repo(repo, BASE, write=True)
 
         try:
-            url = land_pr(d, repo, branch, msg, title, f"{msg}\n\n由 matrix-tools doc_wave.py 批量生成。", edit)
+            url = land_pr(d, repo, branch, msg, title, f"{msg}\n\n由 matrix-tools doc_wave.py 批量生成。", edit, auto_merge=True)
         except Exception as e:
             failed.append(f"{repo}（{str(e)[:80]}）")
             print(f"✗ {repo}: {str(e)[:100]}")
