@@ -136,11 +136,22 @@ def insert_top(path: Path, heading: str, bullet: str) -> bool:
 
 
 def validate_changelog(path: Path) -> None:
-    """本地跑 org 的 changelog_check.py（缺失则跳过——CI 兜底）。"""
+    """本地跑 org 的 changelog_check.py（缺失则跳过——CI 兜底）。
+
+    必须在 CHANGELOG **所属仓的目录**里跑：changelog_check 用
+    `git describe --exact-match --tags HEAD` 判断「HEAD 处于 tag」——在别的仓
+    里跑会拿到**那个仓**的 tag。实测踩过：从 matrix-tools 目录校验 data 的
+    CHANGELOG 时，matrix-tools 的 HEAD 恰好有 tag v0.1.1，于是误报
+    「data 的 HEAD 处于 tag v0.1.1」，发版被凭空拦下。
+    """
     chk = Path(__file__).resolve().parent.parent.parent / "profile" / "scripts" / "changelog_check.py"
     if not chk.exists():
         return
-    r = subprocess.run([sys.executable, str(chk), str(path)], capture_output=True, text=True)
+    repo_root = path.parent
+    while repo_root != repo_root.parent and not (repo_root / ".git").exists():
+        repo_root = repo_root.parent
+    r = subprocess.run([sys.executable, str(chk), str(path)],
+                       capture_output=True, text=True, cwd=str(repo_root))
     if r.returncode != 0:
         raise SystemExit(f"CHANGELOG 门禁预校验失败（{path.name}）：\n{(r.stdout + r.stderr)[-400:]}")
 
