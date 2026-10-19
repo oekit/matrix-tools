@@ -65,18 +65,21 @@ def open_pr(repo: str, head: str) -> tuple[int, str] | None:
 
 
 def merge_pr(repo: str, number: int, method: str = "merge") -> str:
-    """合并一个 PR：落后先 update-branch，再 --auto（required checks 由 GitHub 等绿）。
-    auto 不可用（仓未开 Allow auto-merge）时回退立即合。返回终态描述。"""
+    """合并一个 PR：落后/分支过期（BEHIND/DIRTY）先 update-branch（真冲突会在此失败并上报），
+    再 --auto（required checks 由 GitHub 等绿；allow_auto_merge 已全 org 启用）。
+    auto 不可用时回退立即合。返回终态描述。"""
     full = f"{ORG}/{repo}"
     st = sh(["gh", "pr", "view", str(number), "--repo", full,
              "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"],
             None, check=False).stdout.strip()
-    if st == "BEHIND":
-        sh(["gh", "pr", "update-branch", str(number), "--repo", full], None)
+    if st in ("BEHIND", "DIRTY"):
+        r = sh(["gh", "pr", "update-branch", str(number), "--repo", full], None, check=False)
+        if r.returncode != 0:
+            return f"合并失败：分支过期且 update-branch 失败（大概率真冲突）：{(r.stderr or r.stdout).strip()[:140]}"
     r = sh(["gh", "pr", "merge", str(number), "--repo", full,
             f"--{method}", "--auto"], None, check=False)
     if r.returncode == 0:
-        return "auto-merge 已排程（等 checks 绿）" if "auto" in (r.stdout or "").lower() or True else "merged"
+        return "auto-merge 已排程（等 checks 绿）"
     r2 = sh(["gh", "pr", "merge", str(number), "--repo", full, f"--{method}"],
             None, check=False)
     if r2.returncode == 0:
