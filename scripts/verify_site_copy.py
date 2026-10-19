@@ -58,6 +58,9 @@ _COUNT_RE = re.compile(
     r"(\d+)\s*个\s*(" + "|".join(re.escape(u) for u in
                                  sorted(COUNT_UNITS, key=len, reverse=True)) + r")")
 
+# 泛用单位「模块」的上下文锚：这一行在谈「矩阵规模」而不是普通行文。
+_MATRIX_CTX = re.compile(r"矩阵|独立发版|全矩阵|全部模块")
+
 # llms.txt 的模块条目形态：`- [name](https://github.com/oekit/name): 描述`
 _LLMS_ENTRY_RE = re.compile(r"^-\s*\[([A-Za-z0-9_.\-]+)\]\(https://github\.com/oekit/[^)]+\)\s*[:：]",
                              re.M)
@@ -100,6 +103,10 @@ def check_counts(site: Path, counts: dict) -> list[str]:
                 num = int(m.group(1))
                 unit = m.group(2)
                 key = COUNT_UNITS[unit]
+                if key == "matrix_modules" and unit == "模块" and not _MATRIX_CTX.search(line):
+                    # 泛用单位「模块」只在明确谈矩阵时才校验：指南里写
+                    # 「这 3 个模块」是普通行文，不是矩阵规模，误报会让人绕过门禁。
+                    continue
                 want = counts.get(key)
                 if want is None:
                     # 口径没算出来（没给 --repos-dir）→ 判不了 ≠ 不对，不红。
@@ -123,7 +130,10 @@ def check_llms_coverage(site: Path) -> list[str]:
     text = llms.read_text(encoding="utf-8", errors="ignore")
     # 只取「## 模块」段里的条目：文档段里也有 github 链接，不是模块清单。
     m = re.search(r"^##\s+模块\s*$(.*?)(?=^##\s|\Z)", text, re.M | re.S)
-    section = m.group(1) if m else ""
+    if not m:
+        return ["llms.txt 里找不到「## 模块」段（模块清单段被改名或删了）——"
+                "机器按 llms.txt 装包会漏整个矩阵"]
+    section = m.group(1)
     found = set(_LLMS_ENTRY_RE.findall(section))
     want = set(MODULES)
     missing = sorted(want - found)
