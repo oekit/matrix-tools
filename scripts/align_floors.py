@@ -1,13 +1,19 @@
 #!/usr/bin/env python3
-"""矩阵内依赖地板对齐（不动点）：全仓 go.mod 的 github.com/oekit/* 地板对齐各依赖最新 tag。
+"""矩阵内依赖地板对齐（不动点）：go.mod 的 github.com/oekit/* 地板对齐各依赖最新 tag。
 
-背景：「全矩阵内部依赖地板对齐最新（不动点迭代多轮）」此前是手工活
-（2026-10-17 晚整轮、其后多轮跟随均靠会话手做），收成一条命令。
+**定位（2026-10-19 起）：维护轮工具，非常规跟版动作。**
+发版模型是按需的（pull-based）：底层依赖（pkg/concurrency 等）发新版后，
+下游地板不动、不强制发版；下游仓改代码消费到新 API 时 go get 抬地板、
+随本仓版本自然发出——谁用新版本谁升级。跨仓地板漂移不是漂移，audit 不检查
+（只查嵌套模块对父模块的地板，那是发版正确性要求）。本工具只在显式维护轮
+（低频，如月度/大版本对齐后）全量跑，或 --repo 单仓按需对齐。
 
 用法：
-  python3 scripts/align_floors.py --plan          # 默认：列出将发生的地板抬升（只读）
-  python3 scripts/align_floors.py --apply         # 写入 go.mod + GOWORK=off tidy（仅 main+干净仓）
-  python3 scripts/align_floors.py --apply --pr    # 变更仓逐仓开 PR（分支 docs/align-floors）
+  python3 scripts/align_floors.py --plan              # 默认：列出将发生的地板抬升（只读）
+  python3 scripts/align_floors.py --repo data --plan  # 单仓按需对齐预览
+  python3 scripts/align_floors.py --apply             # 写入 go.mod + GOWORK=off tidy（仅 main+干净仓）
+  python3 scripts/align_floors.py --apply --pr        # 变更仓逐仓开 PR（分支 docs/align-floors）
+  --repos a,b,c                                       # 子集（缺省全矩阵）
 
 注意：地板抬升只是本地变更——对齐完成的定义是这些仓以 patch 版发版
 （release_train）且下游可见。--apply 输出末尾会列出待发版仓。
@@ -71,12 +77,17 @@ def main() -> None:
     args = sys.argv[1:]
     do_apply = "--apply" in args
     do_pr = "--pr" in args
+    repos = list(MODULES)
+    if "--repos" in args:
+        repos = args[args.index("--repos") + 1].split(",")
+    if "--repo" in args:
+        repos = [args[args.index("--repo") + 1]]
     base = str(Path(__file__).resolve().parent.parent.parent)
 
-    print("align_floors：矩阵内依赖地板不动点对齐（plan→apply→patch 发版）")
+    print("align_floors：依赖地板对齐（维护轮工具 / --repo 按需，非常规跟版）")
     plans_all: dict[str, dict[Path, list[tuple[str, str, str]]]] = {}
     skipped: list[str] = []
-    for repo in MODULES:
+    for repo in repos:
         plans = plan_repo(repo, base)
         if plans:
             plans_all[repo] = plans

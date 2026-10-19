@@ -1,14 +1,22 @@
 #!/usr/bin/env python3
-"""发版后一条命令：版本行对齐 → versions.json 重生成 → audit 门禁 → 手工待办清单。
+"""发版后一条命令：版本行对齐 → versions.json → oekit BOM → audit 门禁 → 手工待办清单。
 
 背景：release_train 管到 tag+Release 为止，之后的 refresh_versions / gen_versions /
 audit 靠记得跑——versions.json 陈旧 6/24、DESC 漏网、安装行 18 仓漂移都是"忘了跑某步"。
 发版链条自此收成两条命令：
   python3 scripts/release_train.py <repo> main=vX.Y.Z --apply
-  python3 scripts/release_post.py
+  python3 scripts/release_post.py <repo>
 
-用法：python3 scripts/release_post.py [repo ...] [--no-pr] [--no-audit] [--no-versions-json] [--merge-all]
-  缺省处理全部模块仓；--no-pr 只改本地文件不开 PR；--merge-all 把本命令开的 PR 一并合并。
+发版模型是按需的（2026-10-19 起）：**只发你改的仓**——下游消费新依赖 API 时
+go get 抬地板、随本仓版本发出；本命令只处理目标仓的收尾 + 组合锚点更新
+（versions.json / BOM 推荐组合）。全量传参（缺省全部模块仓）留给维护轮。
+
+用法：python3 scripts/release_post.py [repo ...] [--no-pr] [--no-audit] [--no-versions-json]
+                [--no-bom] [--bom-release] [--merge-all]
+  --no-pr           只改本地文件不开 PR
+  --no-bom          跳过 oekit BOM 推荐组合更新
+  --bom-release     BOM PR 合入后自动打 tag + Release（缺省只开 PR 并打印待办）
+  --merge-all       把本命令开的 PR 一并合并
 """
 from __future__ import annotations
 
@@ -18,7 +26,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import MODULES, SITE_REPO, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
+from matrix import MODULES, SITE_REPO, bump_patch, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
 from prkit import land_pr, merge_pr, open_pr  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -38,6 +46,8 @@ def main() -> None:
     no_pr = "--no-pr" in args
     no_audit = "--no-audit" in args
     no_vjson = "--no-versions-json" in args
+    no_bom = "--no-bom" in args
+    bom_release = "--bom-release" in args
     merge_all = "--merge-all" in args
     targets = repos or list(MODULES)
 
@@ -105,6 +115,46 @@ def main() -> None:
                           edit=edit_site)
             print(f"  ✓ 站点 PR: {url or '无变更'}")
 
+    # 3.5) oekit BOM（按需发版下的组合锚点：github.com/oekit/oekit@latest = 推荐组合）
+    if not no_bom and not no_pr:
+        print("\n== 3.5) oekit BOM 推荐组合 ==")
+        oekit = repo_dir("oekit")
+        if is_dirty(oekit) or git_branch(oekit) != "main":
+            print("  ⚠ oekit 仓非 main/脏，跳过（手工 gen_matrix_go + PR）")
+        else:
+            sh(["git", "pull", "--ff-only", "origin", "main"], oekit)
+            bom_next = bump_patch(latest_tag("oekit") or "v0.1.0")
+
+            def edit_bom():
+                r = subprocess.run([sys.executable, str(SCRIPTS / "gen_matrix_go.py"),
+                                    "--version", bom_next], capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise SystemExit(f"gen_matrix_go 失败：{(r.stderr or r.stdout)[-200:]}")
+                print("  " + (r.stdout.strip() or "").replace("\n", "\n  "))
+                return ["go.mod", "matrix.go"]
+
+            url = land_pr(oekit, "oekit", "chore/bom-follow",
+                          f"chore: BOM {bom_next}（发版后推荐组合更新）",
+                          f"chore: BOM {bom_next}",
+                          "release_post.py 发版后自动跟进（推荐组合锚点，非强制跟版）。",
+                          edit=edit_bom)
+            print(f"  ✓ BOM PR: {url or '无变更'}")
+            if bom_release and url:
+                pr = open_pr("oekit", "chore/bom-follow")
+                if pr:
+                    print(f"  merge: {merge_pr('oekit', pr[0])}")
+                sh(["git", "pull", "--ff-only", "origin", "main"], oekit)
+                sh(["git", "tag", "-a", bom_next, "-m", f"oekit {bom_next}"], oekit)
+                sh(["git", "push", "origin", bom_next], oekit)
+                sh(["gh", "release", "create", bom_next, "--repo", "oekit/oekit",
+                    "--title", bom_next,
+                    "--notes", "BOM 推荐组合更新（release_post 自动跟进）。"], oekit)
+                print(f"  ✓ BOM {bom_next} 已发布")
+            elif url:
+                print(f"  待办：BOM PR 合入后打 {bom_next}（--bom-release 可自动完成）")
+    elif not no_bom and no_pr:
+        print("\n== 3.5) oekit BOM：--no-pr 模式跳过（手工 gen_matrix_go + PR）")
+
     # 4) audit 门禁
     if not no_audit:
         print("\n== 4) audit ==")
@@ -114,7 +164,7 @@ def main() -> None:
         for line in tail[-15:]:
             print("  " + line)
         if r.returncode != 0:
-            print("  ⚠ audit 未全绿（上表最后几条）——多为版本行 PR 未合（对账基于远端）"
+            print("  ⚠ audit 未全绿（上表最后几条）——常见为版本行/BOM PR 在途未合、"
                   "或站点文档待跟进，逐条处置后复跑")
 
     # 5) 手工待办

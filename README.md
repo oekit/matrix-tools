@@ -44,8 +44,8 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 | `scripts/handoff.py` | **现场交接清单**：新会话开工先跑——在途登记 / 非 main·脏工作树 / org open PR 一屏可见 |
 | `scripts/preflight.py` | **开工前检查**：`preflight.py <repo>`——登记占用/脏树/分叉即 BLOCK（exit 1），落后远端/在途 PR 给 WARN |
 | `scripts/doc_wave.py` | **多仓文档波次**：DESC 矩阵表、版本行一改全矩阵脏——`--plan` → `--pr` 批量开 PR → `--merge-all` |
-| `scripts/release_post.py` | **发版后一条命令**：版本行 PR → versions.json 重生成 → audit → 手工待办清单（`release_train` 之后跑） |
-| `scripts/align_floors.py` | **依赖地板不动点对齐**：全仓 go.mod 的 oekit 依赖地板对齐最新 tag（`--plan`/`--apply`/`--apply --pr`） |
+| `scripts/release_post.py` | **发版后一条命令**：目标仓版本行 PR → versions.json → oekit BOM 推荐组合 → audit → 手工待办（`release_train` 之后跑；`--bom-release` 自动打 BOM tag） |
+| `scripts/align_floors.py` | **依赖地板对齐（维护轮工具，非常规跟版）**：`--repo data` 单仓按需 / 缺省全矩阵；`--plan`/`--apply`/`--apply --pr` |
 | `scripts/close_issue.py` | **issue 回执关单**：`close_issue.py <repo>#<N> --tag vX.Y.Z` 发回执（CHANGELOG 小节 + Release 链接）并关闭；tag 不在远端拒绝 |
 | `scripts/prkit.py` | PR 落地共用件（doc_wave/release_post/align_floors 内部复用）：sync main → 分支 → 提交 → 开 PR → update-branch/auto 合并 |
 | `scripts/gen_tables.py` | 重新生成各仓 README「矩阵总览」表 |
@@ -67,6 +67,12 @@ Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-r
 2. **占位**：`inflight.py claim <repo> "在做的事"`（preflight 与 release_train --apply 都会查登记）
 3. **跨仓文档变更**：不手工逐仓 checkout——`doc_wave.py --tables --pr` / `release_post.py` 批量走 PR
 4. **收尾**：`inflight.py release <repo>`；发版 = `release_train.py --apply` + `release_post.py`
+
+**发版模型：按需（pull-based，2026-10-19 起）**——默认只发改动的仓。底层依赖发新版后下游
+地板不动、不强制跟版；下游改代码消费新 API 时 go get 抬地板、随本仓版本自然发出。跨仓
+地板漂移不是漂移（audit 不检查）；全量对齐（align_floors.py）只在显式维护轮跑。BOM
+（github.com/oekit/oekit）是验证过的推荐组合锚点，release_post 自动更新，`go get oekit@latest`
+一次拉齐。
 
 写入型生成器（gen_tables/refresh_versions/gen_changelog/gen_versions/gen_diagram/
 gen_matrix_go/regen_readme）一律带干净树守卫：工作树脏直接拒绝执行——生成器产物
