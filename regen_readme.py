@@ -2,7 +2,7 @@
 """按 DESC 重新生成各仓 README 的「矩阵总览」表。只动该表区块，其余内容不碰。"""
 import re, sys
 sys.path.insert(0, '/Users/zhangyi/my_project/ekit-split/matrix-tools')
-from matrix import MODULES, ORG, DESC, repo_dir, sibling_deps, DEFAULT_BASE
+from matrix import MODULES, ORG, DESC, repo_dir, ensure_clean_all, sibling_deps, DEFAULT_BASE
 from pathlib import Path
 
 HEADING = f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）"
@@ -46,6 +46,13 @@ def regen(readme_path: Path, base=None):
 
 if __name__ == '__main__':
     base = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_BASE
+    _dirs = []
+    for _n in MODULES:
+        try:
+            _dirs.append(repo_dir(_n, base))
+        except FileNotFoundError:
+            pass
+    ensure_clean_all(_dirs, 'regen_readme')  # 产物必须落在已提交基线上
     for name in MODULES:
         try:
             d = repo_dir(name, base)

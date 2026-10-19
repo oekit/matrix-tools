@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, SITE_REPO, repo_dir  # noqa: E402
+from matrix import MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
 
 BASE = Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))).resolve()
 HOMEPAGE_REPO = "oekit"
@@ -330,6 +330,13 @@ def main() -> None:
         print(f"✓ 架构图与生成器一致（{len(tgts)} 处）")
         return
     import subprocess
+    roots = []
+    for _label, p, _t in tgts:
+        d = p.parent
+        while not (d / ".git").exists():
+            d = d.parent
+        roots.append(d)
+    ensure_clean_all(roots, "gen_diagram")  # 产物必须落在已提交基线上
     for label, p, t in tgts:
         old = p.read_bytes() if p.exists() else None
         p.parent.mkdir(parents=True, exist_ok=True)

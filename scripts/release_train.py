@@ -23,7 +23,24 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, repo_dir, sh  # noqa: E402
+sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
+from matrix import MODULES, git_branch, ensure_clean_all, repo_dir, sh  # noqa: E402
+from inflight import read as inflight_read  # noqa: E402
+
+
+def preflight_gate(repo_root, apply: bool) -> None:
+    """发版现场门禁：工作树必须干净（tag 内容 = 已提交基线，2026-10-19 v0.1.2 事故）；
+    --apply 还要求在 main 上（tag 打在合入 main 之后）且本仓未被并行会话登记占用。"""
+    ensure_clean_all([repo_root], "release_train")
+    if not apply:
+        return
+    if git_branch(repo_root) != "main":
+        raise SystemExit(f"{repo_root.name}: --apply 须在 main 上（当前 {git_branch(repo_root)}）；"
+                         f"tag 打在合入 main 之后")
+    cur = inflight_read(repo_root.name)
+    if cur:
+        raise SystemExit(f"{repo_root.name}: 在途登记被占用（pid {cur.get('pid')}「{cur.get('note', '')}」）"
+                         f"——确认对方收尾后 inflight.py release {repo_root.name} 再发版")
 
 
 def tag_exists_remote(cwd: str, tag: str) -> bool:
@@ -74,6 +91,7 @@ def main():
         sys.exit(2)
 
     root = repo_dir(repo)
+    preflight_gate(root, apply)
     specs = []  # (名称, 模块目录, tag 名)，主模块在前
     for spec in args[1:]:
         name, ver = spec.split("=", 1)
@@ -108,17 +126,23 @@ def main():
         print("\n✓ 全部检查通过（dry-run，加 --apply 打 tag 并推送）")
         return
 
-    # 按序打 annotated tag；先全部创建，再统一推送（推送失败可定位已建列表）
+    # 按序打 annotated tag；先全部创建，再统一推送（推送失败可定位已建列表）。
+    # 发版期间登记在途（防并行会话同仓抢发），收尾 finally 释放。
+    import inflight
+    inflight.claim(repo, "release_train " + " ".join(t for _, _, t in specs))
     created = []
-    for name, d, tag in specs:
-        msg = f"{repo} {tag}"
-        subprocess.run(["git", "-C", str(d), "tag", "-a", tag, "-m", msg], check=True)
-        created.append((name, d, tag))
-        print(f"[tag] {tag}")
-    for name, d, tag in created:
-        subprocess.run(["git", "-C", str(d), "push", "origin", tag], check=True)
-        print(f"[push] {tag}")
-    create_releases(repo, root, created)
+    try:
+        for name, d, tag in specs:
+            msg = f"{repo} {tag}"
+            subprocess.run(["git", "-C", str(d), "tag", "-a", tag, "-m", msg], check=True)
+            created.append((name, d, tag))
+            print(f"[tag] {tag}")
+        for name, d, tag in created:
+            subprocess.run(["git", "-C", str(d), "push", "origin", tag], check=True)
+            print(f"[push] {tag}")
+        create_releases(repo, root, created)
+    finally:
+        inflight.release(repo)
     print(f"\n✓ train 完成：{len(created)} 个 tag 已推送")
 
 

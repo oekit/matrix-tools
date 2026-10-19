@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, ORG, repo_dir, sibling_deps  # noqa: E402
+from matrix import MODULES, ORG, repo_dir, ensure_clean_all, sibling_deps  # noqa: E402
 
 BASE = os.path.abspath(
     os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -177,6 +177,7 @@ def main() -> int:
     if "--stdout" in sys.argv:
         sys.stdout.write(text)
     else:
+        ensure_clean_all([SITE], "gen_versions")  # 产物必须落在已提交基线上
         out = Path(SITE) / "docs" / "public" / "versions.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")
