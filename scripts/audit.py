@@ -34,6 +34,15 @@ def expected_table(repo: str) -> str:
 
 
 # ---------- breakingIndex 完整性门禁（matrix-tools#31） ----------
+#
+# 落地顺序提示（matrix-tools#34）：本门禁比对的是「**当前生成器的输出** vs
+# **已发布产物**」。改了生成器（gen_versions.py / gen_matrix_go.py）之后，
+# 两侧只有一种组合能对上：**产物用新生成器产出并先落地，再合生成器**。
+# 先合生成器 → 门禁报「漏收」；用旧生成器落产物再合 → 门禁报「多出」。
+# 两种报错都不提顺序，排查成本高——所以把提示写进报错本身。
+GEN_ORDER_HINT = ("｜若本次改的是生成器（gen_versions.py / gen_matrix_go.py），"
+                   "落地顺序应为：先用**新**生成器产出并落地产物，再合生成器"
+                   "（见 matrix-tools#34；或跑 scripts/land_generator_change.py）")
 # 背景：versions.json 的 breakingIndex 靠人工从各模块 CHANGELOG 转抄，实测
 # 24 个模块中 5 个模块 15 条 Breaking 记录未收录——registry 与 nns 的
 # breakingIndex 甚至是**空数组**，而两仓的 v0.4.0 正是「SPI 包提升至模块根」
@@ -48,7 +57,6 @@ def expected_table(repo: str) -> str:
 # 本地 CHANGELOG 只会写已发布版本，多报最多是提示重跑生成器，漏报是断链。
 def check_breaking_index(live: dict):
     from gen_versions import breaking_index, breaking_suspects  # noqa: 延迟导入
-
     indexed = {m["module"]: m.get("breakingIndex") or [] for m in live.get("modules", [])}
     for repo in MODULES:
         try:
@@ -66,11 +74,11 @@ def check_breaking_index(live: dict):
         if missing:
             sample = sorted(missing)[:2]
             check(False, f"{repo}: breakingIndex 漏收 {len(missing)} 条 CHANGELOG 破坏性变更"
-                         f"（跑 gen_versions.py）：{sample}")
+                         f"（跑 gen_versions.py）：{sample}{GEN_ORDER_HINT}")
         if extra:
             sample = sorted(extra)[:2]
             check(False, f"{repo}: breakingIndex 多出 {len(extra)} 条 CHANGELOG 里没有的条目"
-                         f"（跑 gen_versions.py）：{sample}")
+                         f"（跑 gen_versions.py）：{sample}{GEN_ORDER_HINT}")
 
     # 疑似破坏性（机器判不了语义）：不阻塞，但必须显式提示，不能静默吞掉
     suspects = []
