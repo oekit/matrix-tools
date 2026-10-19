@@ -37,11 +37,15 @@ OEKIT_DEP_RE = re.compile(r"^\s*github\.com/oekit/\S+\s+v\S+", re.M)
 VER_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 
 
-def gh(*args: str, check: bool = True) -> tuple[int, str]:
+class ReleaseUnreachable(RuntimeError):
+    """某仓的 Release 列表读不到（权限/限速/网络）。门禁按仓跳过，不红。"""
+
+
+def gh(*args: str, check: bool = True) -> tuple[int, str, str]:
     p = subprocess.run(["gh", *args], capture_output=True, text=True)
     if check and p.returncode != 0:
         raise RuntimeError(f"gh {' '.join(args)} 失败：{(p.stderr or p.stdout).strip()[:300]}")
-    return p.returncode, p.stdout
+    return p.returncode, p.stdout, p.stderr
 
 
 def semver_key(tag: str):
@@ -52,18 +56,38 @@ def semver_key(tag: str):
     return (int(m.group(1)), int(m.group(2)), int(m.group(3)), tag)
 
 
+RATE_LIMIT_RE = re.compile(r"rate limit|abuse detection|secondary rate|403 Forbidden", re.I)
+
+
 def existing_releases(repo: str) -> set[str]:
-    """远端已存在的 Release tag 名。匿名 API 回退：CI 里 GITHUB_TOKEN 只对本仓有效。"""
-    code, out = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
-                   "--json", "tagName", "--jq", ".[].tagName", check=False)
+    """远端已存在的 Release tag 名。
+
+    这是本门禁最容易**静默失效**的一环（#26：weekly audit 一次性把 23/24 仓
+    标成「对账跳过」，报告照样收进 issue）。成因是认证：CI 里不注入 GH_TOKEN 时
+    `gh` 只能匿名跑，匿名 REST 是 60 次/小时，而 Actions runner 共享出口 IP，
+    全矩阵逐仓一查就把它打满，于是所有仓一起「读不到」——门禁看起来绿，
+    实际一仓没查。两点因此是硬要求：
+
+    - 报错必须带 **stderr**：gh 把失败原因写 stderr，只取 stdout 会得到
+      `无法读取 Release 列表（）` 这种空括号，限速与权限完全分不开；
+    - 限速单独归类，让报告能说清「是没配 token 还是 token 权限不够」。
+
+    audit.yml 必须注入 GH_TOKEN（org PAT：GITHUB_TOKEN 只对本仓有效）。
+    """
+    code, out, _err = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
+                         "--json", "tagName", "--jq", ".[].tagName", check=False)
     if code == 0:
         return set(out.split())
-    # 回退：匿名 REST（公开仓可行；限速失败则调用方按不可核对跳过）
-    code, out = gh("api", f"repos/{ORG}/{repo}/releases?per_page=100",
-                   "--jq", ".[].tag_name", check=False)
+    # 回退：匿名 REST（公开仓可行；限速失败则调用方按不可核对跳过）。
+    # --paginate 是必需的：per_page 上限 100，单页会漏判「已存在的 Release」
+    # 被误报成缺失（当前各仓最多 26 条，离上限还远，但那是会涨的量）。
+    code, out, err = gh("api", "--paginate", f"repos/{ORG}/{repo}/releases?per_page=100",
+                        "--jq", ".[].tag_name", check=False)
     if code == 0:
         return set(out.split())
-    raise PermissionError(f"{repo}: 无法读取 Release 列表（{(out or '').strip()[:120]}）")
+    reason = (err or out).strip()[:160] or "（gh 未输出 stderr）"
+    kind = "限速" if RATE_LIMIT_RE.search(reason) else "权限/网络"
+    raise ReleaseUnreachable(f"{repo}: 无法读取 Release 列表（{kind}：{reason}）")
 
 
 def changelog_section(repo_dir_path, version: str, nested: str | None) -> str | None:
@@ -152,7 +176,11 @@ def apply_repo(repo: str, missing: list[str], latest_root: str | None) -> int:
 
 
 def missing_releases(repos: list[str]) -> tuple[dict[str, list[str]], list[str]]:
-    """audit 门禁用：返回 ({repo: 缺失 tag}, 因权限/限速无法核对的仓)。"""
+    """audit 门禁用：返回 ({repo: 缺失 tag}, 因权限/限速无法核对的仓)。
+
+    第二项是「门禁没生效」的证据，调用方必须把它显式渲染出来——不能和
+    「核对通过」渲染成同一种绿色对勾（#26 的教训：23/24 仓全跳过时报告仍显示通过）。
+    """
     out: dict[str, list[str]] = {}
     skipped: list[str] = []
     for repo in repos:
@@ -161,7 +189,7 @@ def missing_releases(repos: list[str]) -> tuple[dict[str, list[str]], list[str]]
             if missing:
                 out[repo] = missing
         except (RuntimeError, PermissionError) as e:
-            skipped.append(f"{repo}: {e}")
+            skipped.append(str(e))  # 异常消息已自带仓名，不重复拼前缀
     return out, skipped
 
 
@@ -181,7 +209,7 @@ def main() -> int:
         try:
             missing, latest_root, _ = plan_repo(repo, only_tag)
         except (RuntimeError, PermissionError) as e:
-            skipped.append(f"{repo}: {e}")
+            skipped.append(str(e))  # 异常消息已自带仓名，不重复拼前缀
             continue
         if not missing:
             continue
@@ -192,14 +220,20 @@ def main() -> int:
             apply_repo(repo, missing, latest_root)
 
     if skipped:
-        print("\n无法核对（权限/限速，门禁模式下跳过不红）：")
+        print(f"\n无法核对（权限/限速，门禁模式下跳过不红）：{len(skipped)}/{len(repos)} 仓")
         for s in skipped:
             print(f"  ⚠ {s}")
     if do_check:
         if total_missing:
             print(f"\n❌ {total_missing} 个 tag 缺 Release（跑 gen_releases.py --apply）")
             return 1
-        print("✓ 全部 tag 均有 Release")
+        # 「一个都没查」和「查过且都齐全」不能输出同一句话——#26 里 23/24 仓
+        # 全部读不到 Release，报告却显示通过，等于门禁静默失效一整轮。
+        if skipped:
+            print(f"\n⚠ 已核对部分缺 0 个，但 {len(skipped)}/{len(repos)} 仓未取到 Release 列表："
+                  f"这部分本门禁**没有结论**（CI 需注入 GH_TOKEN，见 audit.yml）")
+            return 0
+        print("✓ 全部 tag 均有 Release（已逐仓核对）")
         return 0
     if not do_apply:
         print(f"\n共 {total_missing} 个缺失。加 --apply 创建。")

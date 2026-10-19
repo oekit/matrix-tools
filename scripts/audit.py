@@ -222,16 +222,26 @@ check_nested_module_floors()
 
 # ---------- GitHub Release 对账 + oekit BOM 新鲜度（.github#8） ----------
 # Release parity：每个 tag 对应一个 Release（notes=CHANGELOG 小节 + 该 tag 矩阵地板），
-# `releases/latest` 因此全矩阵可解析。CI 里 GITHUB_TOKEN 只对本仓有效时自动降级为
-# 匿名 REST（公开仓可行），限速失败则跳过不红——本地跑才是硬门禁。
+# `releases/latest` 因此全矩阵可解析。
+#
+# 匿名 REST 回退（公开仓可行）已不够用：Actions runner 共享出口 IP，匿名配额
+# 只有 60 次/小时，逐仓一查就打满，于是全矩阵一起「读不到」——门禁看起来绿，
+# 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
+# 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
+# 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
 try:
     from gen_releases import missing_releases  # noqa: E402
 
     rel_missing, rel_skipped = missing_releases(list(MODULES))
     for repo, tags in rel_missing.items():
         check(False, f"{repo}: {len(tags)} 个 tag 缺 GitHub Release（跑 gen_releases.py --apply）：{tags[:3]}…")
-    for s in rel_skipped:
-        print(f"  ⚠ release 对账跳过：{s}")
+    if rel_skipped:
+        print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(MODULES)} 仓未取到 Release 列表"
+              f"——这部分本门禁无结论（CI 需注入 GH_TOKEN，见 audit.yml）")
+        for s in rel_skipped[:5]:
+            print(f"      · {s}")
+        if len(rel_skipped) > 5:
+            print(f"      · …… 另 {len(rel_skipped) - 5} 仓同类")
 except Exception as e:  # noqa: BLE001 对账不可用不阻塞其余门禁
     print(f"  ⚠ release 对账不可用：{e}")
 
