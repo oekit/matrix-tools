@@ -65,7 +65,7 @@ def open_pr(repo: str, head: str) -> tuple[int, str] | None:
                         "--jq", ".[0] | \"\\(.number)|\\(.url)\""],
                        capture_output=True, text=True)
     out = r.stdout.strip()
-    if r.returncode != 0 or "|" not in out:
+    if r.returncode != 0 or not out or out.startswith("null"):
         return None
     n, url = out.split("|", 1)
     return int(n), url
