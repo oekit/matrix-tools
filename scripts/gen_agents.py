@@ -12,7 +12,7 @@ import subprocess
 
 import sys
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
-from matrix import MODULES, DESC  # 一句话定位唯一事实源在 matrix.py
+from matrix import MODULES, DESC, ensure_clean_all  # 一句话定位唯一事实源在 matrix.py
 BASE = pathlib.Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 def repo_path(r): return BASE / r
 
@@ -83,6 +83,13 @@ def pkg_list(repo):
 
 if __name__ != "__main__":
     raise SystemExit("gen_agents 会整文件覆写各仓 AGENTS.md——请显式运行，不要 import")
+
+_dirs = []
+for _r in MODULES:
+    _p = repo_path(_r)
+    if _p.exists():
+        _dirs.append(_p)
+ensure_clean_all(_dirs, "gen_agents")  # 覆写前必须无未提交改动——人工增量段丢了就是真丢
 
 count = 0
 for repo in MODULES:
