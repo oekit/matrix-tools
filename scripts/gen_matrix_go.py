@@ -29,7 +29,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, repo_dir  # noqa: E402
+from matrix import MODULES, repo_dir, ensure_clean_all  # noqa: E402
 from gen_versions import _remote_tags, latest_version  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -186,6 +186,8 @@ def main() -> int:
     generated_at = existing_const("GeneratedAt", now) if check else now
     files = render(modules, version, generated_at)
     files["matrix.go"] = gofmt_text(files["matrix.go"])
+    if not check:
+        ensure_clean_all([OEKIT_DIR], "gen_matrix_go")  # 产物必须落在已提交基线上
     changed = []
     for name, content in files.items():
         target = os.path.join(OEKIT_DIR, name)

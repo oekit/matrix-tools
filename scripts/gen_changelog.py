@@ -2,9 +2,10 @@
 """从 tag 自动生成各仓 CHANGELOG.md。用法：python3 scripts/gen_changelog.py [--push]"""
 import os, pathlib, sys
 sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
-from matrix import MODULES, repo_dir, sh
+from matrix import MODULES, repo_dir, ensure_clean_all, sh
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 PUSH = "--push" in sys.argv
+ensure_clean_all([repo_dir(r, BASE) for r in MODULES], "gen_changelog")  # 产物必须落在已提交基线上
 for repo in MODULES:
     d = repo_dir(repo, BASE)
     tags = sh(["git", "-C", str(d), "tag", "-l", "--sort=v:refname"], d).stdout.split()
