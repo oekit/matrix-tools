@@ -12,7 +12,7 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag  # noqa: E402
+from matrix import MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag  # noqa: E402
 
 BASE = os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
 BASE = os.path.abspath(BASE)
@@ -111,6 +111,9 @@ def check_breaking_index(live: dict):
 ORACLE_WORD_RE = re.compile(r"(?i)breaking|不兼容|破坏性")
 ORACLE_VERHEAD_RE = re.compile(r"^##\s*\[([^\]]+)\]")
 ORACLE_SEMVER_RE = re.compile(r"v\d+\.\d+\.\d+")
+# 归属校验用：**全限定**的 oekit 模块路径 `github.com/oekit/<name>`。
+# 刻意不认裸 `<name>/`——裸形式无法区分「别仓」与「本仓的子包」。
+ORACLE_OWNPATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+)")
 
 
 def _oracle_norm(s: str) -> str:
@@ -150,6 +153,7 @@ def check_breaking_oracle():
     """独立 oracle：CHANGELOG 原文里的破坏性标记，必须在 breakingIndex 里被覆盖。"""
     from gen_versions import breaking_index  # noqa: 延迟导入
 
+    all_suspect: list[str] = []
     for repo in MODULES:
         try:
             root = repo_dir(repo, BASE)
@@ -185,6 +189,38 @@ def check_breaking_oracle():
                 if not any(k in kk or kk[:60] in k for kk in keys if kk):
                     check(False, f"{repo}: CHANGELOG 有破坏性标记但 breakingIndex 未覆盖"
                                  f"（{kind}，{ver}）：{val[:60]}")
+
+        # (d) 归属校验（查**产物**而非输入，故与解析器逻辑独立）：
+        # breakingIndex 里的每一条，若它**全限定**引用了**别仓**的模块路径、
+        # 完全没有本仓的全限定路径，那它值得人工看一眼——有可能是把别仓的
+        # 破坏性变更收进了本仓（信号 F 这类启发式最容易犯这个错）。
+        #
+        # ⚠️ **只能作提示，不能作阻塞门禁**（2026-10-20 实测定论）：
+        # 「条目提到别仓路径」**不是**误归属的证据——迁移目标（logx v0.4.0
+        # `Manager` 迁至 core/lifecycle）、壳来源（data 的 timertask 壳移除
+        # 转发符号）、剥离对象（timertask 根包不再依赖 concurrency）、先例引用
+        # 都会合法地提到别仓。实测收紧到「全限定路径」后仍有 4 条**合法条目**
+        # 被误报。门禁要「少而致命」，误报多的门禁会被绕过——故降级为 ⚠ 提示。
+        own_q = f"github.com/oekit/{repo}"
+        suspect = []
+        for it in items:
+            line = it.get("line", "")
+            others = set()
+            for m in ORACLE_OWNPATH_RE.finditer(line):
+                name = m.group(1) or ""
+                # 「oekit」是组织名也是 BOM 仓名，`github.com/oekit/oekit/issues/N`
+                # 是 issue 链接——不是「别仓路径」，排除掉
+                if name and name != repo and name != ORG:
+                    others.add(name)
+            if not others:
+                continue
+            if own_q in line:
+                continue
+            suspect.append(f"{repo}→{sorted(others)[0]}")
+        all_suspect.extend(suspect)
+    if all_suspect:
+        print(f"  ⚠ 归属存疑条目（仅提示，不阻塞）：条目提到别仓路径但未提到本仓路径，"
+              f"请人工确认是否收错仓：{'; '.join(all_suspect[:8])}")
 
 
 # ---------- 模块仓 ----------
