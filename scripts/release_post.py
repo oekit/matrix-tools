@@ -18,7 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import MODULES, SITE_REPO, git_branch, is_dirty, latest_tag, repo_dir  # noqa: E402
+from matrix import MODULES, SITE_REPO, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
 from prkit import land_pr, merge_pr, open_pr  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -78,20 +78,32 @@ def main() -> None:
     # 3) versions.json
     if not no_vjson:
         print("\n== 3) 站点 versions.json ==")
-        r = subprocess.run([sys.executable, str(SCRIPTS / "gen_versions.py")],
-                           capture_output=True, text=True)
-        print("  " + (r.stdout.strip() or r.stderr.strip()[:200]))
-        site_changed = is_dirty(repo_dir(SITE_REPO))
-        if site_changed:
-            if no_pr:
+        site = repo_dir(SITE_REPO)
+        if no_pr:
+            r = subprocess.run([sys.executable, str(SCRIPTS / "gen_versions.py")],
+                               capture_output=True, text=True)
+            print("  " + (r.stdout.strip() or r.stderr.strip()[:200]))
+            if is_dirty(site):
                 print("  ⚠ 站点仓有未提交变更（--no-pr 模式，手工提交）")
-            else:
-                url = land_pr(repo_dir(SITE_REPO), SITE_REPO, VERSION_BRANCH,
-                              "docs: versions.json 重生成（release_post）",
-                              "docs: versions.json 重生成（release_post）",
-                              "release_post.py 发版后自动跟进。",
-                              edit=lambda: ["docs/public/versions.json"])
-                print(f"  ✓ 站点 PR: {url or '无变更'}")
+        else:
+            # 写入必须发生在 land_pr 的分支上（先写后落 PR 会被干净树守卫拒绝）
+            if is_dirty(site):
+                sh(["git", "checkout", "--", "docs/public/versions.json"], site)
+
+            def edit_site():
+                r = subprocess.run([sys.executable, str(SCRIPTS / "gen_versions.py")],
+                                   capture_output=True, text=True)
+                if r.returncode != 0:
+                    raise SystemExit(f"gen_versions 失败：{(r.stderr or r.stdout)[-200:]}")
+                print("  " + (r.stdout.strip() or r.stderr.strip()[:200]))
+                return ["docs/public/versions.json"]
+
+            url = land_pr(site, SITE_REPO, VERSION_BRANCH,
+                          "docs: versions.json 重生成（release_post）",
+                          "docs: versions.json 重生成（release_post）",
+                          "release_post.py 发版后自动跟进。",
+                          edit=edit_site)
+            print(f"  ✓ 站点 PR: {url or '无变更'}")
 
     # 4) audit 门禁
     if not no_audit:
