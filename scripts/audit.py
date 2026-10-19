@@ -33,6 +33,152 @@ def expected_table(repo: str) -> str:
     return render_table_for(repo).strip()
 
 
+# ---------- breakingIndex 完整性门禁（matrix-tools#31） ----------
+# 背景：versions.json 的 breakingIndex 靠人工从各模块 CHANGELOG 转抄，实测
+# 24 个模块中 5 个模块 15 条 Breaking 记录未收录——registry 与 nns 的
+# breakingIndex 甚至是**空数组**，而两仓的 v0.4.0 正是「SPI 包提升至模块根」
+# 这一类下游必断的变更。下游照矩阵升版，构建直接红，且报错只说
+# 「no required module provides package X」，完全不提真正原因（路径变了）。
+#
+# 门禁口径：**条目级全量比对**，不比对「有没有」这种粗粒度。
+#   - CHANGELOG 标注的破坏性条目 → 必须在 versions.json 里逐条在位；
+#   - versions.json 里的条目 → 必须在 CHANGELOG 里找得到（反向防手改漂移）。
+# 全量比对（不按已发布 tag 过滤）是刻意的：按 tag 过滤会在「本地没 fetch 到
+# 那些 tag」时把条目误判为未发布而跳过——那是**门禁假通过**的最典型形态。
+# 本地 CHANGELOG 只会写已发布版本，多报最多是提示重跑生成器，漏报是断链。
+def check_breaking_index(live: dict):
+    from gen_versions import breaking_index, breaking_suspects  # noqa: 延迟导入
+
+    indexed = {m["module"]: m.get("breakingIndex") or [] for m in live.get("modules", [])}
+    for repo in MODULES:
+        try:
+            want = breaking_index(repo)
+        except FileNotFoundError:
+            continue
+        have = indexed.get(repo)
+        if have is None:
+            check(False, f"{repo}: versions.json 缺该模块条目（跑 gen_versions.py）")
+            continue
+        have_keys = {(it.get("version"), it.get("line")) for it in have}
+        want_keys = {(it["version"], it["line"]) for it in want}
+        missing = want_keys - have_keys
+        extra = have_keys - want_keys
+        if missing:
+            sample = sorted(missing)[:2]
+            check(False, f"{repo}: breakingIndex 漏收 {len(missing)} 条 CHANGELOG 破坏性变更"
+                         f"（跑 gen_versions.py）：{sample}")
+        if extra:
+            sample = sorted(extra)[:2]
+            check(False, f"{repo}: breakingIndex 多出 {len(extra)} 条 CHANGELOG 里没有的条目"
+                         f"（跑 gen_versions.py）：{sample}")
+
+    # 疑似破坏性（机器判不了语义）：不阻塞，但必须显式提示，不能静默吞掉
+    suspects = []
+    for repo in MODULES:
+        try:
+            s = breaking_suspects(repo)
+        except FileNotFoundError:
+            continue
+        if s:
+            suspects.append(f"{repo}×{len(s)}")
+    if suspects:
+        print(f"  ⚠ 疑似破坏性变更未标注（`**refactor(...)**` / `### Changed` 段等，"
+              f"机器判不了语义，请人工确认是否需进 breakingIndex）：{'; '.join(suspects)}")
+
+
+# ---------- breakingIndex 独立 oracle（matrix-tools#31 复审补漏） ----------
+#
+# 为什么要再加一路 oracle：上面的双向门禁是「**解析器输出** vs **生成的
+# versions.json**」——两边**共享同一套判断**。解析器一旦有盲区，两边一起漏，
+# 门禁照样全绿。这正是 issue #31 抱怨的「门禁假通过」：矩阵说 registry/nns
+# 无破坏性变更，而 CHANGELOG 白纸黑字写着 SPI 包提升至模块根。
+#
+# 复审实测到的盲区：CHANGELOG 里**顶格独立成行**的破坏性标记
+# （`**BREAKING**: ...`，不带 `- ` bullet 前缀）——gormx v0.6.0 与 hertz v0.7.0
+# 的主键类型泛型化正是这种写法，旧解析器整段漏收，两仓 breakingIndex 近乎空。
+#
+# oracle 的判据**刻意不复用解析器逻辑**：直接扫 CHANGELOG 原文，用肉眼可见的
+# 三种标记形态找候选，再要求 breakingIndex 必须覆盖到。这样解析器改了盲区，
+# oracle 仍站在旁边盯着——它验的是「原文里写着的破坏性，矩阵有没有如实告诉下游」。
+ORACLE_WORD_RE = re.compile(r"(?i)breaking|不兼容|破坏性")
+ORACLE_VERHEAD_RE = re.compile(r"^##\s*\[([^\]]+)\]")
+ORACLE_SEMVER_RE = re.compile(r"v\d+\.\d+\.\d+")
+
+
+def _oracle_norm(s: str) -> str:
+    """归一化：去 markdown 记号与空白，只留可比的文字内容。"""
+    return re.sub(r"\s+", " ", re.sub(r"[*`#>\s]+", " ", s)).strip()
+
+
+def _oracle_markers(text: str) -> list[tuple[str, str, str]]:
+    """扫 CHANGELOG 原文 → [(形态, 版本头, 关键文本)]。独立于解析器。"""
+    out: list[tuple[str, str, str]] = []
+    ver = ""
+    for raw in text.splitlines():
+        m = ORACLE_VERHEAD_RE.match(raw)
+        if m:
+            ver = m.group(1).strip()
+            continue
+        s = raw.strip()
+        if not s:
+            continue
+        # (a) `### Breaking` 段标题——该版本应当有对应条目
+        if s.startswith("###"):
+            title = s.lstrip("#").strip()
+            if ORACLE_WORD_RE.search(title):
+                out.append(("section", ver, title))
+            continue
+        # (b) 顶格独立成行的 `**BREAKING**: ...`——必须被逐条覆盖
+        if raw.startswith("**") and ORACLE_WORD_RE.search(s):
+            out.append(("standalone", ver, _oracle_norm(s)))
+            continue
+        # (c) 条目行内含破坏性关键词——必须被逐条覆盖
+        if s.startswith("- ") and ORACLE_WORD_RE.search(s):
+            out.append(("bullet", ver, _oracle_norm(s[2:])))
+    return out
+
+
+def check_breaking_oracle():
+    """独立 oracle：CHANGELOG 原文里的破坏性标记，必须在 breakingIndex 里被覆盖。"""
+    from gen_versions import breaking_index  # noqa: 延迟导入
+
+    for repo in MODULES:
+        try:
+            root = repo_dir(repo, BASE)
+        except FileNotFoundError:
+            continue
+        if not root.exists():
+            continue
+        try:
+            items = breaking_index(repo)
+        except FileNotFoundError:
+            continue
+        keys = [_oracle_norm(it.get("line", "")) for it in items]
+        vers = [it.get("version", "") for it in items]
+        sources = [(root / "CHANGELOG.md", "")]
+        for gomod in sorted(root.glob("*/go.mod")):
+            sources.append((gomod.parent / "CHANGELOG.md", f"{gomod.parent.name}/"))
+        for path, _prefix in sources:
+            if not path.exists():
+                continue
+            for kind, ver, val in _oracle_markers(path.read_text(encoding="utf-8")):
+                if kind == "section":
+                    tok = ORACLE_SEMVER_RE.search(ver or "")
+                    if not tok:
+                        continue
+                    want = tok.group(0)
+                    if not any(want in v for v in vers):
+                        check(False, f"{repo}: CHANGELOG {want} 有 Breaking 段，"
+                                     f"但 breakingIndex 该版本无任何条目（解析器可能漏收整段）")
+                    continue
+                k = val[:60]
+                if not k:
+                    continue
+                if not any(k in kk or kk[:60] in k for kk in keys if kk):
+                    check(False, f"{repo}: CHANGELOG 有破坏性标记但 breakingIndex 未覆盖"
+                                 f"（{kind}，{ver}）：{val[:60]}")
+
+
 # ---------- 模块仓 ----------
 for repo in MODULES:
     d = repo_dir(repo, BASE)
@@ -135,8 +281,13 @@ try:
             if lt and cur.get(repo) != lt:
                 stale.append(f"{repo}(站点 {cur.get(repo)} ≠ 最新 {lt})")
         check(not stale, f"site: versions.json 陈旧 {len(stale)} 项（跑 gen_versions.py）：{'; '.join(stale[:4])}")
+        check_breaking_index(live)
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
+
+# 独立 oracle 放在站点块之外：它验的是「CHANGELOG 原文 ↔ 解析器输出」，
+# 与站点是否发布 versions.json 无关——站点文件缺失时，它照样要盯住解析器盲区。
+check_breaking_oracle()
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
