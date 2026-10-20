@@ -32,7 +32,7 @@
 | 根矩阵模块数 | 24 | `len(MODULES)`；站点文案用的就是这个，与「矩阵总览（24 活跃模块）」同口径 |
 | 根 go.mod 数 | 25 | 物理事实：24 个矩阵模块仓 + 门面 BOM 仓 `oekit` |
 | 嵌套模块数 | 7 | 深度 ≥2 的 go.mod（bootstrap/nacos、logx/hlog …），各自独立发版 |
-| 发版单元总数 | 31 | 根矩阵模块 + 嵌套模块（**不含**门面 BOM 仓） |
+| 发版单元总数 | 32 | 根矩阵模块 + 嵌套模块 + **伞仓 oekit**（伞仓有独立 tag 与 GitHub Release，`go get github.com/oekit/oekit@latest` 是一次独立的版本获取——按「可独立 go get 的发版单元」口径必须计入） |
 
 报错文案会把这几个数一起打出来，读者不必再猜哪个是哪个。
 
