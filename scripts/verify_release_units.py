@@ -71,12 +71,52 @@ _GO_GET_RE = re.compile(r"go\s+get\s+(github\.com/oekit/[A-Za-z0-9_.\-/]+?)(?:@|
 _NESTED_HEADING = "## 嵌套模块（可选装 · 依赖隔离）"
 
 
+def _semver_key(v: str) -> tuple[int, int, int]:
+    m = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", v or "")
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def _remote_tags(repo: str) -> list[str]:
+    """远端 tag 列表。
+
+    必须走 **远端**（ls-remote）而不是本地 `git tag`：CI 里各仓是 fresh clone，
+    本地没有 tag——用本地 tag 会让规范渲染在 CI 与本地**得出不同结果**，
+    门禁就成了「本地绿、CI 红」。
+    """
+    r = subprocess.run(["git", "ls-remote", "--tags", f"https://github.com/oekit/{repo}.git"],
+                       capture_output=True, text=True)
+    return [ln.split("refs/tags/")[-1].strip() for ln in r.stdout.splitlines()
+            if ln.strip() and not ln.rstrip().endswith("^{}")]
+
+
+def _latest_root_tag(repo: str) -> str | None:
+    """仓的最新根 tag（形如 v0.7.1）。"""
+    tags = [t for t in _remote_tags(repo)
+            if "/" not in t and re.fullmatch(r"v\d+\.\d+\.\d+", t)]
+    return max(tags, key=_semver_key) if tags else None
+
+
+def _latest_nested_tag(repo: str, path: str) -> str | None:
+    """嵌套模块的最新 tag（形如 nacos/v0.3.5 → v0.3.5）。"""
+    pre = f"{path}/"
+    tags = [t.split("/", 1)[1] for t in _remote_tags(repo)
+            if t.startswith(pre) and re.fullmatch(r"v\d+\.\d+\.\d+", t.split("/", 1)[1])]
+    return max(tags, key=_semver_key) if tags else None
+
+
 def render_nested_section() -> str:
     """渲染规范的「## 嵌套模块」段。
 
     这是 llms.txt 那一段的**唯一产出源**：站点里的段落必须与它逐字节一致
     （oracle B）。写成生成器而不是手改产物——llms.txt 整体没有生成器，
     但这一段是机械的，机械的就不该手写。
+
+    版本信息**从 git tag 推导**，不手写：
+      - `版本`：该嵌套模块自己的最新 tag；
+      - `对应父仓`：父仓的**最新** tag（= 当前与哪个父仓版本对应）。
+    ⚠️ 曾手写过「随父仓 X 拆出」的历史对应关系，实测**不可靠**：7 条里 2 条与
+    父仓 CHANGELOG 对不上、2 条根本没有 CHANGELOG 依据——手挑值不可复核。
+    故只保留两项**可从 tag 客观推导**的信息。
     """
     lines = [
         _NESTED_HEADING,
@@ -90,6 +130,10 @@ def render_nested_section() -> str:
         url = f"https://github.com/oekit/{m['repo']}/tree/main/{m['path']}"
         lines.append(f"- [{name}]({url}): {m['desc']}")
         lines.append(f"  - 安装：`go get {m['module']}@latest`")
+        ntag = _latest_nested_tag(m["repo"], m["path"])
+        ptag = _latest_root_tag(m["repo"])
+        if ntag and ptag:
+            lines.append(f"  - 版本：`{ntag}` · 对应父仓 `{m['repo']} {ptag}`")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
