@@ -278,6 +278,102 @@ def check_go_floor_pairing(repo: str, d):
                      f"（1.24 / 1.25 / 1.26）内")
 
 
+# ---------- 死路径门禁（客观判据：这条 import 路径现在还在不在） ----------
+#
+# 为什么要有这道门：breakingIndex 的解析器判断「什么算破坏性变更」是**主观语义**
+# （措辞、动作词表、段标题……），而 CHANGELOG 的措辞不受控——实测漏收过 4 条真实
+# 死路径（措辞是「子包收成一级」「适配器扁平化」「提升到模块根」「healthz 路径同步」，
+# 都不在动作词表里）。**词表穷举法注定漏**：明天出现一个新措辞，就又漏一条。
+#
+# 这道门禁的判据是**客观**的：路径现在还在不在？
+#   1. 扫各仓 CHANGELOG 原文，抽出本仓的路径引用；
+#   2. 拿**文件系统**判生死（目录含 .go 文件 / 单文件）；
+#   3. 死了 = 下游 import 直接断 → **必须已被 breakingIndex 告知**。
+#
+# 这条性质与「怎么判定破坏性」无关，只与「路径死没死」有关 → 天然独立于解析器，
+# 正是「门禁不得与被检对象共享判断逻辑」这条纪律的又一个应用。
+#
+# 判生死在此**独立实现**（不复用 gen_versions 的同名函数）——共享实现就等于
+# 共享盲区：解析器算错时门禁跟着一起错。
+ORACLE_DEADPATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+(?:/[a-z0-9-]+)*)")
+ORACLE_URLISH = {
+    "issues", "pull", "pulls", "requests", "blob", "tree", "releases", "actions",
+    "wiki", "compare", "discussions", "labels", "milestones", "projects",
+    "security", "graphs", "network", "settings",
+}
+
+
+def _oracle_path_alive(repo: str, rel: str, root) -> bool:
+    """独立实现：`github.com/oekit/<repo>/<rest>` 在当前源码树里还活着吗？
+
+    活的判据：路径存在，且是目录时含 .go 文件（Go 包的最小单位）。
+    """
+    segs = [s for s in rel.split("/") if s]
+    if segs and segs[0] == repo:
+        segs = segs[1:]
+    if not segs:
+        return True
+    target = root.joinpath(*segs)
+    try:
+        if target.is_dir():
+            return any(target.glob("*.go"))
+        return target.is_file()
+    except OSError:
+        return False
+
+
+def check_dead_paths(live: dict):
+    """死路径门禁：CHANGELOG 提到的死路径，必须已被 breakingIndex 告知。
+
+    检查的是**已发布产物**（下游真正读到的东西），不是解析器的中间输出——
+    这是端到端的性质：「下游 import 一个已消失的包之前，矩阵有没有提醒过」。
+    """
+    idx = {m["module"]: m for m in live.get("modules", [])}
+    for repo in MODULES:
+        try:
+            root = repo_dir(repo, BASE)
+        except FileNotFoundError:
+            continue
+        if not root.exists():
+            continue
+        cl = root / "CHANGELOG.md"
+        if not cl.exists():
+            continue
+        blob = "\n".join(
+            e.get("line", "") for e in (idx.get(repo, {}).get("breakingIndex") or [])
+        )
+        dead: dict[str, str] = {}
+        version = ""
+        for raw in cl.read_text(encoding="utf-8").splitlines():
+            m = ORACLE_VERHEAD_RE.match(raw)
+            if m:
+                version = m.group(1).strip()
+                continue
+            for pm in ORACLE_DEADPATH_RE.finditer(raw):
+                full = pm.group(1)
+                segs = full.split("/")
+                if segs[0] != repo:
+                    continue
+                if len(segs) >= 2 and segs[1] in ORACLE_URLISH:
+                    continue
+                if _oracle_path_alive(repo, full, root):
+                    continue
+                dead.setdefault(full, version or "?")
+        for path, ver in sorted(dead.items(), key=lambda kv: kv[1]):
+            segs = path.split("/")
+            rel = "/".join(segs[1:]) if len(segs) > 1 else ""
+            cands = {path}
+            if rel:
+                cands.add(rel)
+                if rel.startswith(repo + "/"):
+                    cands.add(rel[len(repo) + 1:])
+                cands.add(rel.split("/")[-1])
+            if not any(c and c in blob for c in cands):
+                ver_txt = ver if ver.startswith("v") else f"v{ver}"
+                check(False, f"{repo}: 死路径 {path}（{ver_txt} 移除）未被 breakingIndex 告知"
+                             f"——下游 import 会直接断，矩阵必须提醒")
+
+
 # ---------- 模块仓 ----------
 for repo in MODULES:
     d = repo_dir(repo, BASE)
@@ -383,6 +479,7 @@ try:
                 stale.append(f"{repo}(站点 {cur.get(repo)} ≠ 最新 {lt})")
         check(not stale, f"site: versions.json 陈旧 {len(stale)} 项（跑 gen_versions.py）：{'; '.join(stale[:4])}")
         check_breaking_index(live)
+        check_dead_paths(live)
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
 

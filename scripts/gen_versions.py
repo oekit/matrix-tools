@@ -108,6 +108,35 @@ SUSPECT_ITEM_RE = re.compile(r"^\*\*[^*]*(refactor|fix|change|remove|rename|drop
 SUSPECT_SECTION_RE = re.compile(r"(?i)^(changed|变更|行为变更)\b")
 SUSPECT_TEXT_RE = re.compile(r"(结构重置|目录正名|路径变更|历史与旧版本号)")
 
+# ---------- 信号 G：死路径（客观判据，不靠动作词表） ----------
+#
+# 信号 F 靠**动作词表**判「这是路径移除」，而 CHANGELOG 的措辞不受控——
+# 实测漏收 4 条真实死路径（措辞分别是「子包收成一级」「适配器扁平化」
+# 「提升到模块根」「healthz 路径同步」，都不在词表里）。**词表穷举法注定漏**：
+# 明天又出现一个新措辞，就又漏一条。
+#
+# 信号 G 换成**客观判据**：这个 import 路径**现在还在不在**？
+#   1. 扫 CHANGELOG 原文抽本仓的路径引用（`github.com/oekit/<repo>/...`）；
+#   2. 拿**文件系统**判生死——该路径在当前源码树里还在不在？
+#   3. 不在了 = 死路径 = 下游 import 直接断。
+#
+# 方向性天然自带，**不需要额外维护「不认迁入」的词表**：
+#   - 「A → B」的条目里 A 是**旧路径**（已死）→ 触发；B 是**新路径**（活的）→ 不触发；
+#   - 迁移表里左右两列分别会被判生死，天然只命中被移除的那一侧；
+#   - 路径若留有兼容别名（还活着）→ 不触发——**那确实不是破坏**。
+#
+# 与信号 F 是互补而非替代：F 抓的是「措辞说破了但路径还活着」的语义变更
+# （如签名/行为变更），G 抓的是「措辞没提但路径真没了」的移除。
+DEAD_PATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+(?:/[a-z0-9-]+)*)")
+# GitHub 页面路径不是 import 路径——`github.com/oekit/oekit/issues/1` 是 issue
+# 链接，排除掉，否则会把它当成「死包」。
+URLISH = {
+    "issues", "pull", "pulls", "requests", "blob", "tree", "releases", "actions",
+    "wiki", "compare", "discussions", "labels", "milestones", "projects",
+    "security", "graphs", "network", "settings", "discussions",
+}
+
+
 # ---------- 信号 E：独立成行的破坏性标记（matrix-tools#31 复审补漏） ----------
 #
 # 上面四路信号都建立在「条目是 `- ` 开头的 bullet」这个前提上，但 CHANGELOG 里
@@ -411,6 +440,80 @@ def _scan_changelog(path: Path, prefix: str = "", repo: str = "") -> list[dict]:
     return items
 
 
+def _path_alive(repo: str, rel: str, root: Path) -> bool:
+    """`github.com/oekit/<repo>/<rel>` 在当前源码树里还活着吗？
+
+    活的判据：路径在文件系统中存在，且（是目录时）含 .go 文件——Go 包的
+    最小单位是含 .go 文件的目录。
+    """
+    parts = [p for p in rel.split("/") if p]
+    if parts and parts[0] == repo:
+        parts = parts[1:]          # 去掉仓名前缀，得到仓内相对路径
+    if not parts:
+        return True                # 仓根本身
+    target = root
+    for p in parts:
+        target = target / p
+    if target.is_dir():
+        return any(target.glob("*.go"))
+    if target.is_file():
+        return True
+    parent = target.parent
+    return parent.is_dir() and (parent / target.name).is_file()
+
+
+def _mentions_path(text: str, repo: str, full: str) -> bool:
+    """text 里是否提到了这条路径。
+
+    候选形态：全限定 `github.com/oekit/<repo>/<rest>`、仓内相对 `<rest>`、
+    末段包名——CHANGELOG 里三种写法都出现过（迁移表用全限定，条目里常用相对）。
+    """
+    parts = full.split("/")
+    rel = "/".join(parts[1:]) if len(parts) > 1 else ""
+    cands = {full}
+    if rel:
+        cands.add(rel)
+        if rel.startswith(repo + "/"):
+            cands.add(rel[len(repo) + 1:])
+        cands.add(rel.split("/")[-1])
+    return any(c and c in text for c in cands)
+
+
+def _dead_path_entries(text: str, repo: str, root: Path, prefix: str = "") -> list[dict]:
+    """扫 CHANGELOG 原文找**死路径** → [{version, line, path}]。
+
+    version 取该路径被提及时所在的版本节；line 取提及它的那一行原文
+    （与其它信号同构，便于双向门禁逐条比对）。
+    """
+    out: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    version: str | None = None
+    for raw in text.splitlines():
+        m = VERSION_HEAD_RE.match(raw)
+        if m:
+            version = _normalize_version(m.group(1))
+            continue
+        if version is None:
+            continue
+        for pm in DEAD_PATH_RE.finditer(raw):
+            full = pm.group(1)
+            parts = full.split("/")
+            if parts[0] != repo:
+                continue                    # 只看本仓的路径
+            if len(parts) >= 2 and parts[1] in URLISH:
+                continue                    # issue/pull 等链接不是 import 路径
+            if _path_alive(repo, full, root):
+                continue                    # 还活着 → 不是破坏
+            line = re.sub(r"\s+", " ", raw.strip())[:200]
+            ver = _prefix_version(version, prefix)
+            key = (ver, full)
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append({"version": ver, "line": line, "path": full})
+    return out
+
+
 def breaking_index(repo: str) -> list[dict]:
     """扫 CHANGELOG.md，收集 breaking 事件 → {version, line}。
 
@@ -418,6 +521,13 @@ def breaking_index(repo: str) -> list[dict]:
     嵌套模块的版本号带路径前缀（如 `redis/v0.2.0`）——嵌套模块的破坏性变更
     同样是下游必断的（如 timertask v0.2.0 把 Redis 后端迁至嵌套模块），
     只扫根 CHANGELOG 会漏掉它们。
+
+    三路来源并用（互相补盲区）：
+      · A–E：措辞类信号（段标题 / 行内关键词 / 包路径提升 / conventional 标记 /
+        顶格独立标记行）——抓「措辞说了」的破坏；
+      · F：本仓路径级移除（动作词 + 归属护栏）——抓措辞说破的移除；
+      · G：**死路径**（路径在当前源码树里已消失）——抓**措辞没提**的移除，
+        客观判据，不需要动作词表。
     """
     root = repo_dir(repo, BASE)
     items = _scan_changelog(root / "CHANGELOG.md", repo=repo)
@@ -425,7 +535,32 @@ def breaking_index(repo: str) -> list[dict]:
         sub = gomod.parent
         # 嵌套模块的路径标识是 `github.com/oekit/<root>/<sub>`，归属判据认根仓名
         items.extend(_scan_changelog(sub / "CHANGELOG.md", prefix=f"{sub.name}/", repo=repo))
-    return items
+    # 信号 G：死路径（对根 CHANGELOG 与各嵌套 CHANGELOG 一起扫）
+    # **只补其他信号没提到的**——它是兜底，不是重复收集。已收集条目的文本
+    # 里提到过该路径（全限定/相对/末段任一形态）就跳过。
+    def _add_dead_paths(cl_path: Path, pfx: str = "") -> None:
+        if not cl_path.exists():
+            return
+        blob = "\n".join(it.get("line", "") for it in items)
+        for dp in _dead_path_entries(cl_path.read_text(encoding="utf-8"), repo, root, pfx):
+            if _mentions_path(blob, repo, dp["path"]):
+                continue
+            items.append({"version": dp["version"], "line": dp["line"]})
+            blob += "\n" + dp["line"]
+
+    _add_dead_paths(root / "CHANGELOG.md")
+    for gomod in sorted(root.glob("*/go.mod")):
+        _add_dead_paths(gomod.parent / "CHANGELOG.md", f"{gomod.parent.name}/")
+    # 按 (version, line) 去重（多路来源可能命中同一条）
+    uniq: list[dict] = []
+    seen: set[tuple[str, str]] = set()
+    for it in items:
+        key = (it.get("version", ""), it.get("line", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        uniq.append(it)
+    return uniq
 
 
 def breaking_suspects(repo: str) -> list[dict]:
