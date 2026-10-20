@@ -45,7 +45,10 @@ def count_units(repos_dir: str | None = None) -> dict:
       根矩阵模块数 = len(MODULES)（站点文案用这个，与「矩阵总览」表同口径）
       根 go.mod 数  = 25（24 矩阵模块 + 门面 BOM 仓 oekit）
       嵌套模块数    = 7（深度 ≥2 的 go.mod，各自独立发版）
-      发版单元总数  = 根矩阵模块 + 嵌套模块（不含门面 BOM 仓）
+      发版单元总数  = 根矩阵模块 + 嵌套模块 + **伞仓 oekit** = 32
+                     （伞仓有自己的 tag 与 GitHub Release，v0.1.11 等——下游
+                      `go get github.com/oekit/oekit@latest` 是一次独立的版本
+                      获取，按「可独立 go get 的发版单元」口径必须计入）
     """
     counts = {
         "matrix_modules": len(MODULES),
@@ -63,7 +66,10 @@ def count_units(repos_dir: str | None = None) -> dict:
     counts["root_gomods"] = len(roots)
     counts["nested_modules"] = nested
     counts["total_gomods"] = len(roots) + nested
-    counts["release_units"] = counts["matrix_modules"] + nested
+    # 伞仓数从**文件系统扫出的** root_gomods 里减出来，不写死常量——
+    # 保持 count_units 的「独立 oracle」性质（只看文件系统，不看任何生成物）。
+    bom_units = max(0, len(roots) - counts["matrix_modules"])
+    counts["release_units"] = counts["matrix_modules"] + nested + bom_units
     return counts
 
 

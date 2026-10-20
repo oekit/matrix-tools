@@ -26,7 +26,7 @@ MODULES = [
 # 嵌套的职责是**依赖隔离**，不是「目录组织」——把重依赖（hertz / kitex / go-redis /
 # 阿里云 Nacos SDK / prometheus+otel）关进子模块，父仓根包保持零第三方依赖。
 # issue #37 的架构裁决：**不给它们换位置**（换独立仓隔离效果完全等价，却要付
-# 「全部 import 变更 + 仓库数 24→31」；合并回父仓不可行——Go 的 import 即依赖，
+# 「全部 import 变更 + 仓库数 24→32」；合并回父仓不可行——Go 的 import 即依赖，
 # 会毁掉零捆绑定位）。
 #
 # 为什么与 MODULES **分开**：MODULES 决定 versions.json 的 latest/matrixDeps 与
@@ -55,8 +55,12 @@ NESTED_MODULES = [
 # 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
 MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
 NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 7 个嵌套模块
-GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT  # 31 个 Go module
-# 工作区里的 go.mod 总数 = GO_MODULE_COUNT + 1（BOM 仓 oekit 自己一个 go.mod，它不是发版模块）
+# 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
+# （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
+# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 32）。
+BOM_RELEASE_UNIT = 1
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 32 个 Go module
+# 工作区里的 go.mod 总数 = 32（24 根 + 7 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
 
 ORG = "oekit"
 SITE_REPO = "oekit.github.io"

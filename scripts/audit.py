@@ -367,7 +367,7 @@ try:
     _site_counts = count_units(BASE if os.path.isdir(BASE) else None)
     issues += site_check_counts(site, _site_counts)
     issues += check_llms_coverage(site)
-    # 发版单元全集（根 24 + 嵌套 7 = 31）：verify_site_copy 只管**根模块**条目集合，
+    # 发版单元全集（根 24 + 嵌套 7 + 伞仓 1 = 32）：verify_site_copy 只管**根模块**条目集合，
     # 嵌套模块的独立条目与 go get 安装行是另一件事——llms.txt 是 Agent 唯一会抓的
     # 机器可读索引，嵌套模块（零依赖隔离的载体）不给安装行 = 装不上。
     if llms.exists():
