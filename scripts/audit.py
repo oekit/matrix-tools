@@ -16,7 +16,7 @@ sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
-    GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT,
+    GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
@@ -364,6 +364,22 @@ for repo in MODULES:
         lt2 = latest_tag(repo, BASE, remote=REMOTE_TAGS)
         if lt2:
             check(ma.group(1) == lt2, f"{repo}: AGENTS 当前版本 {ma.group(1)} ≠ 最新 {lt2}（跑 refresh_versions.py）")
+    # 6c) AGENTS.md 首行的 DESC 行必须是矩阵真相源 DESC 的**前缀**
+    # 实测（2026-10-20）：data/core/pkg 三仓的这行是**陈旧快照**——DESC 更新后
+    # 没人同步，AGENTS.md 里留着旧的能力描述；hertz 同类（AGENTS.md 还写着
+    # 不存在的 `WithReadyAddr`）。AGENTS.md 是 AI Agent 判断「这个仓能做什么」的
+    # 入口，与真相源不一致 = 组织里有两个事实源。
+    # 允许截断（有的仓只写前半句），但截断点必须在 DESC 内——不许改写。
+    if agents.exists():
+        _head = agents.read_text().splitlines()[:8]
+        _aline = next((l[2:].strip() for l in _head
+                       if l.startswith("> ") and not l.startswith("> **")
+                       and not l.startswith("> 当前版本")), None)
+        _desc = (DESC.get(repo) or "").strip()
+        if _aline and _desc and not _desc.startswith(_aline):
+            issues.append(
+                f"{repo}: AGENTS.md 首行不是 DESC 的前缀（跑 refresh_agents_desc.py）"
+                f"——AGENTS.md 与矩阵真相源说法不一致")
 
 # ---------- 门面壳同步（data 八壳 ← 源包导出符号） ----------
 # 「源仓新增导出符号时本壳需同步」的跟版税此前靠人记（2026-10-16 曾漏
