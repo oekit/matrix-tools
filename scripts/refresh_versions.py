@@ -3,6 +3,8 @@
 用法：python3 scripts/refresh_versions.py [--push]
 
 sync_repo 供 doc_wave/release_post import 复用（写入逻辑不在模块顶层）。"""
+from __future__ import annotations  # PEP604（str | None）需 3.10+；本机 python3 可能是 3.9
+
 import os, pathlib, re, sys
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import MODULES, repo_dir, ensure_clean_all, latest_tag, sh
