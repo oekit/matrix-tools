@@ -10,12 +10,15 @@ import os
 import re
 import subprocess
 import sys
+from pathlib import Path  # noqa: E402
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
+sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT,
 )
+from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 
 BASE = os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
 BASE = os.path.abspath(BASE)
@@ -355,8 +358,16 @@ try:
     site = repo_dir(SITE_REPO, BASE)
     llms = site / "docs" / "public" / "llms.txt"
     check(llms.exists(), "site: 缺 docs/public/llms.txt")
-    idx = site / "docs" / "index.md"
-    check(idx.exists() and f"{len(MODULES)} 个独立发版" in idx.read_text(), f"site: 首页计数非 {len(MODULES)}")
+    # 站点文案口径 + llms.txt 模块覆盖：**全站 .md/.txt 逐个数字核对**，
+    # 不再只查 index.md 一个文件、也不再用子串匹配（"124 个独立发版" 里有
+    # "24 个独立发版"，旧写法照样放行）。
+    # 判据独立：期望值来自矩阵的模块登记表 + 文件系统里的真实 go.mod
+    # （--repos-dir 给了就扫；CI 里 MATRIX_BASE=repos 天然有）。
+    _site_counts = count_units(BASE if os.path.isdir(BASE) else None)
+    issues += site_check_counts(site, _site_counts)
+    issues += check_llms_coverage(site)
+    if os.path.isdir(BASE):
+        issues += check_ghost_roots(Path(BASE), _site_counts)
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",
                         "--exclude-dir=dist", "--exclude-dir=cache",
                         "-e", "github.com/yi-nology", "-e", "github.com/openekit", "."],
