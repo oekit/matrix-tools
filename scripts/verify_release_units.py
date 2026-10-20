@@ -71,12 +71,16 @@ _GO_GET_RE = re.compile(r"go\s+get\s+(github\.com/oekit/[A-Za-z0-9_.\-/]+?)(?:@|
 _NESTED_HEADING = "## 嵌套模块（可选装 · 依赖隔离）"
 
 
-def render_nested_section() -> str:
+def render_nested_section(versions: dict[str, dict] | None = None) -> str:
     """渲染规范的「## 嵌套模块」段。
 
     这是 llms.txt 那一段的**唯一产出源**：站点里的段落必须与它逐字节一致
     （oracle B）。写成生成器而不是手改产物——llms.txt 整体没有生成器，
     但这一段是机械的，机械的就不该手写。
+
+    `versions` 给定时（形如 {"logx/sink": {"latest": "v0.1.0", "hostVersion": "v0.4.0"}}），
+    每条额外写一行「版本 + 对应父仓版本」——嵌套模块与父仓的**版本对应关系**
+    是下游装机时唯一需要的信息（见 issue #37 ① 的口径裁决）。
     """
     lines = [
         _NESTED_HEADING,
@@ -90,8 +94,111 @@ def render_nested_section() -> str:
         url = f"https://github.com/oekit/{m['repo']}/tree/main/{m['path']}"
         lines.append(f"- [{name}]({url}): {m['desc']}")
         lines.append(f"  - 安装：`go get {m['module']}@latest`")
+        v = (versions or {}).get(name)
+        if v and v.get("latest"):
+            host = v.get("hostVersion")
+            tail = f" · 对应父仓 `{m['repo']} {host}`" if host else ""
+            lines.append(f"  - 版本：`{v['latest']}`{tail}")
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _tag_dates(repo_dir: Path, repo: str) -> dict[str, int]:
+    """仓内全部 tag → 创建时间戳（unix）。
+
+    与生成器**刻意用不同的 git 事实**推导「对应父仓版本」：生成器走
+    **commit 祖先关系**，这里走 **tag 日期序**。两者独立、必须一致——
+    若两边共享判断逻辑，就会一起错、门禁照样全绿（#31 的教训）。
+    """
+    try:
+        out = subprocess.run(
+            ["git", "-C", str(repo_dir / repo), "for-each-ref",
+             "--format=%(refname:short)|%(creatordate:unix)", "refs/tags"],
+            capture_output=True, text=True, timeout=30).stdout
+    except Exception:  # noqa: BLE001
+        return {}
+    res: dict[str, int] = {}
+    for line in out.splitlines():
+        p = line.split("|")
+        if len(p) < 2:
+            continue
+        try:
+            res[p[0]] = int(p[1])
+        except ValueError:
+            continue
+    return res
+
+
+def _semver_key(v: str) -> tuple:
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)", v)
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
+    """嵌套模块的「当前版本 + 对应父仓版本」——**门禁自己的推导**。
+
+    判据（与生成器不同源）：**tag 日期序**——父仓根 tag 里，创建时间**不晚于**
+    该嵌套 tag 的那个里取最新的 ⇒ 嵌套发布所处的父仓版本区间。
+
+    两种推导（生成器=commit 祖先 / 门禁=tag 日期）互为交叉验证。
+    """
+    if repos_dir is None:
+        return {}
+    out: dict[str, dict] = {}
+    for m in NESTED_MODULES:
+        repo, path = m["repo"], m["path"]
+        dates = _tag_dates(repos_dir, repo)
+        if not dates:
+            continue
+        nested = {n: d for n, d in dates.items()
+                  if n.startswith(path + "/") and re.fullmatch(r"v\d+\.\d+\.\d+", n[len(path) + 1:])}
+        if not nested:
+            continue
+        latest_tag = max(nested, key=lambda n: _semver_key(n[len(path) + 1:]))
+        latest = latest_tag[len(path) + 1:]
+        roots = {n: d for n, d in dates.items()
+                 if "/" not in n and re.fullmatch(r"v\d+\.\d+\.\d+", n)}
+        cands = [r for r, d in roots.items() if d <= nested[latest_tag]]
+        host = max(cands, key=lambda r: (roots[r], _semver_key(r))) if cands else None
+        out[f"{repo}/{path}"] = {"latest": latest, "hostVersion": host,
+                                 "module": m["module"]}
+    return out
+
+
+def check_nested_version_correspondence(published: dict, derived: dict[str, dict],
+                                       repos_dir: Path | None = None) -> list[str]:
+    """oracle C：已发布 versions.json 的 nested 条目必须与门禁自己的推导一致。
+
+    查**产物**（已发布的机器可读矩阵），不查生成器输出——生成器输出与产物
+    一致只说明「生成器自洽」，这里要验的是「产物说的对应关系是对的」。
+
+    双向：
+      ① 声明的 7 个嵌套模块 → 必须都在产物里，且版本与 hostVersion 一致；
+      ② 产物里登记的嵌套模块 → 目录必须**还活着**（已撤回的模块不该被登记）。
+    """
+    problems: list[str] = []
+    nested_by_repo: dict[str, dict] = {}
+    for mod in published.get("modules", []):
+        for item in mod.get("nested") or []:
+            nested_by_repo[f"{mod['module']}/{item['path']}"] = item
+    for name, d in sorted(derived.items()):
+        got = nested_by_repo.get(name)
+        if not got:
+            problems.append(f"已发布 versions.json 缺嵌套模块 {name} 的条目")
+            continue
+        if got.get("latest") != d["latest"]:
+            problems.append(f"{name}: 已发布版本 {got.get('latest')} ≠ 实际最新 {d['latest']}")
+        if d["hostVersion"] and got.get("hostVersion") != d["hostVersion"]:
+            problems.append(f"{name}: 已发布 hostVersion {got.get('hostVersion')!r} "
+                            f"≠ 推导值 {d['hostVersion']!r}（对应父仓版本漂移）")
+    if repos_dir is not None:
+        for name, item in sorted(nested_by_repo.items()):
+            repo, path = name.split("/", 1)
+            if not (repos_dir / repo / path).is_dir():
+                problems.append(f"已发布 versions.json 登记了嵌套模块 {name}，"
+                                f"但源码树里该目录已不存在（已撤回？）——矩阵不该登记废弃模块")
+    return problems
+
 
 
 def _nested_units() -> list[tuple[str, str]]:
@@ -153,17 +260,17 @@ def check_llms_units(llms_text: str) -> list[str]:
     return problems
 
 
-def check_section_consistency(llms_text: str) -> list[str]:
+def check_section_consistency(llms_text: str, versions: dict[str, dict] | None = None) -> list[str]:
     """oracle B：站点的嵌套模块段必须与渲染结果逐字节一致。"""
-    want = render_nested_section()
+    want = render_nested_section(versions)
     if _NESTED_HEADING not in llms_text:
         return [f"llms.txt 缺「{_NESTED_HEADING}」段——"
                 f"7 个嵌套模块没有独立条目段（跑 --emit 取规范文本）"]
     m = re.search(re.escape(_NESTED_HEADING) + r"\n(.*?)(?=^##\s|\Z)", llms_text, re.M | re.S)
     got = _NESTED_HEADING + "\n" + (m.group(1) if m else "")
     if got.rstrip() != want.rstrip():
-        return ["llms.txt 的「嵌套模块」段与规范渲染不一致（描述/安装行/链接漂移）"
-                "——跑 `verify_release_units.py --emit` 取规范文本逐字节替换"]
+        return ["llms.txt 的「嵌套模块」段与规范渲染不一致（描述/安装行/版本对应行/链接漂移）"
+                "——跑 `verify_release_units.py --emit --repos-dir <各仓父目录>` 取规范文本逐字节替换"]
     return []
 
 
@@ -174,8 +281,11 @@ def main() -> int:
     ap.add_argument("--emit", action="store_true", help="打印规范「## 嵌套模块」段")
     args = ap.parse_args()
 
+    repos_dir = Path(args.repos_dir).resolve() if args.repos_dir else None
+    derived = derive_nested_versions(repos_dir)
+
     if args.emit:
-        print(render_nested_section(), end="")
+        print(render_nested_section(derived), end="")
         return 0
 
     if not args.site:
@@ -189,10 +299,23 @@ def main() -> int:
     text = llms.read_text(encoding="utf-8", errors="ignore")
 
     problems: list[str] = []
-    repos_dir = Path(args.repos_dir).resolve() if args.repos_dir else None
     problems += check_filesystem_oracle(repos_dir)
     problems += check_llms_units(text)
-    problems += check_section_consistency(text)
+    problems += check_section_consistency(text, derived)
+
+    # oracle C：已发布 versions.json 的 nested 对应关系（与生成器不同源推导）
+    vfile = site / "docs" / "public" / "versions.json"
+    if derived:
+        if not vfile.is_file():
+            problems.append(f"缺 {vfile}（嵌套模块的版本对应关系在机器可读矩阵里）")
+        else:
+            import json as _json
+            try:
+                published = _json.loads(vfile.read_text(encoding="utf-8"))
+            except Exception as e:  # noqa: BLE001
+                problems.append(f"已发布 versions.json 解析失败：{e}")
+            else:
+                problems += check_nested_version_correspondence(published, derived, repos_dir)
 
     total = len(MODULES) + len(NESTED_MODULES)
     if problems:

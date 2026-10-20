@@ -225,6 +225,90 @@ def latest_version(repo: str) -> str | None:
     return None
 
 
+def _local_tag_meta(repo: str) -> dict[str, tuple[str, int]]:
+    """本地 clone 的 tag → (commit sha, commit unix 时间)。
+
+    嵌套模块的「对应父仓版本」要靠 **commit 祖先关系**推：ls-remote 只给 tag 名，
+    给不出 commit，所以这一路必须读本地 git。
+    """
+    d = repo_dir(repo, BASE)
+    try:
+        out = subprocess.check_output(
+            ["git", "-C", str(d), "for-each-ref",
+             "--format=%(refname:short)|%(objectname)|%(*objectname)",
+             "refs/tags"], text=True, stderr=subprocess.DEVNULL)
+    except Exception:  # noqa: BLE001 — git 不可用时不该让生成器崩
+        return {}
+    meta: dict[str, tuple[str, int]] = {}
+    for line in out.splitlines():
+        parts = line.split("|")
+        if len(parts) < 3:
+            continue
+        name, obj, deref = parts[0], parts[1], parts[2]
+        meta[name] = (deref or obj, 0)
+    # commit 时间戳：一次 git log 批量取（annotated tag 用 %(*ct) 拿被指向的 commit）
+    try:
+        rows = subprocess.check_output(
+            ["git", "-C", str(d), "for-each-ref",
+             "--format=%(refname:short)|%(creatordate:unix)|%(*creatordate:unix)",
+             "refs/tags"], text=True, stderr=subprocess.DEVNULL)
+        for line in rows.splitlines():
+            p = line.split("|")
+            if len(p) < 3 or p[0] not in meta:
+                continue
+            ct = p[2] if p[2] else p[1]
+            try:
+                meta[p[0]] = (meta[p[0]][0], int(ct))
+            except ValueError:
+                pass
+    except Exception:  # noqa: BLE001
+        pass
+    return meta
+
+
+def _is_ancestor(repo: str, a: str, b: str) -> bool:
+    """a 是 b 的祖先（a 更早）。"""
+    try:
+        return subprocess.run(
+            ["git", "-C", str(repo_dir(repo, BASE)), "merge-base", "--is-ancestor", a, b],
+            capture_output=True, text=True).returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _ver_key(v: str) -> tuple:
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)", v)
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -> str | None:
+    """嵌套发布对应的**父仓版本**（判据：commit 祖先关系，客观事实）。
+
+    语义：父仓根 tag 的 commit 是该嵌套发布 commit 的祖先 ⇒ 该嵌套发布发生在
+    那个父仓版本「之后、下一个父仓版本之前」。取满足条件里**最新**的父仓版本，
+    即「这次嵌套发布所处的父仓版本区间」。
+
+    例：logx/sink v0.1.0 的 commit 晚于 logx v0.4.0 的 commit、早于 v0.4.1
+    ⇒ hostVersion = logx v0.4.0。
+
+    限制（写在这里，也写进注释）：只能表达「**现在**仍成立」的对应关系——
+    嵌套模块被移除后又重新加回时，历史对应关系会与当前源码树不一致；本字段
+    描述的是发布历史的事实，不是当前源码树的事实。
+    """
+    sha = meta.get(nested_tag, (None, 0))[0]
+    if not sha:
+        return None
+    cands: list[tuple[tuple, tuple, str]] = []
+    for name, (s, ct) in meta.items():
+        if "/" in name or not re.fullmatch(r"v\d+\.\d+\.\d+", name):
+            continue
+        if _is_ancestor(repo, s, sha):
+            cands.append(((_ver_key(name), ct), _ver_key(name), name))
+    if not cands:
+        return None
+    return max(cands)[2]
+
+
 def nested_versions(repo: str) -> list[dict]:
     by_path: dict[str, str] = {}
     for tag in _remote_tags(repo):
@@ -234,7 +318,22 @@ def nested_versions(repo: str) -> list[dict]:
         path, ver = tag.split("/", 1)
         if path not in by_path:
             by_path[path] = ver
-    return [{"path": p, "latest": v} for p, v in sorted(by_path.items())]
+    if not by_path:
+        return []
+    meta = _local_tag_meta(repo)
+    out: list[dict] = []
+    for p, v in sorted(by_path.items()):
+        # 已被撤回的嵌套模块（tag 还在、目录已删）**不登记**——矩阵说的是
+        # 「现在可按需取用的东西」，登记一个已废弃的模块会让下游装到废弃品
+        # （实测：data/all 已由 data v0.5.0 声明 retract，目录已不存在）。
+        if not (repo_dir(repo, BASE) / p).is_dir():
+            continue
+        item: dict = {"path": p, "latest": v}
+        hv = host_version(repo, f"{p}/{v}", meta)
+        if hv:
+            item["hostVersion"] = hv
+        out.append(item)
+    return out
 
 
 def _normalize_version(raw: str) -> str | None:
