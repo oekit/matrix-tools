@@ -19,6 +19,7 @@ from matrix import (  # noqa: E402
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
+from verify_release_units import check_llms_units, check_section_consistency, check_filesystem_oracle  # noqa: E402
 
 BASE = os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
 BASE = os.path.abspath(BASE)
@@ -366,6 +367,14 @@ try:
     _site_counts = count_units(BASE if os.path.isdir(BASE) else None)
     issues += site_check_counts(site, _site_counts)
     issues += check_llms_coverage(site)
+    # 发版单元全集（根 24 + 嵌套 7 + 伞仓 1 = 32）：verify_site_copy 只管**根模块**条目集合，
+    # 嵌套模块的独立条目与 go get 安装行是另一件事——llms.txt 是 Agent 唯一会抓的
+    # 机器可读索引，嵌套模块（零依赖隔离的载体）不给安装行 = 装不上。
+    if llms.exists():
+        _llms_text = llms.read_text(encoding="utf-8", errors="ignore")
+        issues += check_filesystem_oracle(Path(BASE) if os.path.isdir(BASE) else None)
+        issues += check_llms_units(_llms_text)
+        issues += check_section_consistency(_llms_text)
     if os.path.isdir(BASE):
         issues += check_ghost_roots(Path(BASE), _site_counts)
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",

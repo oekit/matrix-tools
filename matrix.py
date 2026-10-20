@@ -21,6 +21,47 @@ MODULES = [
     "bootstrap", "hertz", "kitex", "workflow", "kitex-examples",
 ]
 
+# 嵌套模块清单（7 个，matrix-tools#37）
+#
+# 嵌套的职责是**依赖隔离**，不是「目录组织」——把重依赖（hertz / kitex / go-redis /
+# 阿里云 Nacos SDK / prometheus+otel）关进子模块，父仓根包保持零第三方依赖。
+# issue #37 的架构裁决：**不给它们换位置**（换独立仓隔离效果完全等价，却要付
+# 「全部 import 变更 + 仓库数 24→32」；合并回父仓不可行——Go 的 import 即依赖，
+# 会毁掉零捆绑定位）。
+#
+# 为什么与 MODULES **分开**：MODULES 决定 versions.json 的 latest/matrixDeps 与
+# 依赖地板统计，扩进去会污染那些口径（裁决明令「不动 MODULES 语义」）。
+# NESTED_MODULES 只影响两件事——**对外计数**与**llms.txt 的可安装条目**。
+#
+# 形状：repo=父仓名 / path=子目录 / module=import 路径 / desc=llms.txt 一行说明。
+# 真相源纪律同 MODULES：这里只声明「有什么」，版本号从 git tag 推导（不手写）。
+NESTED_MODULES = [
+    {"repo": "bootstrap", "path": "nacos", "module": "github.com/oekit/bootstrap/nacos",
+     "desc": "bootstrap 的 Nacos/NNS 服务治理接入——以 BootstrapperOption 注入，父仓保持零 Nacos 依赖（v0.3.0 起注册延迟到 App.Ready 之后）"},
+    {"repo": "bootstrap", "path": "obs", "module": "github.com/oekit/bootstrap/obs",
+     "desc": "bootstrap 的可观测性接入——以 BootstrapperOption 注入 Prometheus 指标（oekit/metrics）与 OpenTelemetry 追踪（oekit/tracing），父仓保持零 prometheus/otel 依赖"},
+    {"repo": "logx", "path": "sink", "module": "github.com/oekit/logx/sink",
+     "desc": "logx 的输出目标实现——Sink 抽象 + MultiSink/FileSink/RotatingSink 三个内置实现，重依赖隔离在此，根包纯 stdlib"},
+    {"repo": "logx", "path": "hlog", "module": "github.com/oekit/logx/hlog",
+     "desc": "基于 Hertz hlog 的 logx.Logger 实现（结构化 kv 降级为字符串拼接，输出格式与 Hertz hlog 对齐）"},
+    {"repo": "logx", "path": "hertzlog", "module": "github.com/oekit/logx/hertzlog",
+     "desc": "Hertz 日志后端桥接——logrus/zap/zerolog/slog 四后端各自实现 hlog.FullLogger（依赖隔离，logx 根包不引三方日志库）"},
+    {"repo": "logx", "path": "kitexlog", "module": "github.com/oekit/logx/kitexlog",
+     "desc": "Kitex 日志后端桥接——把 logx.Logger 适配为 Kitex klog.FullLogger（依赖隔离，logx 根包不引 kitex）"},
+    {"repo": "timertask", "path": "redis", "module": "github.com/oekit/timertask/redis",
+     "desc": "timertask 的 Redis 后端——RedisBackend/ShardManager 与可靠投递，go-redis 隔离在此，根包零 redis 依赖（v0.2.0 起）"},
+]
+
+# 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
+MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
+NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 7 个嵌套模块
+# 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
+# （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
+# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 32）。
+BOM_RELEASE_UNIT = 1
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 32 个 Go module
+# 工作区里的 go.mod 总数 = 32（24 根 + 7 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
+
 ORG = "oekit"
 SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
