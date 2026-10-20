@@ -120,6 +120,14 @@ def check_breaking_index(live: dict):
 ORACLE_WORD_RE = re.compile(r"(?i)breaking|不兼容|破坏性")
 ORACLE_VERHEAD_RE = re.compile(r"^##\s*\[([^\]]+)\]")
 ORACLE_SEMVER_RE = re.compile(r"v\d+\.\d+\.\d+")
+# **已发布**版本头：只有 vX.Y.Z 形态的版本段，其内容才要求进 breakingIndex。
+# `## [Unreleased]`（未发布）的内容**不在**矩阵里——矩阵描述的是已发布的版本线，
+# 未发布的内容进了矩阵反而是**提前剧透**（下游会按一个还不存在的版本去装）。
+# 生成器侧同口径：gen_versions._normalize_version 对 Unreleased 返回 None。
+# 此前 oracle 只在「段标题」分支跳过非 semver，bullet/standalone 分支没跳 →
+# hertz 的 [Unreleased] 段里一条 **BREAKING** 标记被判成「矩阵漏收」，
+# 把全组织的 matrix-tools PR 门禁卡住（2026-10-20 实测）。
+ORACLE_PUBLISHED_RE = re.compile(r"^v\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.\-]+)?$")
 # 归属校验用：**全限定**的 oekit 模块路径 `github.com/oekit/<name>`。
 # 刻意不认裸 `<name>/`——裸形式无法区分「别仓」与「本仓的子包」。
 ORACLE_OWNPATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+)")
@@ -131,16 +139,25 @@ def _oracle_norm(s: str) -> str:
 
 
 def _oracle_markers(text: str) -> list[tuple[str, str, str]]:
-    """扫 CHANGELOG 原文 → [(形态, 版本头, 关键文本)]。独立于解析器。"""
+    """扫 CHANGELOG 原文 → [(形态, 版本头, 关键文本)]。独立于解析器。
+
+    **只收已发布版本段（`## [vX.Y.Z]`）里的标记**——`## [Unreleased]` 的内容
+    尚未发布，矩阵里本来就不该有（与生成器同口径，见 ORACLE_PUBLISHED_RE）。
+    """
     out: list[tuple[str, str, str]] = []
     ver = ""
+    published = False
     for raw in text.splitlines():
         m = ORACLE_VERHEAD_RE.match(raw)
         if m:
             ver = m.group(1).strip()
+            published = bool(ORACLE_PUBLISHED_RE.match(ver))
             continue
         s = raw.strip()
         if not s:
+            continue
+        if not published:
+            # 未发布段（含版本头之前的内容）：不要求进 breakingIndex
             continue
         # (a) `### Breaking` 段标题——该版本应当有对应条目
         if s.startswith("###"):

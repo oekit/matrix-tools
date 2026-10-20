@@ -4,6 +4,20 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.4] — 2026-10-20
+
+### fix(audit)：breakingIndex oracle 不再要求覆盖「未发布」内容
+
+- 现象：audit 报「hertz: CHANGELOG 有破坏性标记但 breakingIndex 未覆盖（bullet，
+  Unreleased）」——但那**不是**矩阵漏收：hertz 的 `## [Unreleased]` 段尚未发布
+  （最新 tag v0.7.1），矩阵描述的是**已发布**版本线，未发布内容进矩阵反而是提前剧透
+- 根因：oracle 的 `_oracle_markers()` 无条件收下所有版本段里的标记，只有「段标题」
+  分支才跳过非 semver 版本头，`bullet` / `standalone` 分支**没跳** → 误报
+- 修法：新增 `ORACLE_PUBLISHED_RE`（只认 `vX.Y.Z`），oracle 只收**已发布版本段**
+  里的标记；生成器侧口径本就正确（`_normalize_version` 对 Unreleased 返回 None）
+- 实测：全矩阵 oracle 标记 33 → 32，**只少 hertz 那 1 条未发布的**，其余覆盖未丢
+- 这条误报会**卡住全组织的 matrix-tools PR 门禁**（PR 模式下 drift≠0 即红）
+
 ## [v0.1.3] — 2026-10-20
 
 ### feat(nested)：嵌套模块加 `hostVersion`——与父仓的版本对应关系（#37 ① 口径落地）
