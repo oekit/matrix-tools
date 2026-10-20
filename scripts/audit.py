@@ -414,6 +414,22 @@ try:
         issues += check_filesystem_oracle(_repos)
         issues += check_llms_units(_llms_text)
         issues += check_section_consistency(_llms_text, _nested_derived)
+        # llms.txt 条目里的**反引号标识符**必须在本仓源码里真实存在——
+        # 实测抓到 hertz 条目写了 kitex 的 WithReadyAddr（照抄得到 undefined）。
+        # 判据只读源码（客观事实），不与被检对象共享任何解析逻辑。
+        # 做**非阻塞提示**：机器判不了「这是不是别仓的 API」，由人确认。
+        try:
+            from llms_api_check import check_llms_api_identifiers  # noqa: E402
+            _api_warn = check_llms_api_identifiers(site, Path(BASE), list(MODULES))
+            if _api_warn:
+                print(f"  ⚠ llms.txt 反引号标识符在本仓源码里不存在（仅提示，不阻塞，"
+                      f"请人工确认是否串味/已移除）：{len(_api_warn)} 条")
+                for _w in _api_warn[:6]:
+                    print(f"      · {_w}")
+                if len(_api_warn) > 6:
+                    print(f"      · …… 另 {len(_api_warn) - 6} 条同类")
+        except Exception as e:  # noqa: BLE001
+            print(f"  ⚠ llms.txt 标识符判据不可用：{e}")
         # oracle C：已发布 versions.json 的 nested 对应关系必须与推导一致
         if _nested_derived:
             _vf = site / "docs" / "public" / "versions.json"
