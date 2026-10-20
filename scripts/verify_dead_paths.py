@@ -43,8 +43,13 @@ URLISH = {"issues", "pull", "pulls", "requests", "blob", "tree", "releases",
           "projects", "security", "graphs", "network", "settings"}
 
 
-def dead_paths(repo: str, base: Path) -> list[tuple[str, str]]:
-    """→ [(死路径, 首次出现的版本)]，只含归属本仓的 org 限定路径。"""
+def dead_paths(repo: str, base: Path | str) -> list[tuple[str, str]]:
+    """→ [(死路径, 首次出现的版本)]，只含归属本仓的 org 限定路径。
+
+    `base` 允许传 str（audit.py 里的 BASE 是 str）——这里统一转 Path，
+    否则 `base / repo` 会 TypeError，audit 直接崩（实测踩到）。
+    """
+    base = Path(base)
     cl = base / repo / "CHANGELOG.md"
     if not cl.is_file():
         return []
