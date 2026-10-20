@@ -10,10 +10,12 @@ checkout/commit/push/开 PR 的波次开销极重（2026-10-19 pkg v0.15.0 波�
   python3 scripts/doc_wave.py --tables --pr --message "口径同步说明"   # 受影响仓逐仓开 PR
   python3 scripts/doc_wave.py --tables --merge-all            # 合并本波次全部 PR（auto 等 CI）
   python3 scripts/doc_wave.py --versions --pr                 # 安装行/当前版本行对齐最新 tag
+  python3 scripts/doc_wave.py --agents --pr                   # AGENTS.md 首行 DESC 行同步到真相源
 
 选项：
   --tables        波次内容 = 各仓 README 矩阵总览表（DESC 变更后跑）
   --versions      波次内容 = README 安装行 + AGENTS 当前版本行（发版后跑）
+  --agents        波次内容 = AGENTS.md 首行的 DESC 行（DESC 变更后跑，与 --tables 并行）
   --repos a,b,c   只处理子集（默认全部受影响仓）
   --branch NAME   分支名（默认 docs/matrix-sync | docs/version-bump）
   --message MSG   提交信息（--pr 必填建议提供，默认给通用文案）
@@ -40,6 +42,8 @@ def parse_args() -> dict:
         cfg["mode"] = "tables"
     if "--versions" in a:
         cfg["mode"] = cfg["mode"] or "versions"
+    if "--agents" in a:
+        cfg["mode"] = cfg["mode"] or "agents"
     if "--pr" in a:
         cfg["action"] = "pr"
     if "--merge-all" in a:
@@ -55,15 +59,23 @@ def parse_args() -> dict:
     if not cfg["mode"]:
         print(__doc__)
         raise SystemExit(2)
-    cfg["branch"] = cfg["branch"] or ("docs/matrix-sync" if cfg["mode"] == "tables" else "docs/version-bump")
+    cfg["branch"] = cfg["branch"] or {
+        "tables": "docs/matrix-sync",
+        "versions": "docs/version-bump",
+        "agents": "docs/agents-sync",
+    }[cfg["mode"]]
     return cfg
 
 
 def affected_repos(mode: str) -> list[str]:
-    """受影响仓：tables=矩阵表过期；versions=版本行落后最新 tag。"""
+    """受影响仓：tables=矩阵表过期；versions=版本行落后最新 tag；
+    agents=AGENTS.md 首行的 DESC 行不是真相源的前缀（陈旧快照）。"""
     if mode == "tables":
         from gen_tables import table_drift
         return [r for r in MODULES if table_drift(repo_dir(r, BASE))]
+    if mode == "agents":
+        from refresh_agents_desc import sync_repo
+        return [r for r in MODULES if sync_repo(r, BASE, write=False)]
     from refresh_versions import sync_repo
     return [r for r in MODULES if sync_repo(r, BASE, write=False)]
 
@@ -72,6 +84,8 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
     mode, branch = cfg["mode"], cfg["branch"]
     msg = cfg["message"] or (
         "docs: 矩阵总览表 DESC 口径同步（matrix-tools doc_wave）" if mode == "tables"
+        else "docs: AGENTS.md 首行 DESC 行同步到矩阵真相源（matrix-tools doc_wave）"
+        if mode == "agents"
         else "docs: 安装行/当前版本行对齐最新 tag（matrix-tools doc_wave）")
     title = msg
     landed, skipped, failed = [], [], []
@@ -88,6 +102,9 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
             if mode == "tables":
                 from gen_tables import apply_table
                 return ["README.md"] if apply_table(repo) else []
+            if mode == "agents":
+                from refresh_agents_desc import sync_repo
+                return sync_repo(repo, BASE, write=True)
             from refresh_versions import sync_repo
             return sync_repo(repo, BASE, write=True)
 
