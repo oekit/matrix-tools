@@ -399,7 +399,46 @@ except FileNotFoundError as e:
 
 # 独立 oracle 放在站点块之外：它验的是「CHANGELOG 原文 ↔ 解析器输出」，
 # 与站点是否发布 versions.json 无关——站点文件缺失时，它照样要盯住解析器盲区。
+def check_dead_paths():
+    """独立门禁：**本仓已消失的路径必须被 breakingIndex 提及**。
+
+    与 check_breaking_oracle 互补：那条问「CHANGELOG 里标了 breaking 的，矩阵收没收」；
+    这条问「下游 import 会断的路径，矩阵告没告」。两者都独立于生成器的措辞判断，
+    但查的是不同的漏——实测（2026-10-20）hertz v0.5.1 / bootstrap v0.5.0 的
+    4 条死路径在 breakingIndex 里一条都没有，而矩阵对下游说「无破坏性变更」。
+    """
+    try:
+        from verify_dead_paths import dead_paths as _dead, covered as _covered  # noqa: 延迟导入
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"dead-paths: 无法加载独立门禁脚本（{e}）")
+        return
+    try:
+        site_dir = repo_dir(SITE_REPO, BASE)
+        data = json.loads((site_dir / "docs" / "public" / "versions.json").read_text(encoding="utf-8"))
+        blobs = {m["module"]: "\n".join(e.get("line", "") for e in (m.get("breakingIndex") or []))
+                 for m in data.get("modules", [])}
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"dead-paths: 读不到站点 versions.json（{e}）")
+        return
+    miss: list[str] = []
+    for repo in MODULES:
+        blob = blobs.get(repo)
+        if blob is None:
+            continue
+        try:
+            if not repo_dir(repo, BASE).is_dir():
+                continue
+        except FileNotFoundError:
+            continue
+        for path, ver in _dead(repo, BASE):
+            if not _covered(path, blob):
+                miss.append(f"{repo}: {path}（{ver}）")
+    check(not miss, "dead-paths: 有死路径未被 breakingIndex 提及（下游 import 会构建失败）："
+                    + "; ".join(miss[:4]))
+
+
 check_breaking_oracle()
+check_dead_paths()
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:

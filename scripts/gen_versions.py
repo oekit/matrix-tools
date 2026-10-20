@@ -100,6 +100,19 @@ E_ACTION_RE = re.compile(
 )
 # 路径归属：条目里出现的 oekit 路径标识。`github.com/oekit/<name>` 或 `<name>/`。
 E_PATH_RE = re.compile(r"github\.com/oekit/([a-z0-9-]+)|(?<![\w/])([a-z0-9-]+)/")
+
+# G 路：org 限定的**完整**路径（本仓的路径消失 → 必是破坏性）。
+# 只认完整限定形式——裸写 `<repo>/<pkg>` 无法判定它指向哪个仓的哪个路径。
+G_OWN_PATH_RE = re.compile(r"github\.com/oekit/([a-z0-9][a-z0-9-]*(?:/[a-z0-9][a-z0-9-]*)*)")
+
+# GitHub 的**页面**路径不是 import 路径——`[#8](https://github.com/oekit/<repo>/issues/8)`
+# 这类 issue 链接若当成包路径，会让「凡是带 issue 链接的条目」全被误判成路径移除
+# （实测：一次性误收 31 条 feat/fix/docs 进来）。
+G_URLISH = {"issues", "pull", "pulls", "requests", "blob", "tree", "releases",
+            "actions", "wiki", "compare", "discussions", "labels", "milestones",
+            "projects", "security", "graphs", "network", "settings"}
+# G2：旧 → 新 的路径映射（箭头是**结构性**标记，与中文措辞无关，比词表稳）
+G_ARROW_RE = re.compile(r"`?([A-Za-z0-9_./-]+)`?\s*(?:→|->)\s*`?([A-Za-z0-9_./-]+)`?")
 # 跟随依赖升级：本仓 API 未变，破坏性归属被依赖仓。
 E_DEP_UPGRADE_RE = re.compile(r"^\**(依赖升级|build|fix\(deps\)|实现细节|docs|注|说明|doc)")
 # 疑似破坏性但机器判不了的信号（仅用于 audit 提示，不进 breakingIndex）
@@ -248,6 +261,89 @@ def _is_break_section(title: str) -> bool:
     return bool(BREAK_SECTION_BANG_RE.search(title))
 
 
+def _resolve_own(repo: str, base: str | None = None, org_qualified: bool = False):
+    """把条目里的路径引用解析成「相对工作区根」的路径，或 None（不是本仓的）。
+
+    org_qualified=True  → `github.com/oekit/<repo>/<rest>`：要求 <repo> 命中本仓，
+                           否则归属别仓（redisx 的 data/data/cache 讲的是 data 仓）。
+    org_qualified=False → 短形式 `<a>/<b>…`：<a> 若是已知仓名且不是本仓 → 归属别仓，
+                           否则视为**本仓的相对路径**（hertz 的 `observability/...`）。
+    """
+    root = Path(base or BASE)
+    if org_qualified:
+        if repo not in MODULES:
+            return None
+        return root / repo
+    return root / repo
+
+
+def _has_dead_own_path(text: str, repo: str, base: str | None = None) -> bool:
+    """G 路：本仓的路径在**当前源码树里已不存在** → 下游 import 直接断 → 必是破坏性。
+
+    E 路靠**动作词表**判「这是路径移除」，但 CHANGELOG 的措辞不受控：
+      · hertz v0.5.1 写「**子包收成一级**」「**适配器扁平化**」「**可观测路径收拢**」
+      · bootstrap v0.5.0 写「**healthz 路径同步**」
+    这些措辞都不在 E_ACTION_RE 里 → 实测 4 条死路径
+    （hertz/hertz/health/redischeck、hertz/observability/tracing/instrumentation/hertzotel
+      与 hertztracer、bootstrap/bootstrap/healthz）**全都没进 breakingIndex**，
+    而下游 import 那些路径会直接构建失败、矩阵却对下游说「无破坏性变更」。
+
+    本路判据是**客观事实**而非措辞，两条：
+      G1 条目里出现**本仓的完整 org 路径**（github.com/oekit/<repo>/…）且该路径已不存在；
+      G2 条目形如 `旧 → 新`，且**新路径解析到本仓后存在、旧路径解析到本仓后不存在**。
+
+    G2 的双向判定是关键：它天然排除了「别仓的路径」与「第三方路径」——
+      · redisx 的 `data/data/cache` → `data/cache`：新路径在 redisx 下不存在 → 跳过（归属 data 仓）
+      · llm 的 `eino/schema` → …：新路径在 llm 下不存在 → 跳过（第三方路径）
+      · hertz 的 `hertz/health` → `health`：新路径在 hertz 下存在、旧的不存在 → 收录 ✓
+
+    方向性也天然自带：迁入的条目引用的是**新**路径（新路径是活的 → 不触发）。
+    """
+    if not repo:
+        return False
+    root = Path(base or BASE)
+
+    # ---- G1：本仓的完整 org 路径已不存在 ----
+    for m in G_OWN_PATH_RE.finditer(text):
+        rel = m.group(1).rstrip("/")
+        if not rel or rel.split("/")[0] != repo:
+            continue          # 归属别仓
+        segs = rel.split("/")
+        if len(segs) >= 2 and segs[1] in G_URLISH:
+            continue          # issue/pull 链接不是 import 路径
+        if not (root / rel).exists():
+            return True
+
+    # ---- G2：旧 → 新 双向判定 ----
+    for old, new in G_ARROW_RE.findall(text):
+        o = old.strip().strip("`").rstrip("/")
+        n = new.strip().strip("`").rstrip("/")
+        if not o or not n:
+            continue
+        if any(s in G_URLISH for s in o.split("/")[1:2]) or any(s in G_URLISH for s in n.split("/")[1:2]):
+            continue          # issue/pull 链接不是 import 路径
+        o_rel, n_rel = _rel_for_arrow(o, repo, root), _rel_for_arrow(n, repo, root)
+        if o_rel is None or n_rel is None:
+            continue
+        if not o_rel.exists() and n_rel.exists():
+            return True
+    return False
+
+
+def _rel_for_arrow(path: str, repo: str, root: Path):
+    """把箭头两侧的路径解析成相对工作区根的 Path；不属本仓则 None。"""
+    if path.startswith("github.com/oekit/"):
+        rest = path[len("github.com/oekit/"):].rstrip("/")
+        if not rest or rest.split("/")[0] != repo:
+            return None          # 归属别仓
+        return root / rest
+    # 短形式：首段若是**别的**仓名 → 归属别仓
+    head = path.split("/", 1)[0]
+    if head in MODULES and head != repo:
+        return None
+    return root / repo / path
+
+
 def _is_path_removal(text: str, repo: str) -> bool:
     """E 路：本仓自身的路径级移除（符号或路径在本仓消失 → 下游 import 断）。
 
@@ -304,7 +400,9 @@ def parse_changelog_breaking(text: str, repo: str = "") -> tuple[list[dict], lis
         if buf:
             line = re.sub(r"\s+", " ", " ".join(s.strip() for s in buf)).strip()
             # 信号 E 在**合并续行后**判定：路径标识常在续行里
-            if cur_version and (keep or _is_path_removal(line, repo)):
+            # G 路在**合并续行后**判定：路径标识常在续行里
+            if cur_version and (keep or _is_path_removal(line, repo)
+                               or _has_dead_own_path(line, repo)):
                 key = (cur_version, line)
                 if key not in seen:
                     seen.add(key)
