@@ -93,3 +93,77 @@ jobs:
         run: |
           echo "::error::矩阵审计发现 ${{ steps.audit.outputs.drift }} 项漂移——本 PR 不能合。详情见上方 audit-report.txt（本地复现：python3 scripts/audit.py --remote-tags）"
           exit 1
+
+  # 消费面承诺巡检：矩阵对外的「按需取用 / 零捆绑 / 嵌套隔离 / 一次拉齐」
+  # 四条承诺，此前只靠人肉抽查过一次。这里每次周巡检都**重新实测**——
+  # 判据是消费方真实模块图（go list -m all），不是任何仓的 go.mod 声明。
+  #
+  # 为什么**不进 PR 门禁**：它测的是各仓**已发布**版本（go get @latest），
+  # PR 里的改动尚未发布，测了也只是测旧状态。PR 门禁仍是上面的 audit。
+  consumer:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+      - name: Clone all matrix repos
+        run: |
+          mkdir -p repos
+          MODS=$(python3 -c "import matrix; print(' '.join(matrix.MODULES))")
+          for m in $MODS; do
+            git clone --quiet "https://github.com/oekit/$m.git" "repos/$m"
+          done
+          git clone --quiet "https://github.com/oekit/oekit.github.io.git" "repos/oekit.github.io"
+          git clone --quiet "https://github.com/oekit/oekit.git" "repos/oekit"
+      - name: 消费面依赖画像 + 隔离承诺核验
+        id: probe
+        env:
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          MATRIX_BASE="$PWD/repos" python3 scripts/consumer_probe.py --base "$PWD/repos" \
+            --json consumer-profile.json | tee consumer-report.txt
+          echo "broken=$(grep -c '❌' consumer-report.txt || true)" >> "$GITHUB_OUTPUT"
+      - name: Upload consumer profile
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: consumer-profile
+          path: consumer-profile.json
+      - name: Open consumer issue
+        if: github.event_name != 'pull_request' && steps.probe.outputs.broken != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const body = '消费面承诺被打破（本地复现：`python3 scripts/consumer_probe.py`）：\n\n```\n'
+              + fs.readFileSync('consumer-report.txt', 'utf8') + '\n```';
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-consumer'
+            });
+            if (issues.length) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: issues[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner: context.repo.owner,
+                repo: context.repo.repo, title: '消费面承诺被打破', body, labels: ['matrix-consumer'] });
+            }
+      - name: Close previous consumer issue
+        if: github.event_name != 'pull_request' && steps.probe.outputs.broken == '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const issues = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner, repo: context.repo.repo,
+              state: 'open', labels: 'matrix-consumer'
+            });
+            for (const i of issues) {
+              await github.rest.issues.update({ owner: context.repo.owner,
+                repo: context.repo.repo, issue_number: i.number, state: 'closed' });
+            }
