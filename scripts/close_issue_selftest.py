@@ -7,7 +7,7 @@
 于是每轮都打印「✓ 已回执并关闭」——**回执一条都没落**。
 
 自测用一个假 `gh` 复刻真实 gh 的这个行为：
-  - `gh issue view --json state`      → closed
+  - `gh issue view --json state`      → **CLOSED**（真实 gh 的取值是**大写**）
   - `gh issue view --json comments`   → 假 gh 记录里的评论
   - `gh issue close --comment <body>` → **什么都不做**（复刻真实 gh 的静默失败）
   - `gh issue comment <body>`         → 真的记一条评论
@@ -15,6 +15,12 @@
 判据：跑 close_issue.py 后，**记录里必须真的有评论**且退出码为 0。
 反证：把「已关闭 → 改走 gh issue comment」这段回退成旧写法（只调 close），
 本自测必然失败（记录为空 ⇒ 脚本判「回执未落地」⇒ 非 0 退出）。
+
+**假 gh 的 state 取值必须用真实 gh 的形态（2026-10-21 实测踩坑）**：真实
+`gh issue view --json state --jq .state` 返回**大写** `CLOSED` / `OPEN`。
+自测最初把 fixture 写成小写 `closed`，于是脚本里的大小写敏感比较在自测里
+「通过」、在真实调用里**永远走不到已关闭分支** ⇒ 回执再次静默丢失。
+⇒ fixture 用真实取值，且另加一条小写容错用例。
 
 用法：python3 scripts/close_issue_selftest.py
 """
@@ -99,22 +105,31 @@ def main() -> None:
         tmp = Path(td)
 
         # 用例 1：issue 已被 PR 的 Closes 自动关闭 ⇒ 必须补发回执（评论真的落地）
-        rc, recorded, out = run_case(tmp, "closed", "1")
+        # state 用**真实 gh 的取值（大写 CLOSED）**——fixture 形态不对，
+        # 自测就会在「假的取值」上通过、在真实调用上失效。
+        rc, recorded, out = run_case(tmp, "CLOSED", "1")
         if rc != 0:
             failures.append(f"用例1 期望退出码 0，实得 {rc}：{out.strip()[:200]}")
         if "v0.19.0" not in recorded:
             failures.append("用例1 回执未落地：假 gh 没收到 gh issue comment 调用")
 
+        # 用例 1b：小写 state 也要认（大小写容错）
+        rc1b, recorded1b, out1b = run_case(tmp, "closed", "1")
+        if rc1b != 0:
+            failures.append(f"用例1b 期望退出码 0，实得 {rc1b}：{out1b.strip()[:200]}")
+        if "v0.19.0" not in recorded1b:
+            failures.append("用例1b 回执未落地：小写 state 未被识别为已关闭")
+
         # 用例 2：issue 未关闭 ⇒ 走 close+comment；此时假 gh 的 close 不贴评论，
         # 但脚本必须**判定回执未落地并失败**（而不是假绿）
-        rc2, recorded2, out2 = run_case(tmp, "open", "1")
+        rc2, recorded2, out2 = run_case(tmp, "OPEN", "1")
         if rc2 == 0:
             failures.append("用例2 期望非 0 退出（回执未落地必须报错），实得 0")
         if "回执未落地" not in out2:
             failures.append(f"用例2 期望报「回执未落地」，实得：{out2.strip()[:200]}")
 
         # 用例 3：评论命令「成功」但没落地 ⇒ 同样必须失败（判据不信退出码）
-        rc3, recorded3, out3 = run_case(tmp, "closed", "0")
+        rc3, recorded3, out3 = run_case(tmp, "CLOSED", "0")
         if rc3 == 0:
             failures.append("用例3 期望非 0 退出（回执未落地必须报错），实得 0")
         if "回执未落地" not in out3:
