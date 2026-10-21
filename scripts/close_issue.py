@@ -26,6 +26,28 @@ def tag_on_remote(repo_dir_path: Path, tag: str) -> bool:
     return bool(r.stdout.strip())
 
 
+def issue_state(repo: str, num: str) -> str:
+    """读 issue 当前状态（closed / open）；读不到返回空串。"""
+    r = subprocess.run(["gh", "issue", "view", num, "--repo", f"{ORG}/{repo}",
+                        "--json", "state", "--jq", ".state"],
+                       capture_output=True, text=True)
+    return r.stdout.strip() if r.returncode == 0 else ""
+
+
+def receipt_posted(repo: str, num: str, tag: str) -> bool:
+    """回执是否**真的**落在 issue 上。
+
+    判据取「issue 上存在提到该 tag 的评论」，不取「命令返回成功」——
+    `gh issue close --comment` 对**已关闭**的 issue 会打印「already closed」
+    并以 **0 退出**，评论根本不会发（实测 2026-10-21：PR 正文带 Closes #N
+    会在合入时自动关单，随后回执静默丢失，而脚本仍打印「已回执并关闭」）。
+    """
+    r = subprocess.run(["gh", "issue", "view", num, "--repo", f"{ORG}/{repo}",
+                        "--json", "comments", "--jq", "[.comments[].body] | join(\"\\n\")"],
+                       capture_output=True, text=True)
+    return r.returncode == 0 and tag in r.stdout
+
+
 def main() -> None:
     args = sys.argv[1:]
     dry = "--dry-run" in args
@@ -62,11 +84,32 @@ def main() -> None:
     if dry:
         print(f"--- 将发布评论并关闭 oekit/{repo}#{num} ---\n{body}")
         return
-    r = subprocess.run(["gh", "issue", "close", num, "--repo", f"{ORG}/{repo}",
-                        "--comment", body], capture_output=True, text=True)
+
+    # issue 往往已被 PR 正文的 "Closes #N" 在合入时**自动关闭**。此时
+    # `gh issue close --comment` 会打印「already closed」并以 0 退出，**评论不会发**。
+    # ⇒ 已关闭走 `gh issue comment` 单独补回执；未关闭才走 close+comment。
+    state = issue_state(repo, num)
+    if state == "closed":
+        r = subprocess.run(["gh", "issue", "comment", num, "--repo", f"{ORG}/{repo}",
+                            "--body", body], capture_output=True, text=True)
+        action = "回执"
+    else:
+        r = subprocess.run(["gh", "issue", "close", num, "--repo", f"{ORG}/{repo}",
+                            "--comment", body], capture_output=True, text=True)
+        action = "回执并关闭"
     if r.returncode != 0:
         raise SystemExit(f"关单失败：{(r.stderr or r.stdout).strip()[:300]}")
-    print(f"✓ oekit/{repo}#{num} 已回执并关闭（{tag}）")
+
+    # 复核：**回执真的落地**才算数（命令返回成功 ≠ 回执已发）。
+    if not receipt_posted(repo, num, tag):
+        raise SystemExit(
+            f"回执未落地：oekit/{repo}#{num} 上找不到 {tag} 的回执评论——"
+            "命令返回成功不等于回执已发（gh issue close 对已关闭 issue 返回 0 却不贴评论）")
+    if state != "closed":
+        after = issue_state(repo, num)
+        if after != "closed":
+            raise SystemExit(f"关单未生效：oekit/{repo}#{num} 状态仍为 {after!r}")
+    print(f"✓ oekit/{repo}#{num} 已{action}（{tag}）")
 
 
 if __name__ == "__main__":

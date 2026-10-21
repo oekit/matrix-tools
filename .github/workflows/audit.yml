@@ -25,6 +25,25 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # 脚本自测：判据脚本自己先得能证明「它抓得住自己要防的东西」。
+  #
+  # 为什么单开一个 job（而不是并进 audit）：audit 测的是**矩阵**有没有漂移，
+  # 这里测的是**脚本自己的判据**是否有效——两者互不依赖，混在一起会让其中一个
+  # 挂了看不出来是谁的问题。
+  #
+  # 共享的 python-ci.yml 刻意不执行脚本本体（有些脚本缺 --help 会直接跑真实
+  # 动作），所以自测放在本仓 workflow 里跑；close_issue 的自测用假 gh + 临时
+  # 目录，**无副作用、不联网、不依赖工作区布局**。
+  selftest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: close_issue 自测（回执必须真落地，不能假绿）
+        run: python3 scripts/close_issue_selftest.py
+
   audit:
     runs-on: ubuntu-latest
     steps:
