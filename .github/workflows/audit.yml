@@ -135,6 +135,30 @@ jobs:
         with:
           name: consumer-profile
           path: consumer-profile.json
+      - name: 画像写回站点（数据变了才开 PR）
+        # 产物 PR 纪律：生成器在 matrix-tools，产物在站点仓——由巡检**开 PR**，
+        # 不直接推 main。时间戳不计入差异，否则每周都会开一个内容无变化的 PR。
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          cd repos/oekit.github.io
+          if python3 ../../scripts/gen_deps_doc.py --profile ../../consumer-profile.json --site . --check; then
+            echo "画像与站点现状一致，无需改动"
+            exit 0
+          fi
+          python3 ../../scripts/gen_deps_doc.py --profile ../../consumer-profile.json --site . \
+            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git config user.name "oekit-bot"
+          git config user.email "bot@oekit.github.io"
+          git checkout -B chore/deps-profile
+          git add docs/public/deps.json docs/guide/getting-started.md
+          git commit -m "chore(site): 刷新消费面依赖画像（consumer_probe 实测）"
+          git push --force origin chore/deps-profile
+          gh pr create --repo oekit/oekit.github.io --head chore/deps-profile \
+            --title "chore(site): 刷新消费面依赖画像（consumer_probe 实测）" \
+            --body "由 matrix-tools 的周巡检（audit.yml 的 consumer job）自动生成：每个发版单元的消费方模块图规模与第三方依赖数。数据变了才开 PR（时间戳不计入差异）。" || true
       - name: Open consumer issue
         if: github.event_name != 'pull_request' && steps.probe.outputs.broken != '0'
         uses: actions/github-script@v9
