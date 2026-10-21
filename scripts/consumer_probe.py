@@ -124,22 +124,50 @@ def _paths(res: dict) -> set[str]:
     return {str(x).split()[0] for x in raw if str(x).strip()}
 
 
+def _source_imports(repo_dir: Path) -> set[str]:
+    """仓内所有 Go 源码 import 到的第三方路径（**排除嵌套模块目录**——它们是独立 module）。"""
+    out: set[str] = set()
+    if not repo_dir.is_dir():
+        return out
+    for p in sorted(repo_dir.rglob("*.go")):
+        rel = p.relative_to(repo_dir)
+        if len(rel.parts) > 1 and (repo_dir / rel.parts[0] / "go.mod").is_file():
+            continue  # 嵌套模块：不算父仓的依赖
+        try:
+            body = p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        out |= set(re.findall(r'"([a-z0-9.\-]+\.[a-z]+/[^"]+)"', body))
+    return out
+
+
 def check_parent_isolation(child_unit: str, parent_res: dict, base: str) -> list[str]:
-    """父←子隔离：父仓的消费方模块图里不得出现子仓扛的重依赖。"""
+    """父←子隔离：父仓的 go.mod 不得**直接** require 子仓扛的重依赖。
+
+    判据的归因很关键（第一版写错过）：父仓**不依赖**子仓（隔离的方向就是父←子），
+    所以父仓消费方模块图里出现的任何库，**都不可能是子仓拖进来的**——它要么来自
+    父仓自己的依赖，要么来自父仓依赖的传递闭包。
+
+    因此唯一能判定的违例是：**父仓的 go.mod 里直接列着子仓的重依赖**（拆分没做干净
+    ——父仓仍然 require 着子仓 isolate 的那份），且**父仓自己的源码并不 import 它**
+    （否则是父仓自己 legitimate 的用法）。
+
+    踩过的坑：registry/nacos 用 yaml.v3，而 registry 的消费方图里也有 yaml.v3
+    （经 core 进来）——第一版判据把"图里有"当成"子仓拖的"，报了一条假阳性。
+    """
     if not parent_res.get("ok"):
         return []
     heavy = child_heavy_deps(child_unit, base)
     if not heavy:
         return []
-    paths = _paths(parent_res)
     parent = child_unit.split("/")[0]
-    hit: list[str] = []
-    for h in heavy:
-        if any(p == h or p.startswith(h + "/") for p in paths):
-            hit.append(h)
-    if hit:
-        return [f"{parent}: 消费方模块图里出现了 {child_unit} 扛的重依赖 {hit}"
-                f"——只 import 父仓的消费者被连带拖入，嵌套模块的隔离职责失效"]
+    parent_dir = Path(base) / parent
+    parent_direct = set(_direct_third_party(parent_dir / "go.mod"))
+    parent_imports = _source_imports(parent_dir)
+    leak = sorted(h for h in heavy if h in parent_direct and h not in parent_imports)
+    if leak:
+        return [f"{parent}: go.mod 仍直接 require 子模块 {child_unit} 扛的重依赖 {leak}"
+                f"（且本仓源码并未 import 它们）——拆分没做干净，父仓仍在替子模块背依赖"]
     return []
 
 
@@ -234,19 +262,19 @@ def _selftest() -> int:
 
     样本要**真的**带被防的形态——否则自测会假通过。
     """
-    # ① 父仓被连带拖入子仓的重依赖 → 必须报
-    r = {"ok": True, "paths": ["github.com/oekit/bootstrap", "github.com/nacos-group/nacos-sdk-go/v2"],
+    # ① 父仓的 go.mod 仍直接 require 子仓的重依赖 → 必须报
+    r = {"ok": True, "paths": ["github.com/oekit/bootstrap"],
          "third_party": [], "own": [], "error": ""}
     p = check_parent_isolation("bootstrap/nacos", r, "/nonexistent")
     # base 不存在 → 拿不到子仓重依赖 → 不报（此时判据无结论，不是通过）
     assert not p, f"无子仓清单时不应下结论：{p}"
-    p2 = check_parent_isolation("bootstrap/nacos", r, _fixture_base())
+    p2 = check_parent_isolation("bootstrap/nacos", r, _fixture_base(leak=True))
     assert any("扛的重依赖" in x for x in p2), f"应报出父←子泄漏：{p2}"
 
-    # ② 父仓干净 → 不报
-    r2 = {"ok": True, "paths": ["github.com/oekit/bootstrap", "github.com/cloudwego/hertz"],
-          "third_party": [], "own": [], "error": ""}
-    assert not check_parent_isolation("bootstrap/nacos", r2, _fixture_base()), "干净样本不该报"
+    # ② 父仓的 go.mod 干净（没替子模块背依赖）→ 不报
+    r2 = {"ok": True, "paths": ["github.com/oekit/bootstrap"], "third_party": [], "own": [], "error": ""}
+    assert not check_parent_isolation("bootstrap/nacos", r2, _fixture_base(leak=False)), \
+        "父仓没 require 子仓的重依赖时不该报"
 
     # ③ 兄弟单元被拖进来 → 必须报；干净 → 不报
     r3 = {"ok": True, "paths": ["github.com/oekit/bootstrap/nacos", "github.com/oekit/bootstrap/obs"],
@@ -286,8 +314,12 @@ def _selftest() -> int:
     return 0
 
 
-def _fixture_base() -> str:
-    """造一个临时的「子仓 go.mod」夹具，让父←子判据有子仓清单可用。"""
+def _fixture_base(leak: bool = True) -> str:
+    """造夹具：子仓 go.mod 带重依赖；父仓 go.mod 是否也带（leak=True = 拆分没做干净）。
+
+    父仓的源码**不** import 那个重依赖——所以「父仓 require 了它」就是实打实的
+    泄漏（父仓在替子模块背依赖）。
+    """
     import atexit
     d = Path(tempfile.mkdtemp(prefix="probe_fixture_"))
     atexit.register(shutil.rmtree, d, True)
@@ -295,6 +327,12 @@ def _fixture_base() -> str:
     (d / "bootstrap" / "nacos" / "go.mod").write_text(
         "module github.com/oekit/bootstrap/nacos\n\ngo 1.24\n\n"
         "require github.com/nacos-group/nacos-sdk-go/v2 v2.3.0\n")
+    parent = "module github.com/oekit/bootstrap\n\ngo 1.24\n\n"
+    if leak:
+        parent += "require github.com/nacos-group/nacos-sdk-go/v2 v2.3.0\n"
+    (d / "bootstrap" / "go.mod").write_text(parent)
+    (d / "bootstrap" / "app.go").write_text(
+        "package bootstrap\n\n// 父仓自己不用 nacos-sdk\n")
     return str(d)
 
 
