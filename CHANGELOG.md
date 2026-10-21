@@ -4,6 +4,25 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.5] — 2026-10-21
+
+### fix(close_issue)：回执必须真落地——已关闭 issue 走 comment 补发，判据不信退出码
+
+- 现象：issue 往往已被 PR 正文的 `Closes #N` 在合入时**自动关闭**；随后
+  `gh issue close --comment` 对已关闭 issue 只打印「! Issue ... is already closed」
+  并**以 0 退出**，评论**根本不会发**——而旧脚本只看退出码，于是每轮都打印
+  「✓ 已回执并关闭」，**回执一条都没落**（本轮 3 个 issue 的回执全丢，已手工补发）
+- 修法：先读 issue 状态——已关闭走 `gh issue comment` 单独补回执，未关闭才走
+  close+comment；收尾**复核**回执真的落在 issue 上（存在提到该 tag 的评论），
+  否则判红；关单同样复核状态确实变成 closed
+- 判据是「回执真的落地」，不是「命令返回成功」——这是本条与旧实现的根本差别
+- 自测：`scripts/close_issue_selftest.py`（带反证）——用假 gh 复刻真实 gh 的静默
+  失败，断言①已关闭 issue 也会补发回执 ②回执未落地时判红不假绿；反证已验：
+  把「已关闭 → 改走 `gh issue comment`」回退成旧写法，自测必失败
+- 接线：并入 `.github/workflows/audit.yml` 的 `selftest` job（pull_request 触发）——
+  共享的 `python-ci.yml` 刻意不执行脚本本体，自测放本仓 workflow 才算数；
+  不接线的话这就是一条「没人跑的承诺」
+
 ## [v0.1.4] — 2026-10-20
 
 ### fix(audit)：breakingIndex oracle 不再要求覆盖「未发布」内容
