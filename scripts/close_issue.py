@@ -27,11 +27,20 @@ def tag_on_remote(repo_dir_path: Path, tag: str) -> bool:
 
 
 def issue_state(repo: str, num: str) -> str:
-    """读 issue 当前状态（closed / open）；读不到返回空串。"""
+    """读 issue 当前状态（closed / open）；读不到返回空串。
+
+    **归一化成小写**：真实 `gh issue view --json state --jq .state` 返回的是
+    **大写**（CLOSED / OPEN）。大小写敏感的比较会让「已关闭 ⇒ 改走
+    gh issue comment」这条分支**永远走不到**——于是脚本对自动关闭的 issue
+    一律调 `gh issue close --comment`，而真实 gh 对已关闭 issue 静默不贴评论
+    （打印 already closed、退出 0）⇒ 回执再次丢失（2026-10-21 实测：
+    上一轮的修复只补了「回执没落地要判红」，没补「大小写」，
+    于是判据抓到了丢失、投递路径却仍是坏的）。
+    """
     r = subprocess.run(["gh", "issue", "view", num, "--repo", f"{ORG}/{repo}",
                         "--json", "state", "--jq", ".state"],
                        capture_output=True, text=True)
-    return r.stdout.strip() if r.returncode == 0 else ""
+    return r.stdout.strip().lower() if r.returncode == 0 else ""
 
 
 def receipt_posted(repo: str, num: str, tag: str) -> bool:
