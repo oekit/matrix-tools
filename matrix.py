@@ -50,17 +50,21 @@ NESTED_MODULES = [
      "desc": "Kitex 日志后端桥接——把 logx.Logger 适配为 Kitex klog.FullLogger（依赖隔离，logx 根包不引 kitex）"},
     {"repo": "timertask", "path": "redis", "module": "github.com/oekit/timertask/redis",
      "desc": "timertask 的 Redis 后端——RedisBackend/ShardManager 与可靠投递，go-redis 隔离在此，根包零 redis 依赖（v0.2.0 起）"},
+    {"repo": "registry", "path": "nacosimpl", "module": "github.com/oekit/registry/nacosimpl",
+     "desc": "Nacos SPI 实现——Discoverer/ConfigStore/Registrar 基于 nacos-sdk-go v2（nacos-sdk 重依赖隔离在此，registry 根仓零 nacos-sdk）"},
+    {"repo": "registry", "path": "nacos", "module": "github.com/oekit/registry/nacos",
+     "desc": "Nacos 客户端门面——Bootstrap 配置、client 工厂与 config 加载（实现 core/config.ConfigSource，配 ConfigWatcher 热更新）"},
 ]
 
 # 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
 MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
-NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 7 个嵌套模块
+NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 9 个嵌套模块
 # 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
 # （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
-# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 32）。
+# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 34）。
 BOM_RELEASE_UNIT = 1
-GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 32 个 Go module
-# 工作区里的 go.mod 总数 = 32（24 根 + 7 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 34 个 Go module
+# 工作区里的 go.mod 总数 = 34（24 根 + 9 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
 
 ORG = "oekit"
 SITE_REPO = "oekit.github.io"
@@ -92,7 +96,7 @@ DESC = {
     "core": "应用基建件——governance 治理 schema、config 配置加载（LoadBootstrap/LoadDotEnv/Get* 系、default/env/range/options tag 校验、OverlaySource 多源叠加热更、ApplyEnvOverlay env 优先 12-factor 形态）、transport 协议无关传输上下文（Transporter/Header/Server·Client ctx 存取，仅标准库）、chain 中间件链（Handler/Middleware/Chain/Recovery/Timeout，与 nns-endpoint.Endpoint 同形）、lifecycle 契约 + Manager 优雅关停（自 logx/shutdown 迁入，日志 *slog.Logger——core 不再依赖 logx）、network IP 工具、version；v0.9.0 起 config FieldSet 显式提供集合（yaml 显式 port:0 不再被 default/env 覆盖——LoadBootstrap 默认接线，免全量指针化）+ require tag（必须 yaml/env 提供，缺失列全并附 env 提示）+ v0.9.1 修 yaml:,inline 字段在 FieldSet 下漏标记（inline 叶子显式零值曾被 default 覆盖）；v0.9.2 env 卫生改纯静态（仅格式/重名，移除依赖进程环境的拼写冒烟检查——误报 PATH/HOME、漏无人设置的真拼错，core#8），命名一致性走 LintEnvNaming 诊断 / WithEnvNamingLint 可选 fail-closed / ignorederived=\"true\" 豁免；v0.10.0 起 config **严格模式**——`LoadBootstrap[T](envFlag string, opts ...LoadOption)` 传 `config.WithStrict()` 开启：未知键**拒载**（不再静默忽略），错误带**嵌套路径** + **该层合法键清单** + **近似拼写建议**（`UnknownKeyError`）；默认行为不变，严格模式显式开启；v0.11.0 起 config 加载入口按来源拆开——`LoadFile`（**任意路径**：CLI -config 路径、容器内固定挂载位）+ `Unmarshal`（**字节源**：API 下发 / 模板渲染 / 测试夹具），与 `LoadBootstrap`（etc/ 约定）共享**同一条解码线**，因此严格模式诊断面（嵌套路径 / 合法键清单 / 拼写建议）**与来源无关**；`LoadBootstrap` 行为与错误文案逐字不变",
     "metrics": "Prometheus 门面 + 弹性指标族",
     "tracing": "OpenTelemetry 追踪 + trace_id 真相源（v0.3.0 起 OTLP 双协议导出：gRPC 缺省 / HTTP，Config.Protocol + Headers，切换协议不丢传播器/指标/旧 provider 关闭）",
-    "registry": "注册发现核心 + Nacos 实现 + Nacos 配置源 + sdbridge",
+    "registry": "注册发现核心（provider 无关 SPI：Registrar/Discoverer/Subscriber/ConfigStore + 实例模型 + netutil）+ sdbridge + registrymocks——**根仓零第三方依赖**；Nacos 实现与 Nacos 配置源已拆成嵌套模块（v0.5.0 起：registry/nacosimpl、registry/nacos——nacos-sdk-go 重依赖隔离在此，实测单独引入即拖 63 个第三方模块，不隔离时只要 SPI 接口的消费方也会被连带拖入）",
     "timertask": "分片定时任务（FNV-1a、心跳续约）；v0.1.5 起可选可靠投递 DeliveryAtLeastOnce（租约 + Ack + 可见性超时；过期租约回扫重投/死信、停机 best-effort 收租，v0.1.7 接入生命周期真正生效）；v0.2.0 起 **Redis 后端迁至嵌套模块 timertask/redis**（根包不再引 go-redis/logx/concurrency，require 仅 pkg——import timertask 与 import timertask/local 的模块依赖面均无 redis，纯 stdlib 嵌入式场景可用）+ **新增 local 子包 cron 调度器 Scheduler**（表达式复用 pkg/timex/cron 不另写一份；并发度/CatchUp 补跑/退出语义明确，FakeClock 假时钟驱动、触发点序列可确定性断言）",
     "data": "数据访问门面——复刻 ekit data/ 能力面：cache/rediscache/crud/distlock/gormx/redisx/timertask/cachetest 八子包 re-export（类型同一，实现住 pkg 与各子仓）+ cached 缓存读写编排（写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量点读 MGet 快路径/bloom 防穿透）+ twolevel 两级缓存与跨实例失效广播（v0.7.0 起本仓唯二非 re-export 实现）；v0.15.0 起壳跟随源仓演进——cache 壳补 LocalCache 可选形状（EvictPolicy/Sweeper/HitGetter）、cachetest 壳补 5 个契约套件入口（套件 8 → 13 场景）、timertask 壳的 Redis 形态随源仓 v0.2.0 迁至嵌套模块 timertask/redis（壳不再转发 RedisBackend/ShardManager，Redis 形态直接依赖该嵌套模块）；all/ 聚合模块已废弃 retract",
     "gormx": "SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名）",
