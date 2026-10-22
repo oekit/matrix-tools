@@ -4,6 +4,65 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.9] — 2026-10-22
+
+### fix(tools)：读到空 ≠ 事实为空——GitHub 偶发返回空集合，导致 audit 假漂移与 PR 被误关
+
+2026-10-22 巡检实测：**GitHub API 会间歇性返回空集合**（20~30% 的请求）——
+不是限速、不是权限、不是客户端解析错，服务端这一次就返回了空：
+
+- `GET /repos/{o}/{r}/releases` ⇒ 实测 10 次里 2 次返回 `200` + `[]`（5 字节）；
+  **同一 URL 用 curl 带 token 直连同样复现** ⇒ 排除 gh 客户端与本地网络；
+- `POST /graphql`（ProjectV2 items）⇒ 实测 10 次里 2 次返回 `totalCount=0, nodes=[]`；
+- `gh api --paginate ... --jq '.[].tag_name'` ⇒ 读到 `[]` ⇒ jq 过滤后**零行输出**
+  ⇒ 调用方看到的就是「exit 0 + 空输出」。
+
+「读到空」被当成「事实为空」，三处都会得出**完全相反**的结论：
+
+- **audit 报假漂移**：旧 `existing_releases` 把空当成「一个 Release 都没有」
+  ⇒ 实测 11 个仓被报「N 个 tag 缺 Release」，而逐仓用可靠路径复核的真实 parity 是
+  **24/24 全绿**（每个仓 tags == releases，missing 全空）；
+- **PR 被当成 issue 关掉**：`target_is_pr` 读空 ⇒ JSON 解析失败 ⇒ 判成「不是 PR」
+  ⇒ 对**未合入**的 PR 调 `gh issue close`——v0.1.8 刚修掉的坑从这条缝复活；
+- **分支保护被当成没有**：`current_protection` 读空 ⇒ 也返回 None
+  ⇒ 把「读不到现状」当成「这仓没有保护」⇒ 按错误现状去改配置。
+
+#### 新增 `scripts/ghsafe.py`：远端读取层
+
+- **命令非零** 与 **正文为空/不可解析** 分开表达（`GhCommandError` / `GhReadError`）
+  ——调用方不能再一起 `except` 成「没有」；
+- **空结果不采信**：要读到空得**连续 4 轮都是空**才认，中途任何一轮拿到非空就立刻返回；
+- **读不到就报错**，不猜：宁可脚本失败，也不把「读不到」当成「没有」。
+
+#### 配套改动
+
+- `gen_releases.existing_releases` ⇒ 空则**换条独立路径重读**（GraphQL ↔ REST 交叉验证），
+  连续 4 轮都空才认「事实为空」——真没建过 Release 的仓仍会被**如实报成真漂移**
+  （不能因为修假红而漏真红）；
+- `gen_releases._has_token` ⇒ 改用 `gh auth status` 判认证：旧实现只看 env 变量，
+  看不见「gh 已登录（keyring / hosts.yml）」这种常态 ⇒ 本机明明有认证却被当匿名，
+  于是走了最容易抖的 REST 路径，而实测 10/10 稳定的 GraphQL 路径没被用上；
+- `close_issue.target_is_pr` ⇒ 读不到就**中止**（绝不当成「不是 PR」）；
+- `pr_flow.current_protection` ⇒ 404 才当「无保护」，读不到就显式失败。
+
+#### 自测与变异测试
+
+新增 `scripts/ghsafe_selftest.py`（假 gh；12 组用例 + 3 条重试次数断言），
+已接进 `audit.yml` 的 selftest job。假 gh 复刻真实故障的三种形态：
+「前 N 次 exit 0 + 空正文、之后才有数据」「永远空」「命令失败（403/404）」。
+
+变异测试（红在**断言**层而非编译/导入层）：
+
+- `gh_json` 的空正文退回旧语义（直接返回 `{}`）⇒ A/B/H 转红，
+  其中 H 红在 `IS_ISSUE`（正是「PR 被当 issue 关掉」那个面）→ 12/15；
+- `existing_releases` 退回「读一次，空就是空」⇒ E/F 的重试次数断言转红 → 11/15；
+- 还原 ⇒ 15/15（exit 0）。
+
+#### 效果
+
+`python3 scripts/audit.py` ⇒ **✓ 矩阵审计通过（24 模块 + 站点）**（exit 0），
+与逐仓复核的真实 parity（24/24）一致；假漂移 11 项消失。
+
 ## [v0.1.8] — 2026-10-22
 
 ### fix(tools)：回执链三个硬缺陷——无发布的改动没有回执通道、PR 被当成 issue 去 close、重跑重复发
