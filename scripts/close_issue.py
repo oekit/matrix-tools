@@ -43,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from matrix import ORG, repo_dir  # noqa: E402
+import ghsafe  # noqa: E402
 
 
 def tag_on_remote(repo_dir_path: Path, tag: str) -> bool:
@@ -124,16 +125,27 @@ def target_is_pr(repo: str, num: str) -> bool:
     ① 脚本走 `gh issue close` 想把 PR 关掉 ⇒ 对**未合入**的 PR 就是「不合并直接关闭」；
     ② 关单后校验 `state == "closed"` 永远不成立 ⇒ 脚本必然判红。
     ⇒ 认 PR 就**只发回执、绝不 close**（合入才是 PR 的「关闭」）。
+
+    **为什么不能把「读不到」当成「不是 PR」**（2026-10-22 实测）：
+    GitHub API 会**间歇性返回空集合**（`GET /repos/{o}/{r}/issues/{n}` 偶发返回
+    `{}` / 空正文，curl 直连同样可复现）⇒ 旧实现 JSON 解析失败就 `return False`
+    ⇒ 判成「这是 issue」⇒ 对未合入的 PR 调 `gh issue close`
+    ⇒ v0.1.8 刚修掉的坑**从这条缝里复活**。
+    ⇒ 现在的口径：读不到就**报错中止**（宁可脚本失败，也不能把 PR 当 issue 关掉）；
+    「是不是 PR」仍以 REST 返回体里的 `pull_request` 字段为准（PR 的该字段必在）。
     """
-    r = subprocess.run(["gh", "api", f"repos/{ORG}/{repo}/issues/{num}"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return False
     try:
-        data = json.loads(r.stdout)
-    except json.JSONDecodeError:
-        return False
-    return bool(data.get("pull_request"))
+        data = ghsafe.gh_json(["api", f"repos/{ORG}/{repo}/issues/{num}"])
+    except ghsafe.GhCommandError as e:
+        if e.is_not_found:
+            return False          # 编号不存在 ⇒ 既不是 issue 也不是 PR
+        raise SystemExit(f"{repo}#{num}: 读取 issue 元数据失败：{e}")
+    except ghsafe.GhReadError as e:
+        raise SystemExit(
+            f"{repo}#{num}: 读取 issue 元数据失败（{e}）——"
+            "远端偶发返回空内容时不能把它当成「不是 PR」，"
+            "否则会对未合入的 PR 执行 gh issue close。脚本中止。")
+    return bool(isinstance(data, dict) and data.get("pull_request"))
 
 
 def pr_lines(meta: dict) -> list[str]:

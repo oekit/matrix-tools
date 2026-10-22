@@ -45,6 +45,8 @@ jobs:
         run: python3 scripts/close_issue_selftest.py
       - name: dependabot 目录门禁自测（残留条目必须抓得到，且非 gomod 生态不误报）
         run: python3 scripts/dependabot_dirs_selftest.py
+      - name: ghsafe 读取层自测（读到空 ≠ 事实为空，不能假红也不能假绿）
+        run: python3 scripts/ghsafe_selftest.py
 
   audit:
     runs-on: ubuntu-latest
