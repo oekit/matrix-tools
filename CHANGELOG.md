@@ -4,6 +4,38 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.7] — 2026-10-22
+
+### feat(audit)：dependabot 目录存在性门禁——已 retract 的嵌套模块残留条目会让 dependabot 每周必失败
+
+- 判据：各仓 `.github/dependabot.yml` 里 **gomod ecosystem** 的 `directory:` 条目，
+  指向的目录必须**存在**且含 `go.mod`；两种失败分开报（目录不存在 = 残留登记该删 /
+  目录在但无 go.mod = 路径写错该改）
+- 背景见 [oekit/data#39](https://github.com/oekit/data/issues/39)：`all/` 聚合嵌套
+  模块在 v0.5.0 门面化时已 retract 并删目录，但 dependabot.yml 里的 `directory: /all`
+  残留登记让该条 job **每周必失败**（`dependency_file_not_found: No go.mod files found`）
+  且**不会自愈**——它不报 build 错（不在 go 编译链路上），只在 dependabot 自己的
+  run 里红，且每周一次
+- 判据抽到 `scripts/dependabot_dirs.py`（单一事实源，行解析而非 yaml 库——CI 的
+  python 环境是裸装的，不该为这一个门禁引入 pyyaml 依赖），配
+  `scripts/dependabot_dirs_selftest.py` 自测并挂进 `audit.yml` 的 selftest job
+- 自测用**变异测试**证明自身有效：分别掐掉「gomod 生态过滤」「go.mod 存在性检查」
+  「目录存在性检查」三处逻辑，自测各自必须失败（实测发现：只断言「报错点名了 /all」
+  时，掐掉「目录存在性检查」自测照样绿——目录都不存在时「没有 go.mod」那条分支也
+  同时成立 ⇒ 报错措辞必须断言到「不存在的目录」这一层）
+
+### fix(tools)：发版收尾链三处硬失败——自动归位 main、lease 强推、--help 守卫
+
+- `prkit.sync_main`：现场不在 main 且工作树干净 ⇒ 自动归位 main（原来直接
+  `SystemExit`，整条收尾链退出 1——2026-10-22 实测站点仓停在 `docs/version-bump`）
+- `prkit.push_branch`：远端同名分支含不在 main 上的提交 ⇒ 按 lease 强推复位
+  （原来普通 push 报 `non-fast-forward`，整条链退出 1；lease 失配则拒绝，不覆盖他人工作）
+- `release_post --help`：只打印不动作（原来会真跑一条收尾链——2026-10-22 实测误触发
+  生成了一份陈旧的站点 PR 与 BOM PR）
+- `matrix.tag_exists` / `matrix.declared_version`：版本号事实核对的两个事实源
+  （查**远端** tag / 仓内**声明**版本；两者不一致 = 版本号断点，消费方永久拉不到
+  且无门禁会报）
+
 ## [v0.1.6] — 2026-10-21
 
 ### fix(close_issue)：回执投递路径的大小写 bug——state 归一化为小写
