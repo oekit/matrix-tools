@@ -221,13 +221,13 @@ def main() -> int:
                               "empty_times": 99}]},
          "ABORTED")
 
-    # I. target_is_pr：REST 说不是 PR，但 gh pr view 说它是 PR ⇒ 以 PR 为准（交叉验证）
-    case("I close_issue 两条路径不一致 ⇒ 认 PR",
+    # I. target_is_pr：REST 返回体带 pull_request 字段 ⇒ 是 PR
+    case("I close_issue 返回体带 pull_request ⇒ 认 PR",
          ("import close_issue\n"
           "print('IS_PR' if close_issue.target_is_pr('core','1') else 'IS_ISSUE')\n"),
          {"rules": [AUTH_OK,
-                    {"prefix": ["api", "repos/oekit/core/issues/1"], "body": '{"number":1}\n'},
-                    {"prefix": ["pr", "view"], "body": '{"number":1}\n'}]},
+                    {"prefix": ["api", "repos/oekit/core/issues/1"],
+                     "body": '{"number":1,"pull_request":{"url":"u"}}\n'}]},
          "IS_PR")
 
     # J. target_is_pr：确实是 issue ⇒ False
@@ -235,8 +235,7 @@ def main() -> int:
          ("import close_issue\n"
           "print('IS_PR' if close_issue.target_is_pr('core','1') else 'IS_ISSUE')\n"),
          {"rules": [AUTH_OK,
-                    {"prefix": ["api", "repos/oekit/core/issues/1"], "body": '{"number":1}\n'},
-                    {"prefix": ["pr", "view"], "exit": 1, "body": "not a pull request\n"}]},
+                    {"prefix": ["api", "repos/oekit/core/issues/1"], "body": '{"number":1}\n'}]},
          "IS_ISSUE")
 
     # K. current_protection：读不到 ⇒ 中止，不能当成「没有保护」

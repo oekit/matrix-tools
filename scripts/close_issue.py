@@ -132,7 +132,7 @@ def target_is_pr(repo: str, num: str) -> bool:
     ⇒ 判成「这是 issue」⇒ 对未合入的 PR 调 `gh issue close`
     ⇒ v0.1.8 刚修掉的坑**从这条缝里复活**。
     ⇒ 现在的口径：读不到就**报错中止**（宁可脚本失败，也不能把 PR 当 issue 关掉）；
-    并且「不是 PR」要用**另一条独立路径**交叉确认（`gh pr view` 应当失败）。
+    「是不是 PR」仍以 REST 返回体里的 `pull_request` 字段为准（PR 的该字段必在）。
     """
     try:
         data = ghsafe.gh_json(["api", f"repos/{ORG}/{repo}/issues/{num}"])
@@ -145,14 +145,7 @@ def target_is_pr(repo: str, num: str) -> bool:
             f"{repo}#{num}: 读取 issue 元数据失败（{e}）——"
             "远端偶发返回空内容时不能把它当成「不是 PR」，"
             "否则会对未合入的 PR 执行 gh issue close。脚本中止。")
-    if isinstance(data, dict) and data.get("pull_request"):
-        return True
-    # 交叉确认：REST 说不是 PR 时，`gh pr view` 也必须失败（两条独立路径一致）。
-    r = subprocess.run(["gh", "pr", "view", str(num), "--repo", f"{ORG}/{repo}",
-                        "--json", "number"], capture_output=True, text=True)
-    if r.returncode == 0 and r.stdout.strip():
-        return True
-    return False
+    return bool(isinstance(data, dict) and data.get("pull_request"))
 
 
 def pr_lines(meta: dict) -> list[str]:
