@@ -176,6 +176,32 @@ def bump_patch(v: str) -> str:
     return f"v{a}.{b}.{int(c) + 1}"
 
 
+def tag_exists(repo: str, tag: str, base: str | None = None) -> bool:
+    """该仓**远端**是否有这个 tag（发布事实核对用：版本号必须真的发出去过）。
+
+    查远端而不是本地：本地 clone 的 tag ref 常陈旧（浅克隆 / 长期不 fetch），
+    用本地判据会把「已发布」误判成「未发布」（反之亦然）。
+    """
+    d = repo_dir(repo, base)
+    r = subprocess.run(["git", "ls-remote", "--tags", f"https://github.com/{ORG}/{repo}.git",
+                        f"refs/tags/{tag}"], cwd=d, capture_output=True, text=True)
+    return bool(r.stdout.strip())
+
+
+def declared_version(repo: str, base: str | None = None) -> str | None:
+    """仓内**声明**的当前版本（oekit 门面 matrix.go 的 const Version）。
+
+    与 tag 的区别：声明值先于 tag 落到 main。两者不一致 = 版本号断点
+    （main 说 vX.Y.Z、远端最高 tag 是 vX.Y.(Z-1)）⇒ 该版本号对消费方永久缺失
+    （`go get <mod>@vX.Y.Z` 拉不到），且没有任何门禁会报它。
+    """
+    p = repo_dir(repo, base) / "matrix.go"
+    if not p.exists():
+        return None
+    m = re.search(r'const Version = "([^"]+)"', p.read_text(encoding="utf-8"))
+    return m.group(1) if m else None
+
+
 def sh(args, cwd, check=True):
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if check and r.returncode != 0:
