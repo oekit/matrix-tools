@@ -30,6 +30,7 @@ import tempfile
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import MODULES, ORG, repo_dir  # noqa: E402
 from gen_versions import _remote_tags  # noqa: E402
+import ghsafe  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 
@@ -69,46 +70,82 @@ RATE_LIMIT_RE = re.compile(r"rate limit|abuse detection|secondary rate|403 Forbi
 
 
 def _has_token() -> bool:
-    """本次进程有没有 GitHub 认证（决定请求是走 5000/h 还是 60/h 的匿名配额）。"""
-    return bool(os.environ.get("GH_TOKEN") or os.environ.get("GITHUB_TOKEN"))
+    """本次进程能不能算「已认证」（env token **或** gh 配置里的账号）。
+
+    旧实现只看 env 变量，看不见「gh 已登录（keyring / hosts.yml）」这种常态
+    ⇒ 本机明明有认证却被当成匿名。认证与否决定走 5000/h 还是 60/h 的配额，
+    判错会让匿名路径白烧配额、也会让可靠路径用不上 ⇒ 以 `gh auth status`
+    为准（进程内缓存）。
+    """
+    return ghsafe.gh_authenticated()
+
+
+def _read_releases_once(repo: str, attempts: list[str]) -> set[str]:
+    """读一次远端 Release 列表。
+
+    返回 tag 名集合；**读到空集合也返回空集合**（空不等于「没有」，
+    由 `existing_releases` 决定要不要采信）；命令失败（权限/限速）⇒
+    返回空集合并把失败原因记进 `attempts`。
+    """
+    out: set[str] = set()
+    if _has_token():
+        # GraphQL 路径：实测 10/10 稳定，一次到位（5000/h）。
+        code, txt, err = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
+                            "--json", "tagName", "--jq", ".[].tagName", check=False)
+        if code == 0:
+            out |= set(txt.split())
+        else:
+            attempts.append(err or txt)
+    if not out:
+        # REST 路径：与 GraphQL 独立，可交叉验证；匿名也可读。
+        # --paginate 是必需的：per_page 上限 100，单页会漏判「已存在的 Release」
+        # 被误报成缺失（当前各仓最多 31 条，离上限还远，但那是会涨的量）。
+        code, txt, err = gh("api", "--paginate", f"repos/{ORG}/{repo}/releases?per_page=100",
+                            "--jq", ".[].tag_name", check=False)
+        if code == 0:
+            out |= set(txt.split())
+        else:
+            attempts.append(err or txt)
+    return out
 
 
 def existing_releases(repo: str) -> set[str]:
-    """远端已存在的 Release tag 名。
+    """远端已存在的 Release tag 名（对抗 GitHub 偶发返回空集合）。
 
-    这是本门禁最容易**静默失效**的一环（#26：weekly audit 一次性把 23/24 仓
-    标成「对账跳过」，报告照样收进 issue）。成因是认证：CI 里不注入 GH_TOKEN 时
-    `gh` 只能匿名跑，匿名 REST 是 60 次/小时，而 Actions runner 共享出口 IP，
-    全矩阵逐仓一查就把它打满，于是所有仓一起「读不到」——门禁看起来绿，
-    实际一仓没查。三点因此是硬要求：
+    这是本门禁最容易**静默失效**的一环，两次踩坑方向相反：
 
+    - #26（漏报）：CI 里不注入 GH_TOKEN 时 `gh` 只能匿名跑，匿名 REST 60 次/小时，
+      Actions runner 共享出口 IP，全矩阵逐仓一查就把它打满 ⇒ 所有仓一起
+      「读不到」——门禁看起来绿，实际一仓没查；
+    - 2026-10-22（**假报**）：GitHub API 偶发返回空集合（实测 20~30% 的请求，
+      `GET /repos/{o}/{r}/releases` 返回 `200` + `[]`，curl 直连同样复现）
+      ⇒ 旧实现「读到空 = 一个 Release 都没有」⇒ audit 报 11 个仓「N 个 tag
+      缺 Release」，而真实 parity 是 **24/24 全绿**。
+
+    ⇒ 现在的口径：
+    - 读到空 ⇒ **换条独立路径重读**，连续 4 轮都空才认「事实为空」
+      （真没建过 Release 的仓走这条路，仍然会被如实报成真漂移）；
+    - 命令失败（权限/限速）⇒ 抛 `ReleaseUnreachable` 让调用方按「不可核对」跳过，
+      跳过必须被显式渲染（#26 的教训：跳过不能渲染成通过）；
     - 报错必须带 **stderr**：gh 把失败原因写 stderr，只取 stdout 会得到
-      `无法读取 Release 列表（）` 这种空括号，限速与权限完全分不开；
-    - 限速单独归类，让报告能说清「是没配 token 还是 token 权限不够」；
-    - **无 token 时不要先试 `gh release list`**：匿名读公开仓虽可行，但一旦
-      失败（限速）回退 REST 还要再发一次，等于每仓白烧两次配额（24 仓 = 48 次，
-      逼近 60 的匿名上限）。无 token 直接走 REST，一仓一次。
+      `无法读取 Release 列表（）` 这种空括号，限速与权限完全分不开。
     """
     attempts: list[str] = []
-    if _has_token():
-        # 有认证：release list 一次到位（5000/h），失败再回退 REST。
-        code, out, err = gh("release", "list", "--repo", f"{ORG}/{repo}", "--limit", "300",
-                            "--json", "tagName", "--jq", ".[].tagName", check=False)
-        if code == 0:
-            return set(out.split())
-        attempts.append(err or out)
-    # REST 回退（公开仓可行；限速失败则调用方按不可核对跳过）。
-    # --paginate 是必需的：per_page 上限 100，单页会漏判「已存在的 Release」
-    # 被误报成缺失（当前各仓最多 26 条，离上限还远，但那是会涨的量）。
-    code, out, err = gh("api", "--paginate", f"repos/{ORG}/{repo}/releases?per_page=100",
-                        "--jq", ".[].tag_name", check=False)
-    if code == 0:
-        return set(out.split())
-    attempts.append(err or out)
-    reason = " | ".join(a.strip()[:120] for a in attempts if a.strip())[:240] or "（gh 未输出 stderr）"
-    kind = "限速" if RATE_LIMIT_RE.search(reason) else "权限/网络"
-    raise ReleaseUnreachable(f"{repo}: 无法读取 Release 列表（{kind}：{reason}）",
-                             rate_limited=(kind == "限速"))
+    have: set[str] = set()
+    for _ in range(ghsafe.EMPTY_ROUNDS):
+        got = _read_releases_once(repo, attempts)
+        if got:
+            have |= got
+            break
+    if have:
+        return have
+    if attempts:
+        reason = " | ".join(a.strip()[:120] for a in attempts if a.strip())[:240] or "（gh 未输出 stderr）"
+        kind = "限速" if RATE_LIMIT_RE.search(reason) else "权限/网络"
+        raise ReleaseUnreachable(f"{repo}: 无法读取 Release 列表（{kind}：{reason}）",
+                                 rate_limited=(kind == "限速"))
+    # 连续多轮都读到空（且没有任何命令失败）⇒ 事实为空：一个 Release 都没有。
+    return set()
 
 
 def changelog_section(repo_dir_path, version: str, nested: str | None) -> str | None:

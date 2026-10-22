@@ -33,6 +33,10 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import ghsafe  # noqa: E402
 
 ORG = "oekit"
 
@@ -73,14 +77,26 @@ def gh(*args: str, check: bool = True) -> tuple[int, str]:
 
 
 def current_protection(repo: str) -> dict | None:
-    """取现状；404 = 完全无保护（返回 None，区别于空配置）。"""
-    code, out = gh("api", f"repos/{ORG}/{repo}/branches/main/protection", check=False)
-    if code != 0:
-        return None
+    """取现状；404 = 完全无保护（返回 None，区别于空配置）。
+
+    **「读不到」不能当成「没有保护」**（2026-10-22 实测）：GitHub API 会
+    间歇性返回空正文/空对象（curl 直连同样可复现）⇒ 旧实现 JSON 解析失败
+    也返回 None ⇒ 把「读不到现状」当成「这仓没有保护」⇒ 按无保护去改配置。
+    ⇒ 现在的口径：404 才当「无保护」；读不到就**显式失败**。
+    """
     try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        return None
+        data = ghsafe.gh_json(["api", f"repos/{ORG}/{repo}/branches/main/protection"])
+    except ghsafe.GhCommandError as e:
+        if e.is_not_found:
+            return None
+        raise SystemExit(f"{repo}: 读取分支保护失败：{e}")
+    except ghsafe.GhReadError as e:
+        raise SystemExit(
+            f"{repo}: 读取分支保护失败（{e}）——远端偶发返回空内容时不能当成"
+            "「这仓没有保护」，否则会按错误现状去改配置。脚本中止。")
+    if not isinstance(data, dict) or not data:
+        raise SystemExit(f"{repo}: 分支保护返回空内容，按「读不到」中止（不当作无保护）")
+    return data
 
 
 def desired(repo: str, cur: dict | None) -> dict:
