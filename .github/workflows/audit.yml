@@ -43,6 +43,8 @@ jobs:
           python-version: '3.12'
       - name: close_issue 自测（回执必须真落地，不能假绿）
         run: python3 scripts/close_issue_selftest.py
+      - name: dependabot 目录门禁自测（残留条目必须抓得到，且非 gomod 生态不误报）
+        run: python3 scripts/dependabot_dirs_selftest.py
 
   audit:
     runs-on: ubuntu-latest

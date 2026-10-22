@@ -597,6 +597,25 @@ def check_nested_module_floors():
 
 check_nested_module_floors()
 
+# ---------- dependabot 目录存在性门禁（matrix-tools#68，承接 data#39） ----------
+# 背景与判据的完整说明在 scripts/dependabot_dirs.py（单一事实源，附自测）。
+# 这里只做「取各仓 dependabot.yml → 交给判据 → 塞进 issues」。
+
+def check_dependabot_directories():
+    """dependabot.yml 里的 gomod 目录必须存在且含 go.mod。"""
+    from dependabot_dirs import check_dirs  # noqa: E402 本地模块，与其他脚本同目录
+
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        dep = root / ".github" / "dependabot.yml"
+        if not dep.exists():
+            continue
+        for msg in check_dirs(root, dep.read_text(encoding="utf-8")):
+            check(False, msg)
+
+
+check_dependabot_directories()
+
 # ---------- GitHub Release 对账 + oekit BOM 新鲜度（.github#8） ----------
 # Release parity：每个 tag 对应一个 Release（notes=CHANGELOG 小节 + 该 tag 矩阵地板），
 # `releases/latest` 因此全矩阵可解析。
