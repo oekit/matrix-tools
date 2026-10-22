@@ -18,14 +18,55 @@ from matrix import ORG, git_branch, is_dirty, sh  # noqa: E402
 
 
 def sync_main(d) -> None:
-    """确保在 main 且与远端一致（ff-only）。要求工作树干净（调用方保证）。"""
+    """确保在 main 且与远端一致（ff-only）。要求工作树干净（调用方保证）。
+
+    现场若停在别的分支（上一波次遗留 / 已合入 PR 的孤儿分支），**自动归位 main**
+    而不是直接退出——原实现把「现场没归位」变成整条发版链的硬失败：
+    2026-10-22 实测，站点仓停在 docs/version-bump（上一轮落 PR 后留下的）
+    ⇒ release_post 在站点那步直接 SystemExit，整条收尾链退出 1，
+    而它要做的只是往同一个分支上再落一个 PR。
+
+    工作树不干净时**不动**（别人的在途产物不能被 checkout 冲掉）。
+    """
     br = git_branch(d)
     if br != "main":
-        raise SystemExit(f"{Path(d).name}: 当前在 {br}，落 PR 须从 main 出发")
+        if is_dirty(d):
+            raise SystemExit(f"{Path(d).name}: 当前在 {br} 且工作树不干净——"
+                             "先落 PR/提交/清理，归位 main 后再试")
+        sh(["git", "checkout", "main"], d)
+        print(f"  [sync] {Path(d).name}: 现场在 {br}，已自动归位 main")
     sh(["git", "fetch", "origin", "main"], d)
     behind = sh(["git", "rev-list", "--count", "main..origin/main"], d).stdout.strip()
     if behind != "0":
         sh(["git", "pull", "--ff-only", "origin", "main"], d)
+
+
+def push_branch(d, branch: str) -> None:
+    """推送分支；远端同名分支若含**不在 main 上**的提交，普通 push 报
+    non-fast-forward ⇒ 改用 `--force-with-lease`（带显式期望 sha）。
+
+    2026-10-22 实测：站点仓的 docs/version-bump 分支在它唯一的 PR 被**关闭**
+    后，其提交不在 main 上 ⇒ land_pr 的普通 push 报
+    `! [rejected] ... (non-fast-forward)` ⇒ 整条收尾链退出 1。
+    强推带 lease 是安全的：期望值是我们刚 fetch 到的远端 sha，
+    别人在这期间推过 ⇒ lease 失配 ⇒ 拒绝，不覆盖他人工作。
+    """
+    r = sh(["git", "push", "-u", "origin", branch], d, check=False)
+    if r.returncode == 0:
+        return
+    sh(["git", "fetch", "origin",
+        f"+refs/heads/{branch}:refs/remotes/origin/{branch}"], d, check=False)
+    remote_sha = sh(["git", "rev-parse", "--verify", "--quiet",
+                     f"refs/remotes/origin/{branch}"], d, check=False).stdout.strip()
+    if not remote_sha:
+        raise SystemExit(f"推送分支失败：{(r.stderr or r.stdout).strip()[:200]}")
+    r2 = sh(["git", "push", f"--force-with-lease=refs/heads/{branch}:{remote_sha}",
+             "-u", "origin", branch], d, check=False)
+    if r2.returncode != 0:
+        raise SystemExit(
+            f"推送分支失败（按 lease 强推被拒——远端分支可能已被他人更新，"
+            f"不覆盖）：{((r.stderr or '') + (r2.stderr or '')).strip()[:220]}")
+    print(f"  [push] {branch}: 远端旧分支含不在 main 上的提交，已按 lease 强推复位")
 
 
 def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
@@ -51,7 +92,7 @@ def land_pr(d, repo: str, branch: str, commit_msg: str, title: str, body: str,
         return ""  # 无变更，未产生 PR
     sh(["git", "add", *files], d)
     sh(["git", "commit", "-m", commit_msg], d)
-    sh(["git", "push", "-u", "origin", branch], d)
+    push_branch(d, branch)
     r = sh(["gh", "pr", "create", "--repo", f"{ORG}/{repo}", "--head", branch,
             "--title", title, "--body", body], d, check=False)
     if r.returncode != 0:

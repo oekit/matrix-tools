@@ -17,6 +17,7 @@ go get 抬地板、随本仓版本发出；本命令只处理目标仓的收尾 
   --no-bom          跳过 oekit BOM 推荐组合更新
   --bom-release     BOM PR 合入后自动打 tag + Release（缺省只开 PR 并打印待办）
   --merge-all       把本命令开的 PR 一并合并
+  --help            打印本说明后退出（不执行任何真实动作）
 """
 from __future__ import annotations
 
@@ -26,7 +27,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import MODULES, SITE_REPO, bump_patch, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
+from matrix import (MODULES, SITE_REPO, bump_patch, declared_version, git_branch,  # noqa: E402
+                    is_dirty, latest_tag, repo_dir, sh, tag_exists)
 from prkit import land_pr, merge_pr, open_pr  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -42,6 +44,14 @@ def open_prs_merged(repos: list[str]) -> None:
 
 def main() -> None:
     args = sys.argv[1:]
+    # --help 必须**只打印不动作**：本脚本的默认行为就是开 PR + 打 tag，
+    # 有人（或 agent）习惯性传 --help 探用法 ⇒ 真跑了一条收尾链
+    # （2026-10-22 实测：误触发生成了一份陈旧的站点 PR 与 BOM PR，
+    #  两者内容都早于当轮打 tag ⇒ 只能关单重来）。
+    # 共享 python-ci 之所以「刻意不执行脚本本体」，根因就是这类脚本缺 --help 守卫。
+    if "--help" in args or "-h" in args:
+        print(__doc__)
+        return
     repos = [a for a in args if not a.startswith("--")]
     no_pr = "--no-pr" in args
     no_audit = "--no-audit" in args
