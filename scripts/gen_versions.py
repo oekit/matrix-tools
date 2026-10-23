@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, ORG, repo_dir, ensure_clean_all, sibling_deps  # noqa: E402
+from matrix import MODULES, ORG, repo_dir, ensure_clean_all, sibling_deps, remote_tags  # noqa: E402
 
 BASE = os.path.abspath(
     os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -167,44 +167,13 @@ def _is_dep_note(body: str) -> bool:
 def _remote_tags(repo: str) -> list[str]:
     """读远端仓库的全部 tag（#5 根因修复：本地 clone 的 tag 可能没 fetch，
     生成「generatedAt 很新但内容陈旧」的 versions.json——比明显陈旧更有害）。
-    URL 用本地 clone 的 origin（失败回退 github.com/oekit/<repo>）。
-    返回按版本降序的 tag 名（含嵌套前缀）。"""
-    origin = None
-    d = repo_dir(repo, BASE)
-    try:
-        origin = subprocess.check_output(
-            ["git", "-C", str(d), "remote", "get-url", "origin"],
-            text=True, stderr=subprocess.DEVNULL,
-        ).strip()
-    except Exception:
-        origin = None
-    url = origin or f"https://github.com/oekit/{repo}.git"
-    try:
-        out = subprocess.check_output(
-            ["git", "ls-remote", "--tags", url],
-            text=True, stderr=subprocess.DEVNULL, timeout=60,
-        )
-    except Exception:
-        # 远端不可达时回退本地 tag（降级而非失败）
-        return _local_tags(d)
-    tags = []
-    for line in out.splitlines():
-        # "<sha>\trefs/tags/v0.1.0" 或 "refs/tags/nacos/v0.3.0^{}"
-        ref = line.split("\t")[-1].strip()
-        if ref.startswith("refs/tags/") and not ref.endswith("^{}"):
-            tags.append(ref[len("refs/tags/"):])
-    return _sort_tags_desc(tags)
 
-
-def _local_tags(d: Path) -> list[str]:
-    try:
-        out = subprocess.check_output(
-            ["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
-            text=True, stderr=subprocess.DEVNULL,
-        )
-    except Exception:
-        return []
-    return [t.strip() for t in out.splitlines() if t.strip()]
+    #79：失败**不再**静默回退本地 tag——那恰好把本函数要防的形态原样放回来，
+    且无任何告警（产物 versions.json 与 BOM 会因此静默陈旧并流向消费方）。
+    改为统一走 matrix.remote_tags：origin 失败 ⇒ 换 canonical HTTPS ⇒
+    仍失败则抛 RemoteReadError（读不到 ≠ 没有）。
+    """
+    return _sort_tags_desc(remote_tags(repo, BASE))
 
 
 def _sort_tags_desc(tags: list[str]) -> list[str]:
