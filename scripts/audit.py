@@ -17,6 +17,7 @@ sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
+    RemoteReadError, REMOTE_READ_LOG,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
@@ -35,6 +36,22 @@ issues: list[str] = []
 def check(cond: bool, msg: str):
     if not cond:
         issues.append(msg)
+
+
+def remote_latest(repo: str) -> str | None:
+    """某仓**远端**最新 tag；读不到 ⇒ 记为漂移，**不**静默跳过（#79）。
+
+    旧写法是 `lt = latest_tag(...); if lt: check(...)` —— 读失败时 latest_tag
+    返回 None，整条检查**静默消失**，而报告照样印「✓ 矩阵审计通过」
+    （#26 的形态：23/24 仓被跳过，报告仍显示通过）。
+
+    现在：读不到 = 明确记一条漂移 ⇒ 该仓这一版**没被核对过**，不能算通过。
+    """
+    try:
+        return latest_tag(repo, BASE, remote=REMOTE_TAGS)
+    except RemoteReadError as e:
+        check(False, f"{e}（该仓版本事实未核对，不能当通过）")
+        return None
 
 
 def expected_table(repo: str) -> str:
@@ -352,7 +369,7 @@ for repo in MODULES:
     # 6) 安装行版本
     m = re.search(r"go get github\.com/oekit/" + re.escape(repo) + r"@(v[0-9.]+)", t)
     if m:
-        lt = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+        lt = remote_latest(repo)
         if lt:
             check(m.group(1) == lt, f"{repo}: 安装行 {m.group(1)} ≠ 最新 {lt}（跑 refresh_versions.py）")
     else:
@@ -361,7 +378,7 @@ for repo in MODULES:
     agents = d / "AGENTS.md"
     ma = re.search(r"当前版本：`(v[0-9.]+)`", agents.read_text()) if agents.exists() else None
     if ma:
-        lt2 = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+        lt2 = remote_latest(repo)
         if lt2:
             check(ma.group(1) == lt2, f"{repo}: AGENTS 当前版本 {ma.group(1)} ≠ 最新 {lt2}（跑 refresh_versions.py）")
     # 6c) AGENTS.md 首行的 DESC 行必须是矩阵真相源 DESC 的**前缀**
@@ -464,7 +481,7 @@ try:
         cur = {m["module"]: m.get("latest") for m in live.get("modules", [])}
         stale = []
         for repo in MODULES:
-            lt = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+            lt = remote_latest(repo)
             if lt and cur.get(repo) != lt:
                 stale.append(f"{repo}(站点 {cur.get(repo)} ≠ 最新 {lt})")
         check(not stale, f"site: versions.json 陈旧 {len(stale)} 项（跑 gen_versions.py）：{'; '.join(stale[:4])}")
@@ -582,7 +599,11 @@ def check_nested_module_floors():
                 dep_repo, ver = req.group(2), req.group(3)
                 if dep_repo != repo:  # 只校验对父模块的 require
                     continue
-                lt = latest_tag(repo, BASE, remote=REMOTE_TAGS)
+                lt = remote_latest(repo)
+                if REMOTE_READ_LOG.get(repo) == "failed":
+                    # 读失败已在 remote_latest 记为漂移；这里不再报「无主模块 tag」——
+                    # 那会把「读不到」说成「没有 tag」（正是 #79 要拆开的两件事）。
+                    continue
                 floor, cur = parse_semver(ver), parse_semver(lt) if lt else None
                 if not floor:
                     check(False, f"{repo}/{sub}: 父模块依赖版本不可解析 {ver}")
@@ -656,6 +677,14 @@ except Exception as e:  # noqa: BLE001
     print(f"  ⚠ BOM 检查跳过：{e}")
 
 # ---------- 报告 ----------
+#
+# 覆盖证据（#79）：结论行「✓ 矩阵审计通过」**不能**自证「真的读了远端事实」——
+# 读不到时这句话长得一模一样（#26：23/24 仓被跳过，报告仍显示通过）。
+# 所以结论行前补一行可核对的读数：读到几个 / 有几个降级或跳过。
+_read_ok = sum(1 for v in REMOTE_READ_LOG.values() if v == "ok")
+_read_fail = sum(1 for v in REMOTE_READ_LOG.values() if v == "failed")
+print(f"远端 tag 读取：{_read_ok}/{len(MODULES)} 仓成功"
+      f"（{_read_fail} 读失败）")
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
     for i in issues:

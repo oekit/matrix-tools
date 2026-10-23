@@ -47,6 +47,8 @@ jobs:
         run: python3 scripts/dependabot_dirs_selftest.py
       - name: ghsafe 读取层自测（读到空 ≠ 事实为空，不能假红也不能假绿）
         run: python3 scripts/ghsafe_selftest.py
+      - name: 远端读取层自测（git 传输侧读到空 ≠ 事实为空，不能静默降级）
+        run: python3 scripts/remote_reads_selftest.py
 
   audit:
     runs-on: ubuntu-latest

@@ -150,13 +150,91 @@ def sibling_deps(repo: str, base: str | None = None) -> list[str]:
     return sorted(out)
 
 
+class RemoteReadError(RuntimeError):
+    """远端事实**读不到**（不是「读到空」）。
+
+    matrix-tools#79：「读到空」与「读不到」必须分开表达。
+    读到空 = 事实为空（可以据此下结论）；读不到 = 不知道（必须报错）。
+    两者混为一谈 ⇒ 门禁静默降级 ⇒ 假绿（#26 的形态：23/24 仓被跳过，报告仍显示通过）。
+    """
+
+
+# 远端 tag 读取台账（#79）：repo -> "ok" | "failed"。
+#
+# 供 audit 报告「远端事实真的读到了几个」——让「零降级」自带**覆盖证据**，
+# 而不是只印一句「✓ 矩阵审计通过」（读不到时这句话长得一模一样）。
+REMOTE_READ_LOG: dict[str, str] = {}
+
+
+def _ls_remote_tags(url: str, timeout: int = 60) -> tuple[list[str], bool]:
+    """(tags, ok)。
+
+    ok=False ⇒ **读失败**（网络/认证/超时/非零退出）；
+    ok=True 且 tags=[] ⇒ 真的一个 tag 都没有（这是合法事实，不是故障）。
+    这两者的区分是 #79 的核心——混在一起就会把「不知道」当成「没有」。
+    """
+    try:
+        r = subprocess.run(["git", "ls-remote", "--tags", url],
+                           capture_output=True, text=True, timeout=timeout)
+    except Exception:
+        return [], False
+    if r.returncode != 0:
+        return [], False
+    tags = []
+    for line in r.stdout.splitlines():
+        ref = line.split("\t")[-1].strip()
+        if ref.startswith("refs/tags/") and not ref.endswith("^{}"):
+            tags.append(ref[len("refs/tags/"):])
+    return tags, True
+
+
+def remote_tags(repo: str, base: str | None = None) -> list[str]:
+    """读某仓**远端**全部 tag（含嵌套前缀，形如 hlog/v0.1.4）。
+
+    口径（matrix-tools#79）：
+
+    1. **读失败不静默降级为本地 tag。** 降级会把「远端已发新版、本地 clone 没 fetch」
+       这个 gen_versions docstring 明说要防的形态原样放回来，且无任何告警
+       ——「generatedAt 很新但内容陈旧」比明显陈旧更有害。
+    2. **canonical HTTPS 优先**，clone 的 origin URL 兜底：
+       - HTTPS 走 gh 的 token，不依赖本机 SSH key/agent ⇒ SSH 抽风不影响结论；
+       - 实测 SSH ≈6.5s/仓、HTTPS ≈1.2s/仓 ⇒ 优先 HTTPS 顺带把审计跑快约 5 倍；
+       - origin 兜底覆盖「HTTPS 被代理挡了、只有 SSH 通」的场景。
+    3. 两条都失败 ⇒ 抛 :class:`RemoteReadError`：宁可脚本失败，也不把「读不到」
+       伪装成「没有」。
+    """
+    d = repo_dir(repo, base)
+    origin = None
+    try:
+        origin = subprocess.check_output(
+            ["git", "-C", str(d), "remote", "get-url", "origin"],
+            text=True, stderr=subprocess.DEVNULL).strip()
+    except Exception:
+        origin = None
+    urls: list[str] = []
+    canonical = f"https://github.com/{ORG}/{repo}.git"
+    urls.append(canonical)
+    if origin and origin not in urls:
+        urls.append(origin)
+    for url in urls:
+        tags, ok = _ls_remote_tags(url)
+        if ok:
+            REMOTE_READ_LOG[repo] = "ok"
+            return tags
+    REMOTE_READ_LOG[repo] = "failed"
+    raise RemoteReadError(
+        f"{repo}: 远端 tag 读不到（已试 {'、'.join(urls)}）——"
+        f"读不到 ≠ 没有，不能用本地 tag 顶替（matrix-tools#79）")
+
+
 def latest_tag(repo: str, base: str | None = None, remote: bool = False) -> str | None:
     d = repo_dir(repo, base)
     if remote:
-        r = subprocess.run(["git", "ls-remote", "--tags", f"https://github.com/{ORG}/{repo}.git"],
-                           cwd=d, capture_output=True, text=True)
-        tags = [ln.rsplit("/", 1)[-1] for ln in r.stdout.splitlines()
-                if ln.strip() and not ln.rstrip().endswith("^{}")]
+        # 读不到 ⇒ 抛 RemoteReadError（**不再**返回 None）。
+        # 返回 None 只表达「该仓真的一个 tag 都没有」；此前 None 同时表达
+        # 「读失败」，而调用方一律 `if lt:` 跳过 ⇒ 整条检查静默消失（#79）。
+        tags = remote_tags(repo, base)
+
         def key(v):
             try:
                 return tuple(int(x) for x in v[1:].split("."))
