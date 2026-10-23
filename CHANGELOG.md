@@ -4,6 +4,65 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.12] — 2026-10-23
+
+### fix(tools)：「远端 tag 是否存在」三条读路径语义统一——发版查重读失败即当「不存在」
+
+#79 把「读到空 ≠ 事实为空」在 GitHub API 侧（ghsafe）与 git 传输侧
+（matrix.remote_tags）都做实了，但「远端有没有这个 tag」这条**事实**还有另外
+两条读取路径——发版查重与关单守卫——仍是旧语义：只看 `git ls-remote` 的 stdout
+非空 ⇒ 读失败 = 「不存在」。
+
+#### 变异实测（修复前）
+
+同一个**确实存在于远端**的 tag，只因**读法**不同就从「存在」翻成「不存在」：
+
+| 读法 | 读成功 | 读失败 |
+|---|---|---|
+| `release_train.tag_exists_remote` | `True` | **`False`** |
+| `matrix.tag_exists` | `True` | **`False`** |
+
+#### 三处漏洞
+
+1. **发版查重 fail-open**：`release_train` 检查面 a「同名 tag 查重」在读失败时
+   返回 False ⇒ 「这个 tag 不存在」⇒ **门禁静默放行**。docstring 第 11 行写着
+   这条检查的理由：「重推 = 代理/sumdb 缓存集体中毒，.github#5」——恰在最需要
+   它的时刻（SSH 掉线 / 网络抖动）放行。
+   真正拦住重推的是 `git push` 自身（实测同名 tag 无 `--force` 推送被拒：
+   `! [rejected] v1.0.0 -> v1.0.0 (already exists)`，远端 tag 指向不变）⇒
+   **不会真的重推成功**，但脚本会在 `git tag -a` 之后崩在 push、留下半截本地
+   tag，报错是「already exists」而不是「查重时读不到远端」——排查被带偏。
+2. **关单守卫误报**：`close_issue` 的「tag 必须已存在于远端」守卫 fail-closed
+   （不会凭空发回执），但报的是「tag 不在远端」——**事实说反了**。这条信息会把人
+   推向 `--force`（脚本文案里就写着「确实要引用未发版本需 --force」），而真实
+   原因可能只是网络抖了一下 ⇒ 守卫生效的路径被误诊成「刻意的越权」。
+3. **第三种语义留在公共函数里**：`matrix.tag_exists` 同样只看 stdout 非空
+   （当前无调用方，`release_post.py` 只是 import 未用）。
+
+#### 改法
+
+- `matrix.remote_tag_exists`：这条事实的**唯一**读法（走 `matrix.remote_tags`：
+  canonical HTTPS 优先 → origin 兜底 → 失败抛 `RemoteReadError`）；
+  `matrix.tag_exists` 收口到它，不再自带语义。
+- `release_train.tag_exists_remote` 改走它；`check_module` 接住 `RemoteReadError`
+  ⇒ **fail-closed**（不进打 tag 环节），错误信息写明「读不到 ≠ 不存在」。
+- `close_issue.tag_on_remote` 改走它；读不到 ⇒ 报「读不到远端 tag（不是不存在）」
+  并明确不要用 `--force` 绕过；`--force` 是刻意的越权 ⇒ 显式跳过核对、不发读
+  请求（保持自测离线）。
+
+#### 自测与变异测试
+
+- `scripts/remote_reads_selftest.py` 加 6 组用例（I/J/K/L/M/N）：三条读路径各自
+  的「读失败必抛」与「读成功必判存在」。该脚本已接进 `audit.yml` 的 selftest job
+  ⇒ 自动进 CI 覆盖。
+- 变异测试：M1 release_train 退回旧语义 ⇒ **K 转红**；M2 close_issue 退回旧语义
+  ⇒ **M 转红**；M3 matrix 退回旧语义 ⇒ **I 转红**；3/3 转红，还原后 **14/14 全绿**。
+- 其余自测（close_issue / dependabot_dirs / ghsafe / verify_release_units）全绿；
+  `audit.py --remote-tags` 通过（24/24 仓远端 tag 读取成功）。
+
+影响面：只改**读取层**，不碰任何生成器输出（versions.json / BOM 内容不变）⇒
+不需要「先落产物再合生成器」的顺序。
+
 ## [v0.1.11] — 2026-10-23
 
 ### fix(tools)：发版单元门禁漏检伞仓 BOM 仓——llms.txt 覆盖 34 个发版单元的承诺无人守
