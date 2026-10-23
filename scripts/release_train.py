@@ -27,7 +27,8 @@ import time
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
-from matrix import MODULES, ORG, git_branch, ensure_clean_all, repo_dir, sh  # noqa: E402
+from matrix import (MODULES, ORG, RemoteReadError, git_branch, ensure_clean_all,  # noqa: E402
+                     remote_tag_exists, repo_dir, sh)
 from inflight import read as inflight_read  # noqa: E402
 
 TODAY = time.strftime("%Y-%m-%d")
@@ -55,10 +56,17 @@ def preflight_gate(repo_root, apply: bool) -> None:
                              f"——确认对方收尾后 inflight.py release {repo_root.name} 再发版")
 
 
-def tag_exists_remote(cwd: str, tag: str) -> bool:
-    r = subprocess.run(["git", "ls-remote", "--tags", "origin", f"refs/tags/{tag}"],
-                       cwd=cwd, capture_output=True, text=True)
-    return bool(r.stdout.strip())
+def tag_exists_remote(repo: str, tag: str) -> bool:
+    """远端是否已有同名 tag —— **读不到 ⇒ 抛 RemoteReadError**（#85）。
+
+    此前是 `bool(stdout.strip())`：ls-remote 失败（SSH 掉线 / 网络抖动）时
+    stdout 为空 ⇒ 返回 False ⇒ 「这个 tag 不存在」⇒ **查重门禁静默放行**。
+    同一个确实存在的 tag，仅因读法不同就从「存在」翻成「不存在」（变异实测）。
+
+    现在统一走 matrix.remote_tag_exists（canonical HTTPS → origin 兜底 →
+    失败抛错）：「读到空」与「读不到」严格分开。
+    """
+    return remote_tag_exists(repo, tag)
 
 
 def go_env():
@@ -83,10 +91,16 @@ def check_repo(root, failures: list[str]) -> None:
         failures.append(f"golangci-lint 失败\n{(r.stdout + r.stderr)[-600:]}")
 
 
-def check_module(name: str, module_dir, tag: str, failures: list[str]):
+def check_module(repo: str, name: str, module_dir, tag: str, failures: list[str]):
     """单模块前置检查（结果追加进 failures）。"""
     # a. ls-remote 同名 tag 查重（重推 = 代理/sumdb 缓存集体中毒，.github#5）
-    if tag_exists_remote(str(module_dir), tag):
+    #    读不到 ⇒ fail-closed：查重没做成就不许进打 tag 环节（#85）。
+    try:
+        exists = tag_exists_remote(repo, tag)
+    except RemoteReadError as e:
+        failures.append(f"{name}: 远端 tag 读不到，无法查重（读不到 ≠ 不存在）：{e}")
+        return
+    if exists:
         failures.append(f"{name}: tag {tag} 已存在于远端（重推会使已缓存消费方集体中毒）")
         return
     # b. tidy 干净（地板指向已删 tag 时 tidy 直接红）
@@ -279,7 +293,7 @@ def main():
     check_repo(root, failures)
     for name, d, tag in specs:
         print(f"[check] {tag}")
-        check_module(name, d, tag, failures)
+        check_module(repo, name, d, tag, failures)
     if failures:
         print(f"\n❌ {len(failures)} 项检查失败，未打任何 tag：")
         for f in failures:

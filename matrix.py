@@ -254,16 +254,29 @@ def bump_patch(v: str) -> str:
     return f"v{a}.{b}.{int(c) + 1}"
 
 
+def remote_tag_exists(repo: str, tag: str, base: str | None = None) -> bool:
+    """远端是否**真的**有这个 tag。
+
+    「读到空」≠「读不到」：远端读失败 ⇒ 抛 :class:`RemoteReadError`，
+    **不得**当成「这个 tag 不存在」（#85）。
+
+    本函数是「远端 tag 是否存在」这条事实的**唯一**读法——发版查重
+    （release_train）与关单守卫（close_issue）都走它。同一个事实有多条
+    读取路径时，语义必须一致，否则一条路径 fail-open、另一条误报。
+    """
+    return tag in set(remote_tags(repo, base))
+
+
 def tag_exists(repo: str, tag: str, base: str | None = None) -> bool:
     """该仓**远端**是否有这个 tag（发布事实核对用：版本号必须真的发出去过）。
 
     查远端而不是本地：本地 clone 的 tag ref 常陈旧（浅克隆 / 长期不 fetch），
     用本地判据会把「已发布」误判成「未发布」（反之亦然）。
+
+    读不到 ⇒ 抛 RemoteReadError（#85）：此前只看 ls-remote 的 stdout 非空，
+    读失败（SSH 掉线 / 网络抖动）会返回 False ⇒ 把「不知道」说成「没有」。
     """
-    d = repo_dir(repo, base)
-    r = subprocess.run(["git", "ls-remote", "--tags", f"https://github.com/{ORG}/{repo}.git",
-                        f"refs/tags/{tag}"], cwd=d, capture_output=True, text=True)
-    return bool(r.stdout.strip())
+    return remote_tag_exists(repo, tag, base)
 
 
 def declared_version(repo: str, base: str | None = None) -> str | None:

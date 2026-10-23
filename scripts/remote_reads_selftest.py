@@ -99,6 +99,42 @@ except RemoteReadError as e:
     print("RAISED")
 """
 
+# #85：「远端 tag 是否存在」这条事实的另外两条读路径（发版查重 / 关单守卫）
+INLINE_TAG_EXISTS = """
+import sys
+sys.path.insert(0, {root!r})
+sys.path.insert(0, {root!r} + "/scripts")
+from matrix import remote_tag_exists, RemoteReadError
+try:
+    print("RESULT=" + repr(remote_tag_exists("fakerepo", "v1.0.0")))
+except RemoteReadError:
+    print("RAISED")
+"""
+
+INLINE_RELEASE_TRAIN = """
+import sys
+sys.path.insert(0, {root!r})
+sys.path.insert(0, {root!r} + "/scripts")
+from release_train import tag_exists_remote
+from matrix import RemoteReadError
+try:
+    print("RESULT=" + repr(tag_exists_remote("fakerepo", "v1.0.0")))
+except RemoteReadError:
+    print("RAISED")
+"""
+
+INLINE_CLOSE_ISSUE = """
+import sys
+sys.path.insert(0, {root!r})
+sys.path.insert(0, {root!r} + "/scripts")
+from close_issue import tag_on_remote
+from matrix import RemoteReadError
+try:
+    print("RESULT=" + repr(tag_on_remote("fakerepo", "v1.0.0")))
+except RemoteReadError:
+    print("RAISED")
+"""
+
 
 class Bench:
     """一次性的假 git + 假工作区。"""
@@ -227,6 +263,77 @@ def case_h(b: Bench):
         FAKE_TAGS="v3.0.0-canonical",
         FAKE_ORIGIN_TAGS="v4.0.0-via-origin"))
     assert "'v4.0.0-via-origin'" in out, "HTTPS 失败后未回落 origin：" + out
+
+
+# ── #85：「远端 tag 是否存在」的三条读路径必须语义一致 ──
+#
+# 这三条读的是**同一个事实**（远端有没有这个 tag），此前却有两种语义：
+# matrix.remote_tags 读失败抛错（#79），而发版查重 / 关单守卫只看 stdout 非空
+# ⇒ 读失败 = 「不存在」⇒ 查重门禁静默放行、关单守卫误报「不在远端」。
+# 变异实测：同一个确实存在的 tag，仅因读法不同就从 True 翻成 False。
+
+
+@case("I. matrix.remote_tag_exists：读失败 ⇒ 抛错（读不到 ≠ 不存在）")
+def case_i(b: Bench):
+    out = b.run(INLINE_TAG_EXISTS, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="git@,github.com",
+        FAKE_TAGS=""))
+    assert "RAISED" in out, "读失败未抛错（把「读不到」说成「没有」）：" + out
+    assert "RESULT=False" not in out, "读失败返回了 False（旧语义，必须已改）：" + out
+
+
+@case("J. matrix.remote_tag_exists：读成功且 tag 存在 ⇒ True")
+def case_j(b: Bench):
+    out = b.run(INLINE_TAG_EXISTS, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="",
+        FAKE_TAGS="v1.0.0"))
+    assert "RESULT=True" in out, "未取到已存在的 tag：" + out
+
+
+@case("K. release_train 查重：读失败 ⇒ 抛错（查重门禁不得静默放行）")
+def case_k(b: Bench):
+    out = b.run(INLINE_RELEASE_TRAIN, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="git@,github.com",
+        FAKE_TAGS=""))
+    assert "RAISED" in out, "发版查重读失败未抛错（查重门禁静默失效）：" + out
+    assert "RESULT=False" not in out, "发版查重读失败返回了 False（旧语义）：" + out
+
+
+@case("L. release_train 查重：读成功且 tag 存在 ⇒ True")
+def case_l(b: Bench):
+    out = b.run(INLINE_RELEASE_TRAIN, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="",
+        FAKE_TAGS="v1.0.0"))
+    assert "RESULT=True" in out, "未取到已存在的 tag：" + out
+
+
+@case("M. close_issue 关单守卫：读失败 ⇒ 抛错（不得说「不在远端」）")
+def case_m(b: Bench):
+    out = b.run(INLINE_CLOSE_ISSUE, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="git@,github.com",
+        FAKE_TAGS=""))
+    assert "RAISED" in out, "关单守卫读失败未抛错（把「读不到」报成「不在远端」）：" + out
+    assert "RESULT=False" not in out, "关单守卫读失败返回了 False（旧语义）：" + out
+
+
+@case("N. close_issue 关单守卫：读成功且 tag 存在 ⇒ True")
+def case_n(b: Bench):
+    out = b.run(INLINE_CLOSE_ISSUE, b.env(
+        MATRIX_BASE=str(b.base),
+        FAKE_ORIGIN_URL="git@github.com:oekit/fakerepo.git",
+        FAKE_FAIL_URLS="",
+        FAKE_TAGS="v1.0.0"))
+    assert "RESULT=True" in out, "未取到已存在的 tag：" + out
 
 
 def main() -> int:

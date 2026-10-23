@@ -42,14 +42,22 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import ORG, repo_dir  # noqa: E402
+from matrix import ORG, RemoteReadError, remote_tag_exists, repo_dir  # noqa: E402
 import ghsafe  # noqa: E402
 
 
-def tag_on_remote(repo_dir_path: Path, tag: str) -> bool:
-    r = subprocess.run(["git", "ls-remote", "origin", f"refs/tags/{tag}"],
-                       cwd=repo_dir_path, capture_output=True, text=True)
-    return bool(r.stdout.strip())
+def tag_on_remote(repo: str, tag: str) -> bool:
+    """远端是否**真的**已有该 tag —— 读不到 ⇒ 抛 RemoteReadError（#85）。
+
+    此前是 `bool(stdout.strip())`：ls-remote 失败（SSH 掉线 / 网络抖动）时
+    stdout 为空 ⇒ 返回 False ⇒ 报「tag 不在远端」——**把「读不到」说成
+    「没有」**。这条错误信息会把人推向 `--force`（脚本文案里就写着
+    「确实要引用未发版本需 --force」），而真实原因可能只是网络抖了一下。
+
+    现在统一走 matrix.remote_tag_exists（canonical HTTPS → origin 兜底 →
+    失败抛错）：「读到空」与「读不到」严格分开。
+    """
+    return remote_tag_exists(repo, tag)
 
 
 def issue_state(repo: str, num: str) -> str:
@@ -195,9 +203,15 @@ def main() -> None:
         raise SystemExit(f"issue 引用格式应为 <repo>#<N>：{ref!r}")
     repo, num = m.group(1), m.group(2)
 
-    if not no_release:
-        d = repo_dir(repo)
-        if not tag_on_remote(d, tag) and not force:
+    if not no_release and not force:
+        # --force 是「刻意的越权」（确实要引用未发版本）⇒ 显式跳过核对，不发读请求；
+        # 非 force 时读远端：读不到 ⇒ 报错（**不是**「不存在」），真·不存在 ⇒ 拦。
+        try:
+            on_remote = tag_on_remote(repo, tag)
+        except RemoteReadError as e:
+            raise SystemExit(f"❌ 读不到远端 tag（**不是**「不存在」）——修好网络后重试；"
+                             f"--force 只用于「确实要引用未发版本」，不要拿它盖住读失败：{e}")
+        if not on_remote:
             raise SystemExit(f"❌ tag {tag} 不在远端（版本号必须来自已发布内容）——确认已 release_train，"
                              f"或核对 tag 名；确实要引用未发版本需 --force")
     if pr and not re.fullmatch(r"\d+", pr):
