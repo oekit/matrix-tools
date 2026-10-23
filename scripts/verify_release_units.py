@@ -12,7 +12,22 @@
 Agent 不可见。
 
 verify_site_copy.py 补的是**根模块条目集合**（llms.txt「## 模块」段 == MODULES）；
-本脚本补的是**发版单元全集**（根 24 + 嵌套 7）与**嵌套模块的可安装性**。
+本脚本补的是**发版单元全集**（根 24 + 嵌套 9 + **伞仓 1**）与**每个单元的可安装性**。
+
+## 伞仓也是发版单元（2026-10-23 实测，issue #82）
+
+伞仓 BOM 仓 `oekit` 有**独立 tag + 独立 GitHub Release**（latest v0.1.29），
+下游 `go get github.com/oekit/oekit@latest` 是一次独立的版本获取
+⇒ 按「可独立 go get 的发版单元」口径，它**就是第 34 个单元**
+（canonical 口径 `gen_tables.count_units` 也这么算：24 根 + 9 嵌套 + 1 伞仓 = 34；
+站点文案一律写 34）。
+
+但本脚本原先只校验 24 + 9 = 33，**伞仓漏检**：把 llms.txt 里伞仓那
+（`go get github.com/oekit/oekit@latest`）整段删掉，门禁**照样全绿**
+（实测 exit=0）⇒ 站点「llms.txt 覆盖 34 个发版单元」的承诺**无人守**。
+
+⇒ 本脚本现在要求伞仓与嵌套模块**同等**的可安装性，并统一用 canonical 口径
+报数（不再出现「同一个术语，门禁说 33、站点说 34」）。
 
 ## 判据必须独立（关键）
 
@@ -31,8 +46,9 @@ matrix-tools/scripts/ 下无任何写 llms.txt 的脚本，其历史全是手写
 ## 两条 oracle 都要有（缺一即有共同盲区）
 
 - **oracle A（正确性）**：解析 llms.txt 全文，抽出全部条目形态，
-  断言 24 个根模块名 + 7 个嵌套模块名**各至少出现一次**，且 7 个嵌套模块
-  **各自都有一行 `go get github.com/oekit/<module>`**。不依赖渲染结果。
+  断言 24 个根模块名 + 9 个嵌套模块名**各至少出现一次**，且 9 个嵌套模块
+  **各自都有一行 `go get github.com/oekit/<module>`**，且**伞仓 BOM 仓**
+  有一行 `go get github.com/oekit/oekit@latest`。不依赖渲染结果。
 - **oracle B（一致性）**：渲染规范「## 嵌套模块」段，与站点里的该段逐字节比对。
   抓的是格式漂移（少个安装行、描述改了、链接写错）。
 
@@ -53,6 +69,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
 from matrix import MODULES, NESTED_MODULES  # noqa: E402
+from gen_tables import BOM_REPO, count_units  # noqa: E402  口径单一真相（与站点文案同源）
 
 # 根模块条目形态：`- [name](https://github.com/oekit/name): 描述`
 _ROOT_ENTRY_RE = re.compile(r"^-\s*\[([A-Za-z0-9_.\-]+)\]\(https://github\.com/oekit/[^)]+\)\s*[:：]",
@@ -206,8 +223,42 @@ def _nested_units() -> list[tuple[str, str]]:
     return [(f"{m['repo']}/{m['path']}", m["module"]) for m in NESTED_MODULES]
 
 
+def _umbrella_units() -> int:
+    """伞仓 BOM 仓算不算一个发版单元。
+
+    它**不算**矩阵模块（不在 `MODULES` 里，是门面 BOM 快照），但有独立 tag、
+    独立 GitHub Release、`go get github.com/oekit/oekit@latest` ⇒ 按「可独立
+    go get 的发版单元」口径**必须计入**（与站点文案、canonical 口径一致）。
+
+    这里不写死「1」：判定依据是「BOM_REPO 不在矩阵登记表里」——它若哪天被
+    收进矩阵模块，口径会自动变成 0，不会两处各说各话。
+    """
+    return 0 if BOM_REPO in MODULES else 1
+
+
+def release_unit_count() -> tuple[int, int, int, int]:
+    """(根模块, 嵌套模块, 伞仓, 合计)——发版单元的 canonical 口径。
+
+    合计 = 24 根 + 9 嵌套 + 1 伞仓 = 34，与 `gen_tables.count_units`
+    （独立 oracle：扫文件系统算伞仓数）和站点文案同口径。
+    """
+    root, nested = len(MODULES), len(NESTED_MODULES)
+    bom = _umbrella_units()
+    return root, nested, bom, root + nested + bom
+
+
+def _checkout_complete(repos_dir: Path) -> bool:
+    """检出是否完整（全部矩阵模块 + 伞仓都在）。
+
+    只有完整检出才拿文件系统推导的数来**交叉核对** canonical 口径——
+    半套检出算出来的数必然偏小，拿它判红就是假红（不是漂移）。
+    """
+    return all((repos_dir / m).is_dir() for m in MODULES) and (repos_dir / BOM_REPO).is_dir()
+
+
 def check_filesystem_oracle(repos_dir: Path | None) -> list[str]:
-    """oracle A-1（独立 oracle）：嵌套模块必须在文件系统里真实存在且有真实 tag。
+    """oracle A-1（独立 oracle）：嵌套模块必须在文件系统里真实存在且有真实 tag；
+    伞仓 BOM 仓同理（它也是独立发版单元）。
 
     哪怕 matrix.py 的 NESTED_MODULES 写错了，这一条仍会红——它不依赖任何声明。
     """
@@ -229,6 +280,20 @@ def check_filesystem_oracle(repos_dir: Path | None) -> list[str]:
         if not tags:
             problems.append(f"嵌套模块 {name} 没有任何 {path}/vX.Y.Z tag——"
                             f"「独立发版」的说法不成立")
+
+    # 伞仓 BOM 仓：目录没检出 ≠ 漂移（本地少 clone 一个就假红），不报；
+    # 在 ⇒ 必须真的有独立 tag，否则「独立发版的伞仓」这句话不成立。
+    if _umbrella_units():
+        bom_dir = repos_dir / BOM_REPO
+        if bom_dir.is_dir():
+            try:
+                tags = subprocess.run(["git", "tag", "--list", "v*"], cwd=bom_dir,
+                                      capture_output=True, text=True, timeout=30).stdout.split()
+            except Exception:  # noqa: BLE001
+                tags = []
+            if not tags:
+                problems.append(f"伞仓 BOM 仓 {BOM_REPO} 在文件系统里没有任何 vX.Y.Z tag——"
+                                f"「独立发版的发版单元」的说法不成立")
     return problems
 
 
@@ -257,6 +322,16 @@ def check_llms_units(llms_text: str) -> list[str]:
         if mod not in install_lines:
             problems.append(f"llms.txt 缺嵌套模块 {name} 的 go get 安装行"
                             f"（`go get {mod}@latest`）——Agent 读到条目也装不上")
+
+    # 伞仓 BOM 仓的可安装性——**与嵌套模块同等要求**（2026-10-23 实测，issue #82）。
+    # 它也是独立发版单元（有独立 tag + 独立 Release），站点承诺 llms.txt 覆盖
+    # 34 个发版单元；原先这道检查压根不存在 ⇒ 删掉伞仓那行，门禁照样全绿。
+    if _umbrella_units():
+        bom_mod = f"github.com/oekit/{BOM_REPO}"
+        if bom_mod not in install_lines:
+            problems.append(f"llms.txt 缺伞仓 BOM 仓 {BOM_REPO} 的 go get 安装行"
+                            f"（`go get {bom_mod}@latest`）——它也是独立发版单元"
+                            f"（有独立 tag 与 Release），站点承诺 llms.txt 覆盖 34 个发版单元")
     return problems
 
 
@@ -265,7 +340,7 @@ def check_section_consistency(llms_text: str, versions: dict[str, dict] | None =
     want = render_nested_section(versions)
     if _NESTED_HEADING not in llms_text:
         return [f"llms.txt 缺「{_NESTED_HEADING}」段——"
-                f"7 个嵌套模块没有独立条目段（跑 --emit 取规范文本）"]
+                f"{len(NESTED_MODULES)} 个嵌套模块没有独立条目段（跑 --emit 取规范文本）"]
     m = re.search(re.escape(_NESTED_HEADING) + r"\n(.*?)(?=^##\s|\Z)", llms_text, re.M | re.S)
     got = _NESTED_HEADING + "\n" + (m.group(1) if m else "")
     if got.rstrip() != want.rstrip():
@@ -317,15 +392,26 @@ def main() -> int:
             else:
                 problems += check_nested_version_correspondence(published, derived, repos_dir)
 
-    total = len(MODULES) + len(NESTED_MODULES)
+    root, nested, bom, total = release_unit_count()
+    detail = f"{root} 根 + {nested} 嵌套 + {bom} 伞仓"
+
+    # 口径交叉核对：canonical 口径（登记）与文件系统推导（独立 oracle）
+    # 必须一致——不一致就意味着「发版单元」这个数会各说各话（issue #82）。
+    # 只在**完整检出**时核对：半套检出算出来的数必然偏小，拿它判红是假红。
+    if repos_dir is not None and _checkout_complete(repos_dir):
+        fs_units = count_units(repos_dir).get("release_units")
+        if fs_units is not None and fs_units != total:
+            problems.append(f"发版单元口径分裂：门禁口径 {total}（{detail}）"
+                            f" ≠ 文件系统推导 {fs_units}（gen_tables.count_units）——"
+                            f"两处口径必须一致，否则同一个术语会对外报出两个数")
+
     if problems:
-        print(f"❌ 发版单元门禁未通过（应覆盖 {total} 个发版单元"
-              f"= {len(MODULES)} 根模块 + {len(NESTED_MODULES)} 嵌套模块）：")
+        print(f"❌ 发版单元门禁未通过（应覆盖 {total} 个发版单元 = {detail}）：")
         for p in problems:
             print(f"   - {p}")
         return 1
-    print(f"✅ 发版单元门禁通过（{total} 个发版单元 = {len(MODULES)} 根 + "
-          f"{len(NESTED_MODULES)} 嵌套；{len(NESTED_MODULES)} 条嵌套安装行齐全）")
+    print(f"✅ 发版单元门禁通过（{total} 个发版单元 = {detail}；"
+          f"{nested} 条嵌套安装行 + {bom} 条伞仓安装行齐全）")
     return 0
 
 
