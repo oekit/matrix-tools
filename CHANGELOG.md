@@ -4,6 +4,71 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.10] — 2026-10-23
+
+### fix(tools)：git 传输侧「读到空 ≠ 事实为空」——ls-remote 失败不再静默降级
+
+#75 把「读到空 ≠ 事实为空」在 **GitHub API 侧**做实了（`ghsafe.py`），但矩阵的
+「版本事实」还有**第二条**读取路径——**git 传输**（`git ls-remote --tags`），
+它此前是裸 `except`，失败即静默降级，且没有任何告警。
+
+两处漏洞：
+
+1. **`gen_versions._remote_tags`**：读失败 ⇒ 直接返回**本地 clone 的 tag**。
+   而这个函数的 docstring 写明它存在的理由正是「本地 clone 的 tag 可能没 fetch，
+   生成 generatedAt 很新但内容陈旧的 versions.json——比明显陈旧更有害」
+   ⇒ 回退到本地 tag 恰好把它要防的 bug 原样放回来。产物 `versions.json`
+   （站点对外的版本事实）与 `oekit` BOM（`go get github.com/oekit/oekit@latest`
+   一次拉齐的 MVS 地板）都由它喂数据 ⇒ 降级会直接**流向消费方**。
+2. **`matrix.latest_tag(remote=True)`**：读失败 ⇒ 返回 `None`，而四个调用方一律
+   `if lt:` 跳过 ⇒ 该仓整条检查**静默消失**，报告照样印「✓ 矩阵审计通过」。
+   这正是 `audit.yml` 注释里记的 #26 形态：23/24 仓被跳过，报告仍显示通过。
+
+#### 改法
+
+- 新增 `matrix.remote_tags`：canonical HTTPS **优先**、clone origin URL 兜底
+  ——两条路协议独立（SSH 抽风不影响结论；实测 SSH ≈6.5s/仓、HTTPS ≈1.2s/仓，
+  优先 HTTPS 顺带把审计跑快约 5 倍）；两条都失败 ⇒ 抛 `RemoteReadError`。
+- `matrix.latest_tag(remote=True)`：读不到 ⇒ 抛错，不再返回 `None`。
+  `None` 只保留给「该仓真的一个 tag 都没有」。
+- `gen_versions._remote_tags`：统一走 `matrix.remote_tags`，删掉静默本地回退
+  （`_local_tags` 随之退役）。
+- audit：四个调用点改走 `remote_latest()`，读失败**记为漂移**（该仓这一版没被
+  核对过，不能算通过），不再静默跳过；报告加一行覆盖证据——
+  「远端 tag 读取：N/24 仓成功（M 读失败）」。按 #75 建立的「零发现必须自带
+  覆盖证据」口径：结论行「✓ 矩阵审计通过」在读不到时长得一模一样，不能自证
+  「真的读了远端事实」。
+
+#### 加剧因素：origin 协议混用
+
+`_remote_tags` 用各 clone 自己的 origin URL。本机 27 个仓：SSH 22 / HTTPS 5。
+实测 25 个含 go.mod 的仓：**SSH ≈6.5s/仓、HTTPS ≈1.2s/仓（慢 5.4 倍）**；
+更要紧的是**可用性不对称**（HTTPS 走 gh 的 token，SSH 依赖本机 key/agent）
+⇒ 一条 SSH 链路抽风时，**21/25 个仓的版本事实静默退化成陈旧本地 tag，
+audit 照样报绿**。本轮实测未触发降级（25/25 仓 `ls-remote` 全部成功，
+远端 tag 数 == 本地 tag 数）⇒ 本轮 audit 的绿是可信的——**但那是运气，不是机制**。
+
+#### 自测与变异测试
+
+- 新增 `scripts/remote_reads_selftest.py`（假 git + 临时目录；不联网、不依赖工作区
+  布局、无副作用），8 组用例：origin 失败走 HTTPS、两条都失败必抛错、
+  exit 0 + 空 stdout 是合法空事实、`latest_tag` 取最高版本、canonical 优先于
+  origin、HTTPS 失败回落 origin、`gen_versions._remote_tags` 不回退本地 tag。
+- 变异测试（红在**断言**层而非编译/导入层）：M1 `remote_tags` 退回「失败回退本地
+  tag」⇒ B 转红；M2 `latest_tag` 退回「失败返回 None」⇒ D 转红；M3
+  `gen_versions._remote_tags` 退回「失败回退本地 tag」⇒ F 转红。**3/3 转红**，
+  还原后 8/8 全绿。
+- 已接进 `audit.yml` 的 `selftest` job（与 `ghsafe_selftest.py` 同层）。
+
+#### 影响面
+
+只改**读取层**，不碰任何生成器输出——实测 `gen_versions.py --stdout` 与已发布
+`versions.json` **完全一致**（忽略 `generatedAt`），`gen_matrix_go.py --check`
+亦一致 ⇒ **不需要「先落产物再合生成器」的顺序**。但它改的是**门禁自己**，
+所以必须带自测 + 变异测试，否则等于给门禁换了个没牙齿的实现。
+
+详见 PR #80 / #81。
+
 ## [v0.1.9] — 2026-10-22
 
 ### fix(tools)：读到空 ≠ 事实为空——GitHub 偶发返回空集合，导致 audit 假漂移与 PR 被误关
