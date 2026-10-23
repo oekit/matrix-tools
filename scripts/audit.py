@@ -529,8 +529,45 @@ def check_dead_paths():
                     + "; ".join(miss[:4]))
 
 
+def check_version_line():
+    """独立门禁：**同一版本线内，后发布的 tag 版本号必须更高**（发布序列倒挂）。
+
+    与前两条互补：check_breaking_oracle 问「CHANGELOG 标了 breaking 的矩阵收没收」；
+    check_dead_paths 问「下游 import 会断的路径矩阵告没告」；这条问的是**发布事实**
+    ——已发布版本里有没有「版本号在时间线上回退」的旁支版本。
+
+    实测（2026-10-23）：4 仓 5 个已发布版本命中（network v0.1.1 / kitex v0.3.9 /
+    v0.3.10 / redisx v0.3.1 / middleware v0.5.1）。它们 tag 在远端、Release 在、
+    proxy 上可解析 ⇒ **撤不掉**（重推 = 缓存中毒），只能登记 + 声明。
+
+    已登记的 5 处只提示不阻塞（`scripts/version_line_known.json`）；
+    **未登记的新倒挂 ⇒ 判红**；某仓版本事实读不到 ⇒ 也判红（判不了 ≠ 通过）。
+    """
+    try:
+        from verify_version_line import scan, EXTRA_LINE_REPOS  # noqa: 延迟导入
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"version-line: 无法加载独立门禁脚本（{e}）")
+        return
+    repos = list(MODULES) + [r for r in EXTRA_LINE_REPOS if r not in MODULES]
+    try:
+        res = scan(Path(BASE), repos)
+    except Exception as e:  # noqa: BLE001
+        issues.append(f"version-line: 门禁执行异常（{e}）")
+        return
+    for item in res["known"]:
+        print(f"  ⚠ 已知旁支版本（已登记，tag 已发布撤不掉）：{item['repo']} {item['tag']}"
+              f"（发布于 {item['date']}，晚于已发布的 {item['higher_tag']}）")
+    check(not res["unknown"],
+          "version-line: 有未登记的发布序列倒挂（同一版本线内后发布的 tag 版本号反而更低）："
+          + "; ".join(f"{i['repo']} {i['tag']}" for i in res["unknown"][:6]))
+    check(not res["unreadable"],
+          "version-line: 有仓的版本事实读不到（判不了，不能当通过）："
+          + "; ".join(res["unreadable"][:4]))
+
+
 check_breaking_oracle()
 check_dead_paths()
+check_version_line()
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
