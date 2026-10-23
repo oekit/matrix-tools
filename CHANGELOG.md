@@ -4,6 +4,52 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.11] — 2026-10-23
+
+### fix(tools)：发版单元门禁漏检伞仓 BOM 仓——llms.txt 覆盖 34 个发版单元的承诺无人守
+
+站点承诺 llms.txt 是「**34 个发版单元**」的机器可读索引（24 根 + 9 嵌套 + 1 伞仓
+`oekit`），canonical 口径 `gen_tables.count_units` 也这么算。但发版单元门禁
+`verify_release_units` 只校验 24 + 9 = 33，**伞仓压根没进判据**。
+
+伞仓 `oekit` 是货真价实的独立发版单元：有独立 tag（latest v0.1.29）、独立
+GitHub Release，下游 `go get github.com/oekit/oekit@latest` 是一次独立的版本获取。
+
+#### 变异实测（修复前）
+
+把站点 `docs/public/llms.txt` 里伞仓那段（`go get github.com/oekit/oekit@latest`）
+整段删掉后重跑门禁：
+
+    ✅ 发版单元门禁通过（33 个发版单元 = 24 根 + 9 嵌套；9 条嵌套安装行齐全）
+    exit=0
+
+同样的变异对嵌套模块是**红的** ⇒ 门禁的牙没长在伞仓上。而站点
+`docs/guide/ai-agent.md` 正对外承诺「llms.txt 覆盖 34 个发版单元（… + **1 个 BOM
+伞仓 `oekit`**）」⇒ 这条承诺**无人守**（llms.txt 是 AI Agent 唯一会抓的机器可读索引）。
+
+#### 改法
+
+- `check_llms_units` 增加**伞仓 oracle**：llms.txt 必须含
+  `go get github.com/oekit/oekit@latest` 安装行，与嵌套模块同等要求。该函数已被
+  `audit.py` 导入（`scripts/audit.py:23`）⇒ 改动自动进 CI 覆盖面（audit.yml 的
+  audit job：PR 门禁 + 周巡检），无需新增 CI 接线。
+- `check_filesystem_oracle` 增加伞仓的物理证明：目录在 ⇒ 必须真有独立 `vX.Y.Z`
+  tag（与嵌套模块同款判据）；目录没检出不报（本地少 clone 一个不该假红）。
+- 口径统一到 canonical：新增 `release_unit_count()` = 24 根 + 9 嵌套 + 1 伞仓 = 34。
+  伞仓数不写死常量（判定依据是 `BOM_REPO` 不在矩阵登记表里，它若哪天被收进矩阵
+  模块，口径自动变 0，不会两处各说各话）。
+- 门禁额外做**口径交叉核对**：完整检出时拿文件系统推导（`count_units`）与
+  canonical 口径对比，不一致即判红——同一个术语不许对外报出两个数。
+
+#### 自测与变异测试
+
+- 新增 `scripts/verify_release_units_selftest.py`（纯内存 fixture；不联网、不依赖
+  工作区布局、无副作用），4 组用例：合法 fixture 零问题、**删掉伞仓安装行必须判红**
+  （原始形态）、删掉嵌套安装行必须判红、删掉根模块条目必须判红；另钉住 34 这个口径。
+- 变异回归：修复前同一变异 `exit=0`（绿）→ 修复后 `exit=1` 并点名伞仓。
+- 接入 `audit.yml` 的 selftest job（与 close_issue / dependabot_dirs / ghsafe /
+  remote_reads 四个既有 selftest 并列）。
+
 ## [v0.1.10] — 2026-10-23
 
 ### fix(tools)：git 传输侧「读到空 ≠ 事实为空」——ls-remote 失败不再静默降级
