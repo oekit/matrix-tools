@@ -12,6 +12,9 @@
   2. 造一个「正常递增」的仓 ⇒ 必须判绿（不误报）；
   3. 造一个「嵌套模块独立版本线」的仓（根 v0.3.0 + sub/v0.1.0）⇒ 必须判绿
      （嵌套模块有自己的版本节奏，不能与根模块混在一条线上比）；
+  3b. 造一个「module 路径变更」的仓（旧路径 v0.9.0 → 新路径 v0.1.0）⇒ 必须判绿
+     （module 路径变更是新模块，新旧两条版本线各自单调——redisx 活例）；
+  3c. 同一个仓但**不换路径**（v0.9.0 → v0.1.0 同一路径）⇒ 必须判红；
   4. 把倒挂登记进例外表 ⇒ 归入「已知」而非「未登记」，且**新出现的另一处倒挂
      仍然判红**（例外表不是漏报的口子）；
   5. 造一个「一个 tag 都没有」的仓 ⇒ 判**判不了**（读不到版本事实），
@@ -31,7 +34,15 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent))
 
-from verify_version_line import find_regressions, git_tag_events, load_known, scan  # noqa: E402
+from verify_version_line import find_regressions, git_tag_events, load_known, scan, _raw_tag_events  # noqa: E402
+
+
+def regressions_of(repo: Path) -> list[dict]:
+    """某仓的倒挂清单（带 module 路径分层的完整判据）。"""
+    raw = _raw_tag_events(repo)
+    events = [(tag, line, ver, date) for tag, line, ver, date, _mp in raw]
+    paths = {tag: mp for tag, _l, _v, _d, mp in raw}
+    return find_regressions(events, paths)
 
 
 def _git(repo: Path, *args: str, date: str | None = None) -> None:
@@ -46,8 +57,12 @@ def _git(repo: Path, *args: str, date: str | None = None) -> None:
         raise RuntimeError(f"git {' '.join(args)} 失败: {r.stderr.strip()}")
 
 
-def make_repo(path: Path, tags: list[tuple[str, str]]) -> Path:
+def make_repo(path: Path, tags: list[tuple[str, str]],
+              modules: dict[str, str] | None = None) -> Path:
     """造一个临时 git 仓，tags = [(tag 名, ISO 时刻)]，按给定时刻打 annotated tag。
+
+    `modules` 可给每个 tag 指定该版本 go.mod 里的 **module 路径**（默认
+    `example.com/probe`）——用于构造「module 路径变更 ⇒ 两条独立版本线」的场景。
 
     **必须自带 git 身份**：CI runner 没有全局 user.name/user.email
     （2026-10-23 实测：`git commit` 报 "Author identity unknown" ⇒ 自测红），
@@ -58,9 +73,16 @@ def make_repo(path: Path, tags: list[tuple[str, str]]) -> Path:
     _git(path, "config", "user.name", "version-line selftest")
     _git(path, "config", "user.email", "selftest@example.invalid")
     (path / "README.md").write_text("probe\n", encoding="utf-8")
+    (path / "go.mod").write_text(
+        f"module {(modules or {}).get('__init__', 'example.com/probe')}\n", encoding="utf-8")
     _git(path, "add", ".")
     _git(path, "commit", "-q", "-m", "init", date="2026-01-01T00:00:00Z")
-    for name, date in tags:
+    for idx, (name, date) in enumerate(tags):
+        if modules and name in modules:
+            (path / "go.mod").write_text(f"module {modules[name]}\n", encoding="utf-8")
+            _git(path, "add", ".")
+            _git(path, "commit", "-q", "-m", f"module path -> {modules[name]}",
+                 date=date)
         _git(path, "tag", "-a", name, "-m", f"tag {name}", date=date)
     return path
 
@@ -78,7 +100,7 @@ def selftest() -> int:
             ("v0.3.0", "2026-01-03T00:00:00Z"),
             ("v0.1.5", "2026-01-04T00:00:00Z"),
         ])
-        regs = find_regressions(git_tag_events(d))
+        regs = regressions_of(d)
         ok = len(regs) == 1 and regs[0]["tag"] == "v0.1.5" and regs[0]["higher_tag"] == "v0.3.0"
         print(("✅" if ok else "❌"), f"自测1：版本号回退被抓到（得到 {[r['tag'] for r in regs]}，"
                                    f"参照 {regs[0]['higher_tag'] if regs else '—'}）")
@@ -90,7 +112,7 @@ def selftest() -> int:
             ("v0.2.0", "2026-01-02T00:00:00Z"),
             ("v0.3.0", "2026-01-03T00:00:00Z"),
         ])
-        regs = find_regressions(git_tag_events(d))
+        regs = regressions_of(d)
         ok = regs == []
         print(("✅" if ok else "❌"), f"自测2：正常递增不误报（得到 {[r['tag'] for r in regs]}）")
         ok_all.append(ok)
@@ -102,9 +124,33 @@ def selftest() -> int:
             ("sub/v0.1.0", "2026-01-03T00:00:00Z"),
             ("sub/v0.2.0", "2026-01-04T00:00:00Z"),
         ])
-        regs = find_regressions(git_tag_events(d))
+        regs = regressions_of(d)
         ok = regs == []
         print(("✅" if ok else "❌"), f"自测3：嵌套版本线独立（得到 {[r['tag'] for r in regs]}）")
+        ok_all.append(ok)
+
+        # ── 自测3b：module 路径变更是「新模块」⇒ 新线的起点不算版本号回退 ──
+        # （redisx 活例：旧路径 github.com/oekit/redis 与新路径 …/redisx 各自单调；
+        #   若不按 module 路径分层，新线的 v0.5.0 会被误判成回退）
+        d = make_repo(root / "r3b", [
+            ("v0.9.0", "2026-01-01T00:00:00Z"),
+            ("v0.1.0", "2026-01-02T00:00:00Z"),
+        ], modules={"v0.1.0": "example.com/renamed"})
+        regs = regressions_of(d)
+        ok = regs == []
+        print(("✅" if ok else "❌"),
+              f"自测3b：module 路径变更后新线起点不误判（得到 {[r['tag'] for r in regs]}）")
+        ok_all.append(ok)
+
+        # ── 自测3c：同一 module 路径内，回退仍必须抓到 ──
+        d = make_repo(root / "r3c", [
+            ("v0.9.0", "2026-01-01T00:00:00Z"),
+            ("v0.1.0", "2026-01-02T00:00:00Z"),
+        ])
+        regs = regressions_of(d)
+        ok = len(regs) == 1 and regs[0]["tag"] == "v0.1.0"
+        print(("✅" if ok else "❌"),
+              f"自测3c：同一路径内的回退仍被抓到（得到 {[r['tag'] for r in regs]}）")
         ok_all.append(ok)
 
         # ── 自测4：例外表只放行登记的那一处，新出现的仍须判红 ──

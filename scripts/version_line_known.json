@@ -31,7 +31,7 @@
     {
       "repo": "redisx",
       "tag": "v0.3.1",
-      "reason": "2026-10-16 10:20 发布，晚于同线 v0.4.0（10:17）3 分钟。其 go.mod 声明 module github.com/oekit/redis（旧路径）⇒ 现路径 github.com/oekit/redisx@v0.3.1 装不了（module path 校验失败），旧路径 github.com/oekit/redis@v0.3.1 可装可编译 ⇒ 实为「旧路径线的最后一个版本」。处置：redisx CHANGELOG v0.3.1 节声明，不删 tag。"
+      "reason": "2026-10-16 10:20 发布，晚于同路径的 v0.4.0（10:17）3 分钟——旧路径线（module github.com/oekit/redis）内版本号回退。事实更正（2026-10-23 实测）：① 模块更名发生在 v0.5.0（不是 v0.4.0，v0.4.0 的 go.mod 仍是旧路径）；② v0.3.1 与 v0.4.0 同属旧路径线 ⇒ 旧路径最后版本其实是 v0.4.0；③ 旧路径 github.com/oekit/redis@latest 解析到 v0.10.0（其 go.mod 已是 redisx）⇒ 消费方 go get @latest 会撞「module declares its path as ... but was required as ...」；旧路径实际最高可安装版本为 v0.4.0。处置：redisx CHANGELOG 更正 v0.5.0 节的不准确陈述并补告知，不删 tag。"
     },
     {
       "repo": "middleware",

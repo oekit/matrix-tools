@@ -28,8 +28,13 @@ v0.1.1 后发布。**实测 4/4 仓的 changelog_check 全绿**。
 **判据（客观事实，不复用生成器逻辑）**：
 1. 读每个仓的 `git for-each-ref --sort=creatordate refs/tags`（tag 的**发布
    时刻**按 creatordate，即 annotated tag 的 tagger 时间）；
-2. 按「版本线」分开：根模块 tag 走一条线，嵌套模块 tag（`<子目录>/vX.Y.Z`）
-   各走一条线——嵌套模块有独立版本节奏，不能混在一条线上比；
+2. **版本线 = (路径前缀, module 路径)**：
+   - 路径前缀：根模块 tag 一条线，嵌套模块 tag（`<子目录>/vX.Y.Z`）各一条线
+     ——嵌套模块有独立版本节奏，不能混在一条线上比；
+   - module 路径：从该 tag 的 `go.mod` 读。**module 路径变更是「新模块」**，
+     旧路径与新路径是两条独立版本线，各自版本号互不相干（redisx 活例：旧路径
+     `github.com/oekit/redis` 与新路径 `github.com/oekit/redisx` 各自单调）。
+     不按 module 路径分层 ⇒ 新线的起点会被误判成「版本号回退」；
 3. 同一版本线内按发布顺序扫，**某 tag 的版本号低于此前已发布的最高版本**
    ⇒ 倒挂（regression）。
 
@@ -99,6 +104,14 @@ def git_tag_events(repo_dir: Path) -> list[tuple[str, str, tuple[int, int, int],
     **返回 None = 读不到**（不是「没有 tag」）——调用方必须把两者分开：
     读不到 ⇒ 判不了（不能算通过）；读到但为空 ⇒ 该仓确实一个 tag 都没有。
     """
+    events = _raw_tag_events(repo_dir)
+    if events is None:
+        return None
+    return [(tag, line, ver, date) for tag, line, ver, date, _mp in events]
+
+
+def _raw_tag_events(repo_dir: Path):
+    """→ [(tag, 路径前缀, 版本号, 发布时刻, module 路径)]；读不到返回 None。"""
     if not (repo_dir / ".git").exists():
         return None
     r = subprocess.run(
@@ -107,32 +120,91 @@ def git_tag_events(repo_dir: Path) -> list[tuple[str, str, tuple[int, int, int],
         capture_output=True, text=True)
     if r.returncode != 0:
         return None
-    out: list[tuple[str, str, tuple[int, int, int], str]] = []
-    for raw in r.stdout.splitlines():
-        if "|" not in raw:
+    raw: list[tuple[str, str, tuple[int, int, int], str]] = []
+    for line in r.stdout.splitlines():
+        if "|" not in line:
             continue
-        tag, date = raw.split("|", 1)
-        parsed = _parse_tag(tag.strip())
+        tag, date = line.split("|", 1)
+        tag = tag.strip()
+        parsed = _parse_tag(tag)
         if parsed is None:
             continue
-        line, name = parsed
-        out.append((tag.strip(), line, _semver(name), date.strip()))
+        line_prefix, name = parsed
+        raw.append((tag, line_prefix, _semver(name), date.strip()))
+    paths = module_paths(repo_dir, raw)
+    return [(tag, line, ver, date, paths.get(tag)) for tag, line, ver, date in raw]
+
+
+def module_paths(repo_dir: Path, tags: list[tuple[str, str, tuple[int, int, int], str]]) -> dict[str, str | None]:
+    """每个 tag 所在版本的 **module 路径**（从该 tag 的 go.mod 读）。
+
+    **为什么版本线要按 module 路径再分一层**：Go 的 module 路径变更是**新模块**——
+    旧路径与新路径是两条独立的版本线，各自的版本号可以互不相干。redisx 就是
+    活例：旧路径 `github.com/oekit/redis`（…v0.4.0）与新路径
+    `github.com/oekit/redisx`（v0.5.0 起）**各自单调**；若把两条线混成一条比，
+    新路径的 v0.5.0 会被误判成「版本号回退」（实际它是新线的起点）。
+
+    读不到 go.mod（该 tag 处没有 go.mod）⇒ None ⇒ 与其他「读不到」的归入
+    同一个兜底桶（保守：宁可多报也不漏报）。
+    """
+    if not tags:
+        return {}
+    revs = []
+    for tag, prefix, _ver, _date in tags:
+        revs.append(f"{tag}:{prefix}/go.mod" if prefix else f"{tag}:go.mod")
+    try:
+        r = subprocess.run(["git", "-C", str(repo_dir), "cat-file", "--batch"],
+                           input="\n".join(revs) + "\n", capture_output=True, text=True)
+    except OSError:
+        return {t[0]: None for t in tags}
+    if r.returncode != 0:
+        return {t[0]: None for t in tags}
+    out: dict[str, str | None] = {}
+    buf = r.stdout
+    pos = 0
+    for (tag, _prefix, _ver, _date), rev in zip(tags, revs):
+        nl = buf.find("\n", pos)
+        if nl < 0:
+            out[tag] = None
+            continue
+        header = buf[pos:nl]
+        pos = nl + 1
+        parts = header.split()
+        if len(parts) >= 3 and parts[1] == "blob":
+            size = int(parts[2])
+            content = buf[pos:pos + size]
+            pos += size + 1          # blob 内容 + 结尾换行
+            mod = None
+            for ln in content.splitlines():
+                if ln.startswith("module "):
+                    mod = ln.split(None, 1)[1].strip()
+                    break
+            out[tag] = mod
+        else:
+            out[tag] = None            # missing / 非 blob
     return out
 
 
-def find_regressions(events: list[tuple[str, str, tuple[int, int, int], str]]) -> list[dict]:
+def find_regressions(events: list[tuple[str, str, tuple[int, int, int], str]],
+                     paths: dict[str, str | None] | None = None) -> list[dict]:
     """同一版本线内，后发布却版本更低的 tag。
 
     events 已按发布时刻升序（git for-each-ref --sort=creatordate）。
+
+    **版本线 = (路径前缀, module 路径)**：module 路径变更是新模块 ⇒ 两条线独立
+    （见 module_paths 的说明）。paths 为 None 时退化为「只按路径前缀分线」。
     """
     out: list[dict] = []
-    best: dict[str, tuple[tuple[int, int, int], str, str]] = {}   # 版本线 → (版本号, tag, 时刻)
+    best: dict[tuple[str, str | None], tuple[tuple[int, int, int], str, str]] = {}
     for tag, line, ver, date in events:
-        prev = best.get(line)
+        mod = (paths or {}).get(tag)
+        key = (line, mod)
+        prev = best.get(key)
         if prev is not None and ver < prev[0]:
             out.append({
                 "tag": tag,
                 "line": line,
+                "module_path": mod,
                 "version": ver,
                 "date": date,
                 "higher_tag": prev[1],
@@ -140,7 +212,7 @@ def find_regressions(events: list[tuple[str, str, tuple[int, int, int], str]]) -
                 "higher_date": prev[2],
             })
         elif prev is None or ver > prev[0]:
-            best[line] = (ver, tag, date)
+            best[key] = (ver, tag, date)
     return out
 
 
@@ -150,12 +222,14 @@ def scan_repo(repo: str, base: Path) -> tuple[list[dict], str | None]:
         d = repo_dir(repo, str(base))
     except FileNotFoundError:
         return [], f"仓不在工作区（{base}）"
-    events = git_tag_events(d)
-    if events is None:
+    raw = _raw_tag_events(d)
+    if raw is None:
         return [], f"{repo}: 读不到 tag（git for-each-ref 失败或不是 git 仓）"
-    if not events:
+    if not raw:
         return [], f"{repo}: 一个 tag 都没有——版本事实读不到，不能算通过"
-    return find_regressions(events), None
+    events = [(tag, line, ver, date) for tag, line, ver, date, _mp in raw]
+    paths = {tag: mp for tag, _l, _v, _d, mp in raw}
+    return find_regressions(events, paths), None
 
 
 def load_known(path: Path | None = None) -> dict[tuple[str, str], dict]:
