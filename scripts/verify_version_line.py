@@ -204,6 +204,8 @@ def _fmt(v: tuple[int, int, int]) -> str:
 
 
 def main() -> int:
+    global KNOWN_PATH
+
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default=os.environ.get("MATRIX_BASE"))
     ap.add_argument("--known", default=None, help="已登记旁支版本表（默认 scripts/version_line_known.json）")
@@ -216,10 +218,8 @@ def main() -> int:
 
     base = Path(args.base or HERE.parent.parent).resolve()
     repos = list(MODULES) + [r for r in EXTRA_LINE_REPOS if r not in MODULES]
-    known_path = Path(args.known) if args.known else None
-    if known_path:
-        global KNOWN_PATH
-        KNOWN_PATH = known_path
+    if args.known:
+        KNOWN_PATH = Path(args.known)
 
     res = scan(base, repos)
 

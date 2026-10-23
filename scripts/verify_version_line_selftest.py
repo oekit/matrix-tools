@@ -47,9 +47,16 @@ def _git(repo: Path, *args: str, date: str | None = None) -> None:
 
 
 def make_repo(path: Path, tags: list[tuple[str, str]]) -> Path:
-    """造一个临时 git 仓，tags = [(tag 名, ISO 时刻)]，按给定时刻打 annotated tag。"""
+    """造一个临时 git 仓，tags = [(tag 名, ISO 时刻)]，按给定时刻打 annotated tag。
+
+    **必须自带 git 身份**：CI runner 没有全局 user.name/user.email
+    （2026-10-23 实测：`git commit` 报 "Author identity unknown" ⇒ 自测红），
+    而本地机器通常有 ⇒ **本地绿、CI 红**。身份只写进这个临时仓，不动全局配置。
+    """
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(["git", "init", "-q", "-b", "main", str(path)], check=True)
+    _git(path, "config", "user.name", "version-line selftest")
+    _git(path, "config", "user.email", "selftest@example.invalid")
     (path / "README.md").write_text("probe\n", encoding="utf-8")
     _git(path, "add", ".")
     _git(path, "commit", "-q", "-m", "init", date="2026-01-01T00:00:00Z")
