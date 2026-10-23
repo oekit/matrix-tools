@@ -1,0 +1,42 @@
+{
+  "_comment": [
+    "已登记的「发布序列倒挂」旁支版本（同一版本线内，后发布的 tag 版本号反而更低）。",
+    "",
+    "为什么要有这张表：这些版本**都已发布**——tag 在远端、GitHub Release 在、",
+    "Go module proxy 上可解析。tag 删不得也挪不得（重推 = 已缓存消费方集体中毒，",
+    "oekit/.github#5）⇒ 只能用「登记 + 各仓 CHANGELOG 声明」的方式把事实说清楚。",
+    "",
+    "这张表**不是漏报的口子**：每条都必须写明事实与处置；任何**未登记**的倒挂",
+    "仍然报红（scripts/verify_version_line.py）。",
+    "",
+    "实测来源：2026-10-23 全矩阵扫描（git for-each-ref --sort=creatordate）+",
+    "Go module proxy 实测安装/编译。原始取证见 matrix-tools issue 的正文。"
+  ],
+  "known": [
+    {
+      "repo": "network",
+      "tag": "v0.1.1",
+      "reason": "2026-10-17 16:53 发布，晚于同线 v0.5.1（16:51）2 分钟；内容实为 v0.5.1 前 2 分钟的树，版本号却像「远古版本」。现路径 github.com/oekit/network 可安装可编译。处置：network CHANGELOG v0.1.1 节声明不在主线版本线上，不删 tag。"
+    },
+    {
+      "repo": "kitex",
+      "tag": "v0.3.9",
+      "reason": "2026-10-15 19:32 发布，晚于同线 v0.4.1（16:48）2h43m；承载旧布局（主包在 kitex/kitex，v0.6.0 已提升至模块根）。现路径可安装可编译，但 CHANGELOG 里**没有同名节**（完全无文档）。处置：kitex 补 v0.3.9 节并声明不在主线版本线上，不删 tag。"
+    },
+    {
+      "repo": "kitex",
+      "tag": "v0.3.10",
+      "reason": "2026-10-16 08:39 发布，晚于同线 v0.4.1（10-15 16:48）15h50m；同样承载旧布局（主包在 kitex/kitex）。现路径可安装可编译。处置：kitex CHANGELOG v0.3.10 节声明不在主线版本线上，不删 tag。"
+    },
+    {
+      "repo": "redisx",
+      "tag": "v0.3.1",
+      "reason": "2026-10-16 10:20 发布，晚于同线 v0.4.0（10:17）3 分钟。其 go.mod 声明 module github.com/oekit/redis（旧路径）⇒ 现路径 github.com/oekit/redisx@v0.3.1 装不了（module path 校验失败），旧路径 github.com/oekit/redis@v0.3.1 可装可编译 ⇒ 实为「旧路径线的最后一个版本」。处置：redisx CHANGELOG v0.3.1 节声明，不删 tag。"
+    },
+    {
+      "repo": "middleware",
+      "tag": "v0.5.1",
+      "reason": "2026-10-17 16:52 发布，晚于同线 v0.6.0（16:08）44 分钟；自带 registry v0.3.1 地板（该版本仍有 registry/registry），现路径可安装可编译。处置：middleware CHANGELOG v0.5.1 节声明不在主线版本线上，不删 tag。"
+    }
+  ]
+}
