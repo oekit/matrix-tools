@@ -33,10 +33,23 @@ jobs:
       - name: Count floor drift
         id: drift
         run: |
-          MATRIX_BASE="$PWD/repos" python3 scripts/maintenance_check.py --threshold 8 | tee maintenance-report.txt
-          echo "count=$(grep -oE 'MAINTENANCE_COUNT=[0-9]+' maintenance-report.txt | cut -d= -f2)" >> "$GITHUB_OUTPUT"
+          # --base 显式传，不只靠环境变量（#96）：脚本此前硬编码 base，
+          # MATRIX_BASE 被 repo_dir 短路 ⇒ CI 布局下 24 仓全读不到 ⇒ count=0
+          # ⇒ 走进「关闭维护轮 issue」分支 ⇒ 门禁方向反了。
+          # pipefail：脚本失败（崩了）必须让本步骤失败，而不是被 tee 吞成 0。
+          set -o pipefail
+          MATRIX_BASE="$PWD/repos" python3 scripts/maintenance_check.py --threshold 8 --base "$PWD/repos" | tee maintenance-report.txt
+          COUNT=$(grep -oE 'MAINTENANCE_COUNT=[0-9]+' maintenance-report.txt | cut -d= -f2)
+          UNDET=$(grep -oE 'MAINTENANCE_UNDETERMINED=[0-9]+' maintenance-report.txt | cut -d= -f2)
+          if [ -z "$COUNT" ] || [ -z "$UNDET" ]; then
+            echo "::error::维护轮盘点没有产出计数（脚本可能崩了）——本次不改动维护轮 issue"
+            exit 1
+          fi
+          echo "count=$COUNT" >> "$GITHUB_OUTPUT"
+          echo "undetermined=$UNDET" >> "$GITHUB_OUTPUT"
       - name: Close previous maintenance issue
-        if: steps.drift.outputs.count == '0'
+        # 只有**确定**没有漂移、没有仓读不到，才关单。读不到 ≠ 零漂移（#96）。
+        if: steps.drift.outputs.count == '0' && steps.drift.outputs.undetermined == '0'
         uses: actions/github-script@v9
         with:
           script: |
@@ -48,14 +61,35 @@ jobs:
               await github.rest.issues.update({ owner: context.repo.owner,
                 repo: context.repo.repo, issue_number: i.number, state: 'closed' });
             }
+      - name: Ensure maintenance label exists
+        # 标签不存在时 issues.create 会 422（#96）——先自愈，不依赖仓外带外设置。
+        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const name = 'matrix-maintenance';
+            try {
+              await github.rest.issues.getLabel({ owner: context.repo.owner,
+                repo: context.repo.repo, name });
+            } catch (err) {
+              if (err.status !== 404) throw err;
+              await github.rest.issues.createLabel({ owner: context.repo.owner,
+                repo: context.repo.repo, name, color: 'ededed',
+                description: '维护轮到期：依赖地板落后最新 tag（由 maintenance.yml 自动开/更新）' });
+            }
       - name: Open maintenance round issue
-        if: steps.drift.outputs.count != '0'
+        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0'
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
             const count = '${{ steps.drift.outputs.count }}';
-            const body = '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期。\n\n' +
+            const undet = '${{ steps.drift.outputs.undetermined }}';
+            const headline = undet === '0'
+              ? '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期。'
+              : '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期；'
+                + '另有 **' + undet + '** 仓漂移状态未知（读不到，不能当零漂移），先查检出布局。';
+            const body = headline + '\n\n' +
               '按需发版模型下这不阻塞任何人；到达期阈值说明组合漂移已可观，建议跑一轮：\n\n' +
               '```\n' +
               '# 逐仓对齐 + 开 PR（auto-merge）\n' +

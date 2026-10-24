@@ -14,6 +14,7 @@
   python3 scripts/align_floors.py --apply             # 写入 go.mod + GOWORK=off tidy（仅 main+干净仓）
   python3 scripts/align_floors.py --apply --pr        # 变更仓逐仓开 PR（分支 docs/align-floors）
   --repos a,b,c                                       # 子集（缺省全矩阵）
+  --base <矩阵检出根目录>                              # 显式指定检出根（默认取 MATRIX_BASE，其次本仓上级）
 
 注意：地板抬升只是本地变更——对齐完成的定义是这些仓以 patch 版发版
 （release_train）且下游可见。--apply 输出末尾会列出待发版仓。
@@ -80,7 +81,16 @@ def main() -> None:
         repos = args[args.index("--repos") + 1].split(",")
     if "--repo" in args:
         repos = [args[args.index("--repo") + 1]]
+    # base 定位认 MATRIX_BASE（CI 的 repos/<repo> 布局）与 --base 显式覆盖。
+    # 此前硬编码 parent.parent.parent：matrix.repo_dir 的语义是
+    # `base or os.environ.get("MATRIX_BASE", ...)`——base 非空就把环境变量短路掉，
+    # 于是 README 承诺的 MATRIX_BASE 对本工具无效，整改命令会打到错误目录（#96）。
     base = str(Path(__file__).resolve().parent.parent.parent)
+    if "--base" in args:
+        base = args[args.index("--base") + 1]
+    else:
+        base = os.environ.get("MATRIX_BASE") or base
+    base = os.path.abspath(base)
 
     print("align_floors：依赖地板对齐（维护轮工具 / --repo 按需，非常规跟版）")
     plans_all: dict[str, dict[Path, list[tuple[str, str, str]]]] = {}

@@ -28,6 +28,11 @@ python3 scripts/gen_matrix_go.py         # oekit 仓 BOM 模块生成（go.mod �
 Actions 环境下自动批量克隆全仓（`repos/<name>` 布局，tag 走 ls-remote），
 发现漂移自动创建/更新 `matrix-drift` 标签的 issue 并 @ 维护者。
 
+`.github/workflows/maintenance.yml`：每月 5 日 04:00 UTC + 手动触发。
+同样在 `repos/<name>` 布局下盘点**依赖地板漂移**，漂移 ≥8 仓时创建/更新
+`matrix-maintenance` 标签的 issue（维护轮到期提醒）。**只有确定没有漂移、
+且没有仓读不到时才关闭该 issue**——「读不到」≠「零漂移」（matrix-tools#96）。
+
 ## 规范
 
 - 模块清单与描述的唯一事实源在本仓 `matrix.py` 的 `MODULES`/`DESC`
@@ -76,9 +81,9 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 | `scripts/dep_matrix.py` | **依赖版本矩阵**：`dep_matrix.py pkg` 看谁在用哪个版本（★=最新）；全矩阵视图——按需发版模型的决策面 |
 | `scripts/doc_wave.py` | **多仓文档波次**：DESC 矩阵表、版本行一改全矩阵脏——`--plan` → `--pr` 批量开 PR → `--merge-all` |
 | `scripts/release_post.py` | **发版后一条命令**：目标仓版本行 PR → versions.json → oekit BOM 推荐组合 → audit → 手工待办（`release_train` 之后跑；`--bom-release` 自动打 BOM tag） |
-| `scripts/align_floors.py` | **依赖地板对齐（维护轮工具，非常规跟版）**：`--repo data` 单仓按需 / 缺省全矩阵；`--plan`/`--apply`/`--apply --pr` |
+| `scripts/align_floors.py` | **依赖地板对齐（维护轮工具，非常规跟版）**：`--repo data` 单仓按需 / 缺省全矩阵；`--plan`/`--apply`/`--apply --pr`；检出根目录取 `MATRIX_BASE` 或 `--base` |
 | `scripts/close_issue.py` | **issue 回执关单**：`close_issue.py <repo>#<N> --tag vX.Y.Z` 发回执（CHANGELOG 小节 + Release 链接）并关闭；tag 不在远端拒绝 |
-| `scripts/maintenance_check.py` | **维护轮到期检查**：地板漂移盘点 + 阈值判定；月度 workflow（maintenance.yml）漂移 ≥8 仓自动开 matrix-maintenance issue |
+| `scripts/maintenance_check.py` | **维护轮到期检查**：地板漂移盘点 + 阈值判定；月度 workflow（maintenance.yml）漂移 ≥8 仓自动开 matrix-maintenance issue。**读不到的仓计入 `MAINTENANCE_UNDETERMINED`，不算「零漂移」**（matrix-tools#96） |
 | `scripts/prkit.py` | PR 落地共用件（doc_wave/release_post/align_floors 内部复用）：sync main → 分支 → 提交 → 开 PR → update-branch/auto 合并 |
 | `scripts/gen_tables.py` | 重新生成各仓 README「矩阵总览」表 |
 | `scripts/refresh_versions.py` | 刷新 README 安装行版本号到最新 tag |
