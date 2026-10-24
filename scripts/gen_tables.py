@@ -44,8 +44,8 @@ def count_units(repos_dir: str | None = None) -> dict:
     三个口径不一样，别选一个当「唯一正确值」：
       根矩阵模块数 = len(MODULES)（站点文案用这个，与「矩阵总览」表同口径）
       根 go.mod 数  = 25（24 矩阵模块 + 门面 BOM 仓 oekit）
-      嵌套模块数    = 7（深度 ≥2 的 go.mod，各自独立发版）
-      发版单元总数  = 根矩阵模块 + 嵌套模块 + **伞仓 oekit** = 32
+      嵌套模块数    = 11（仓根以下任意深度的 go.mod，各自独立发版）
+      发版单元总数  = 根矩阵模块 + 嵌套模块 + **伞仓 oekit** = 36
                      （伞仓有自己的 tag 与 GitHub Release，v0.1.11 等——下游
                       `go get github.com/oekit/oekit@latest` 是一次独立的版本
                       获取，按「可独立 go get 的发版单元」口径必须计入）
@@ -62,7 +62,21 @@ def count_units(repos_dir: str | None = None) -> dict:
     from pathlib import Path
     base = Path(repos_dir).resolve()
     roots = [p for p in sorted(base.iterdir()) if p.is_dir() and (p / "go.mod").is_file()]
-    nested = sum(1 for r in roots for g in r.glob("*/go.mod") if ".git" not in g.parts)
+    # 嵌套模块 = 仓根**以下**任意深度的 go.mod（Go 的子目录模块规则允许多层路径，
+    # 如 kitex/observability/tracing/instrumentation/kitexotel）⇒ 必须递归扫，
+    # 只扫「仓根下一层」会漏数多层嵌套模块（实测：kitex v0.7.0 拆出多层嵌套模块
+    # 后，单层 glob 数出 10、真实是 11，站点文案据此判漂移）。
+    # 排除：仓根本身、.git、vendor/third_party/testdata/examples（与共享 CI 的
+    # 嵌套模块发现口径一致）。
+    skip = {".git", "vendor", "third_party", "testdata", "examples"}
+    nested = 0
+    for r in roots:
+        for g in r.glob("**/go.mod"):
+            if g.parent == r:
+                continue                       # 仓根本身
+            if any(part in skip for part in g.parts):
+                continue
+            nested += 1
     counts["root_gomods"] = len(roots)
     counts["nested_modules"] = nested
     counts["total_gomods"] = len(roots) + nested

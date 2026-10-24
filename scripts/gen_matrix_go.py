@@ -40,7 +40,7 @@ BOM_GO = "1.26.0"  # 矩阵最高 go 地板（hertz/kitex 等 1.26 生态豁免�
 
 # 已废弃的嵌套模块（tag 还在、模块不再发版，不进 BOM）
 SKIP_NESTED = {("data", "all")}
-NESTED_ONLY_TAGS = re.compile(r"^([^/]+)/v\d+\.\d+\.\d+$")
+NESTED_ONLY_TAGS = re.compile(r"^((?:[^/]+/)*[^/]+)/v\d+\.\d+\.\d+$")
 
 
 def go_floor(repo_dir_path: str, tag: str) -> str:
@@ -68,7 +68,7 @@ def collect() -> list[dict]:
                 continue
             seen.add(m.group(1))
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{m.group(1)}",
-                           "version": tag.split("/", 1)[1], "go": go_floor(d, tag), "nested": True})
+                           "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True})
         out.extend(sorted(nested, key=lambda x: x["path"]))
     return out
 

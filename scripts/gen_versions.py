@@ -281,10 +281,12 @@ def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -
 def nested_versions(repo: str) -> list[dict]:
     by_path: dict[str, str] = {}
     for tag in _remote_tags(repo):
-        # 格式: hlog/v0.1.1
+        # 格式: hlog/v0.1.1；多层嵌套也成立（Go 的子目录模块 tag 规则要求
+        # tag 带**完整子路径**）：observability/tracing/instrumentation/kitexotel/v0.1.0
+        # ⇒ 必须 rsplit（按最后一个 "/" 切），split 会把多层路径切错。
         if "/" not in tag:
             continue
-        path, ver = tag.split("/", 1)
+        path, ver = tag.rsplit("/", 1)
         if path not in by_path:
             by_path[path] = ver
     if not by_path:
