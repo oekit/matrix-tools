@@ -75,9 +75,11 @@ from gen_tables import BOM_REPO, count_units  # noqa: E402  口径单一真相�
 _ROOT_ENTRY_RE = re.compile(r"^-\s*\[([A-Za-z0-9_.\-]+)\]\(https://github\.com/oekit/[^)]+\)\s*[:：]",
                             re.M)
 # 嵌套模块条目形态：`- [repo/path](https://github.com/oekit/repo/tree/main/path): 描述`
+# path 可含多层（Go 的子目录模块 tag 规则要求完整子路径）：
+# `kitex/observability/tracing/instrumentation/kitexotel` ⇒ 名字与链接都允许多层。
 _NESTED_ENTRY_RE = re.compile(
-    r"^-\s*\[([A-Za-z0-9_.\-]+/[A-Za-z0-9_.\-]+)\]"
-    r"\(https://github\.com/oekit/[A-Za-z0-9_.\-]+/tree/main/[A-Za-z0-9_.\-]+\)\s*[:：]",
+    r"^-\s*\[([A-Za-z0-9_.\-]+(?:/[A-Za-z0-9_.\-]+)+)\]"
+    r"\(https://github\.com/oekit/[A-Za-z0-9_.\-]+/tree/main/[A-Za-z0-9_.\-/]+\)\s*[:：]",
     re.M)
 # 安装行：`go get github.com/oekit/logx/sink@latest`
 # 抓取**完整 module 路径**（含 github.com/oekit/ 前缀），与 NESTED_MODULES 的

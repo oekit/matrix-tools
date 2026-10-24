@@ -629,8 +629,11 @@ def check_nested_module_floors():
     """嵌套模块 go.mod require 其父模块时，地板不得落后父模块最新 tag。"""
     for repo in MODULES:
         root = repo_dir(repo, BASE)
-        for gomod in sorted(root.glob("*/go.mod")):
-            sub = gomod.parent.name
+        for gomod in sorted(root.glob("**/go.mod")):
+            if gomod.parent == root:
+                continue          # 仓根本身不是嵌套模块
+            # 相对路径（多层嵌套也对）：observability/tracing/instrumentation/kitexotel
+            sub = str(gomod.parent.relative_to(root))
             text = gomod.read_text()
             for req in re.finditer(r"^(?:\t|require )(github\.com/oekit/(\S+)) (v\S+)$", text, re.M):
                 dep_repo, ver = req.group(2), req.group(3)

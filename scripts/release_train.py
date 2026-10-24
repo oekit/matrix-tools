@@ -91,6 +91,14 @@ def check_repo(root, failures: list[str]) -> None:
         failures.append(f"golangci-lint 失败\n{(r.stdout + r.stderr)[-600:]}")
 
 
+def _repo_root(module_dir: Path) -> Path:
+    """从嵌套模块目录上溯到仓根（带 .git 的那层）。"""
+    d = module_dir.resolve()
+    while d != d.parent and not (d / ".git").exists():
+        d = d.parent
+    return d
+
+
 def check_module(repo: str, name: str, module_dir, tag: str, failures: list[str]):
     """单模块前置检查（结果追加进 failures）。"""
     # a. ls-remote 同名 tag 查重（重推 = 代理/sumdb 缓存集体中毒，.github#5）
@@ -116,7 +124,15 @@ def check_module(repo: str, name: str, module_dir, tag: str, failures: list[str]
         failures.append(f"{name}: go build 失败\n{r.stderr[-600:]}")
         return
     # d. CHANGELOG 核对（同名小节或行内出现 tag 名）
-    cl = module_dir.parent / "CHANGELOG.md" if name != "main" else module_dir / "CHANGELOG.md"
+    #    嵌套模块的 tag 带**完整子路径**（Go 的子目录模块规则）：
+    #    observability/tracing/instrumentation/kitexotel/v0.1.0 ⇒ 该 tag 名
+    #    出现在**仓根** CHANGELOG 的版本节里（ensure_changelog 写的）。
+    #    旧写法取 module_dir.parent/CHANGELOG.md（假定嵌套模块在仓根下一层）——
+    #    多层嵌套时会指向一个不存在的目录 ⇒ 发版被凭空拦下。
+    if name == "main":
+        cl = module_dir / "CHANGELOG.md"
+    else:
+        cl = _repo_root(module_dir) / "CHANGELOG.md"
     if not cl.exists() or tag not in cl.read_text():
         failures.append(f"{name}: CHANGELOG.md 未包含 {tag}（版本号必须来自即将发布的内容）")
 
