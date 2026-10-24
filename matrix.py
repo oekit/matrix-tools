@@ -54,17 +54,22 @@ NESTED_MODULES = [
      "desc": "Nacos SPI 实现——Discoverer/ConfigStore/Registrar 基于 nacos-sdk-go v2（nacos-sdk 重依赖隔离在此，registry 根仓零 nacos-sdk）"},
     {"repo": "registry", "path": "nacos", "module": "github.com/oekit/registry/nacos",
      "desc": "Nacos 客户端门面——Bootstrap 配置、client 工厂与 config 加载（实现 core/config.ConfigSource，配 ConfigWatcher 热更新）"},
+    {"repo": "kitex", "path": "observability/tracing/instrumentation/kitexotel",
+     "module": "github.com/oekit/kitex/observability/tracing/instrumentation/kitexotel",
+     "desc": "Kitex 的 OpenTelemetry tracing 接入——client/server suite + metainfo 透传（obs-opentelemetry 重依赖隔离在此，kitex 根仓回归零 apache/thrift）"},
+    {"repo": "kitex", "path": "istio", "module": "github.com/oekit/kitex/istio",
+     "desc": "Kitex 的 xDS / Proxyless / Istio 集成桥接——xDS 资源管理器 + 动态熔断（kitex-contrib/xds 重依赖隔离在此，kitex 根仓回归零 apache/thrift）"},
 ]
 
 # 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
 MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
-NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 9 个嵌套模块
+NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 11 个嵌套模块
 # 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
 # （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
 # 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 34）。
 BOM_RELEASE_UNIT = 1
-GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 34 个 Go module
-# 工作区里的 go.mod 总数 = 34（24 根 + 9 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 36 个 Go module
+# 工作区里的 go.mod 总数 = 36（24 根 + 11 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
 
 ORG = "oekit"
 SITE_REPO = "oekit.github.io"
