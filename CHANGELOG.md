@@ -4,6 +4,61 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.14] — 2026-10-24
+
+### fix(tools)：嵌套模块支持多层子目录路径——五处「单层目录」假设在 kitex v0.7.0 后全部算错
+
+kitex v0.7.0 把 `observability/tracing/instrumentation/kitexotel` 与 `istio` 拆成嵌套模块（kitex#37）。
+Go 的子目录模块 tag 规则要求 tag 带**完整子路径** ⇒ 这类嵌套模块的 tag 是
+`observability/tracing/instrumentation/kitexotel/v0.1.0`；而工具链有五处解析按「单层目录」写，
+在多层时**算错**：
+
+| 位置 | 旧假设 | 修法 |
+|---|---|---|
+| `gen_versions.py` | `nested_versions` 用 `tag.split("/", 1)` | 改 `rsplit`（split 会把多层路径切成 path=observability / ver=tracing/…/v0.1.0） |
+| `gen_matrix_go.py` | `NESTED_ONLY_TAGS` 正则只放行单层路径 | 正则放宽为允许多层，版本号改 `rsplit` 取最后一段 |
+| `release_train.py` | 嵌套模块的 CHANGELOG 取 `module_dir.parent/CHANGELOG.md`（假定在仓根下一层） | 上溯到仓根（含 `.git` 的那层）——多层时原指向不存在的目录，发版被凭空拦下 |
+| `verify_release_units.py` | llms.txt 嵌套条目正则只放行单层路径 | 名字与链接正则同步放宽 |
+| `audit.py` | 嵌套模块父仓地板门禁的 glob 只扫「仓根下一层」 | 放宽为递归（`**/go.mod`，排除仓根本身） |
+
+对既有 9 个单层嵌套模块**零行为变化**：`gen_matrix_go --check` 与 `gen_versions` 重跑后产物逐字节一致。
+
+### fix(tools)：count_units 数嵌套模块改为递归扫（多层子目录路径不再漏数）
+
+`count_units` 用 `r.glob("*/go.mod")` 只扫「仓根下一层」⇒ 多层嵌套模块被漏数：
+实测文件系统里有 **11** 个嵌套模块，单层 glob 只数出 **10** ⇒ 站点文案据此判漂移
+（真实 11 / 36，误判 10 / 35）。
+
+改为递归扫 `**/go.mod`，排除仓根本身与 `.git` / `vendor` / `third_party` / `testdata` / `examples`
+（与共享 CI 的嵌套模块发现口径一致）。口径数字同步更新：**嵌套模块 11、发版单元 36**（24 根 + 11 嵌套 + 1 伞仓）。
+
+### feat(tools)：NESTED_MODULES 登记表补齐 kitex v0.7.0 拆出的两个嵌套模块
+
+`matrix.py` 的 `NESTED_MODULES` 登记表是「应该有什么」的唯一声明。缺登记会让三类判据失真：
+
+| 判据 | 缺登记时的表现 |
+|---|---|
+| `verify_release_units.py` 发版单元口径 | 门禁口径 34 ≠ 文件系统推导 36 ⇒ 判「口径分裂」红 |
+| `check_section_consistency` llms.txt 逐字节比对 | 规范渲染少两条 ⇒ 站点段漂移红 |
+| `check_llms_units` 嵌套模块安装行 | kitexotel / istio 无 `go get` 安装行 ⇒ Agent 装不上 |
+
+补登记 2 条（`kitexotel`、`istio`，含 module 路径与 desc），计数口径同步：嵌套模块 9 → 11、发版单元 34 → 36。
+
+### docs(matrix)：DESC 同步——pkg 补 PeekGetter/stale-if-error 契约、data 门面同步壳转发面
+
+真相源 `matrix.py` 的 `DESC` 与已发布的矩阵表对齐（两处均为**已发布事实的登记**，非新增宣称）：
+
+- **pkg**：补 v0.23.0 起 Peek 非删除式读（可选接口 `PeekGetter` 外置——读到过期条目只算不命中、不删除它，
+  stale-if-error 兜底需要那份过期真值留在表内；`SingleFlightCache` 包装 `LocalCache` 时曾因前置检查走
+  `Get` 惰性删除而静默废掉 `StaleIfError`，pkg#72）；
+- **data**：补 v0.18.0 起 cache 壳 `PeekGetter` 别名 + cachetest 壳 2 个 stale-if-error 契约入口（套件 13 → 15 场景）。
+
+### fix(tools)：登记表的伞仓计数注释去掉过期绝对数
+
+PR #94 把嵌套模块 9 → 11、发版单元 34 → 36，但 `BOM_RELEASE_UNIT` 旁的注释仍写着
+「裁决定死 34」——裁决本身（**伞仓必须计入发版单元口径**）没变，变的是总数随嵌套模块增减。
+注释里的绝对数会再次过期且误导（读者会以为 34 是定值）⇒ 改为只写裁决、不写绝对数。
+
 ## [v0.1.13] — 2026-10-23
 
 ### feat(tools)：新增「发布序列倒挂」门禁——版本号回退的旁支发布进不了矩阵也撤不掉

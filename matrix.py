@@ -66,7 +66,7 @@ MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块�
 NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 11 个嵌套模块
 # 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
 # （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
-# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决定死 34）。
+# 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决：伞仓计入；总数随嵌套模块增减）。
 BOM_RELEASE_UNIT = 1
 GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 36 个 Go module
 # 工作区里的 go.mod 总数 = 36（24 根 + 11 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
