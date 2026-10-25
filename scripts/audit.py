@@ -17,7 +17,7 @@ sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
-    RemoteReadError, REMOTE_READ_LOG,
+    RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
@@ -38,6 +38,16 @@ def check(cond: bool, msg: str):
         issues.append(msg)
 
 
+def _read_remote(repo: str) -> str | None:
+    """真正去读某仓的远端最新 tag（真读网络的那一步）。"""
+    return latest_tag(repo, BASE, remote=REMOTE_TAGS)
+
+
+# 读失败的仓：漂移**只记一次**。同一仓会被问四次（见 remote_latest 的说明），
+# 记 4 遍同一条漂移只会让人以为有 4 个问题。
+_remote_fail_recorded: set[str] = set()
+
+
 def remote_latest(repo: str) -> str | None:
     """某仓**远端**最新 tag；读不到 ⇒ 记为漂移，**不**静默跳过（#79）。
 
@@ -46,11 +56,20 @@ def remote_latest(repo: str) -> str | None:
     （#26 的形态：23/24 仓被跳过，报告仍显示通过）。
 
     现在：读不到 = 明确记一条漂移 ⇒ 该仓这一版**没被核对过**，不能算通过。
+
+    **缓存**（2026-10-25）：本函数有**四个**调用点（README 安装行 / AGENTS 当前
+    版本行 / 站点 versions.json / 嵌套模块父模块地板），而 `matrix.remote_tags()`
+    没有缓存 ⇒ 24 仓 × 4 处 = **96 次** HTTPS 读，实测把审计拖到 7 分钟以上、
+    后台任务 900s 超时。现在同一仓**只读一次**（96 → 24 次），且 24 仓并发预取；
+    读失败也缓存（失败仓恰恰最慢），但**仍记一条漂移**（口径不变）。
+    详见 matrix.py 的 enable_tag_cache。
     """
     try:
         return latest_tag(repo, BASE, remote=REMOTE_TAGS)
     except RemoteReadError as e:
-        check(False, f"{e}（该仓版本事实未核对，不能当通过）")
+        if repo not in _remote_fail_recorded:
+            _remote_fail_recorded.add(repo)
+            check(False, f"{e}（该仓版本事实未核对，不能当通过）")
         return None
 
 
@@ -317,6 +336,26 @@ def check_go_floor_pairing(repo: str, d):
         check(False, f"{repo}: 业务层 Go 地板 {gm[0]}.{gm[1]} 不在允许档位 "
                      f"（1.24 / 1.25 / 1.26）内")
 
+
+# ---------- 远端事实预取（先读一遍，后面全是缓存命中） ----------
+#
+# 为什么放在最前面：本脚本后面有**四个**地方问同一仓的远端最新 tag
+# （README 安装行 / AGENTS 当前版本行 / 站点 versions.json / 嵌套模块地板），
+# gen_releases 的 Release 对账还要**每个仓的完整 tag 列表**；而
+# `matrix.remote_tags()` 不带缓存 ⇒ 24 仓 × 4 处 = 96 次 HTTPS 读
+# （实测 1.4–2.1s/次，拥塞时更久）⇒ 审计本身要跑 281s，后台任务直接
+# 900s 超时（2026-10-25 实测）。这里一次性**并发**读掉 24 仓，之后全是命中。
+#
+# 缓存**默认关**（matrix.enable_tag_cache）——发布类脚本不能开：它们的产物
+# （BOM / versions.json）必须反映**生成那一刻**的远端事实（#79）。
+# 审计是**一次性**的核对，开着正合适。
+#
+# 读失败也缓存，但**仍记一条漂移**（matrix-tools#79 的口径不变）：
+# 「读不到」永远不等于「没有 tag」。
+enable_tag_cache()
+if REMOTE_TAGS:
+    prefetch_remote_tags(MODULES, BASE, on_fail=lambda repo, e: check(
+        False, f"{e}（该仓版本事实未核对，不能当通过）"))
 
 # ---------- 模块仓 ----------
 for repo in MODULES:

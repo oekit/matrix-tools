@@ -29,8 +29,10 @@ import subprocess
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, repo_dir, ensure_clean_all  # noqa: E402
-from gen_versions import _remote_tags, latest_version  # noqa: E402
+from matrix import (  # noqa: E402
+    MODULES, repo_dir, ensure_clean_all, enable_tag_cache, prefetch_remote_tags,
+)
+from gen_versions import _remote_tags  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 OEKIT_DIR = os.path.join(BASE, "oekit")
@@ -97,10 +99,23 @@ def go_floor(repo_dir_path: str, tag: str) -> str:
 
 def collect() -> list[dict]:
     """[{repo, path, version, go, nested: bool}]，按 MODULES 自底向上序 + 嵌套字母序。"""
+    # 远端 tag **一次性并发读完**（开了缓存，后面的读取全是命中）：
+    # 原来每仓串行读一次（24 仓实测 ≈35s），而 audit 把本脚本当子进程跑
+    # ⇒ 整条审计的耗时大头。并发 8 路实测 35s → 6s。
+    #
+    # 失败直接抛（fail-loud，#100 的口径）：BOM 的地板与版本必须来自
+    # **真实读到的**远端 tag，读不到就不能生成产物。
+    enable_tag_cache()
+    prefetch_remote_tags(MODULES, BASE)
+
     out: list[dict] = []
     for repo in MODULES:
         d = str(repo_dir(repo, BASE))
-        ver = latest_version(repo)
+        # **一仓只读一次**远端 tag 列表，本轮复用给「根模块最新版本」和「嵌套模块 tag」。
+        # 原来这里是 latest_version(repo) + _remote_tags(repo) 各读一次 ⇒ 每仓 2 次
+        # HTTPS 读（audit 的 --check 子进程因此要 48 次读，拖慢整条审计）。
+        tags = _remote_tags(repo)
+        ver = next((t for t in tags if "/" not in t), None)
         if not ver:
             continue
         ensure_local_tag(d, ver)
@@ -108,7 +123,7 @@ def collect() -> list[dict]:
                     "go": go_floor(d, ver), "nested": False})
         seen: set[str] = set()
         nested: list[dict] = []
-        for tag in _remote_tags(repo):
+        for tag in tags:
             m = NESTED_ONLY_TAGS.match(tag)
             if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
                 continue
