@@ -43,11 +43,56 @@ SKIP_NESTED = {("data", "all")}
 NESTED_ONLY_TAGS = re.compile(r"^((?:[^/]+/)*[^/]+)/v\d+\.\d+\.\d+$")
 
 
+def ensure_local_tag(repo_dir_path: str, tag: str) -> None:
+    """本地 clone 缺该 tag 时补取一次（best-effort，失败不抛）。
+
+    为什么需要：生成器的**版本取自远端 tag**（gen_versions.latest_version →
+    `_remote_tags`），而 **Go 地板取自本地 clone**（`git show <tag>:go.mod`）——
+    两路口径分叉。本地 clone 还没 fetch 到那个 tag 时（多仓并行发版 / clone 刚建 /
+    网络不稳），`git show` 直接失败。
+
+    这里在取地板前把缺的 tag 补齐，**减少**触发概率；**取不到仍由 go_floor 报错**
+    ——fetch 本身可能因网络抖动失败，不能拿它兜底（那正是 #100 的成因）。
+
+    只在 tag 确实缺失时才 fetch：稳态（clone 已是最新）零额外网络开销。
+    """
+    have = subprocess.run(["git", "-C", repo_dir_path, "rev-parse", "--verify", "--quiet",
+                           f"refs/tags/{tag}"], capture_output=True, text=True)
+    if have.returncode == 0:
+        return
+    # 失败不抛：真因由 go_floor 报（它的消息里带 git 的原始 stderr，更可诊断）
+    subprocess.run(["git", "-C", repo_dir_path, "fetch", "--quiet", "--tags", "origin"],
+                   capture_output=True, text=True)
+
+
 def go_floor(repo_dir_path: str, tag: str) -> str:
+    """取该 tag 的 go 指令（Go 地板）。
+
+    **取不到就报错，绝不兜底**（matrix-tools#100）。
+
+    旧实现取不到时静默返回默认地板 `1.24.0`——那不是「未知」而是**一个具体的、
+    看起来合法的地板**，与「真的是 1.24.0 的仓」在产物里长得一模一样，下游无从分辨。
+    实测已污染一个发布物：BOM v0.1.42 把 hertz（真实 `go 1.26.0`）写成 `1.24.0`，
+    触发条件只是生成时本地 clone 尚未 fetch 到那个 tag。
+
+    地板**低报比不报更危险**：不报会让人去查，报一个具体数字会让人以为那就是事实。
+    ⇒ 宁可让生成失败（错误消息里带可执行的修复步骤），也不能写出一个假地板。
+    """
     r = subprocess.run(["git", "-C", repo_dir_path, "show", f"{tag}:go.mod"],
                        capture_output=True, text=True)
+    if r.returncode != 0:
+        raise SystemExit(
+            f"{repo_dir_path}: 取不到 {tag} 的 go.mod（本地 clone 缺该 tag？）——"
+            f"先 `git -C {repo_dir_path} fetch --tags` 再生成。\n"
+            f"**不兜底**：兜底值会被写进 BOM 产物，与真实地板无法分辨"
+            f"（已因此污染过 BOM v0.1.42，见 matrix-tools#100）。\n"
+            f"git 说：{(r.stderr or r.stdout).strip()[:300]}")
     m = re.search(r"(?m)^go (\d+\.\d+(\.\d+)?)", r.stdout)
-    return m.group(1) if m else "1.24.0"
+    if not m:
+        raise SystemExit(
+            f"{repo_dir_path}: {tag} 的 go.mod 里没有 go 指令——不兜底默认地板"
+            f"（兜底值会写进 BOM 产物，与真实地板无法分辨，见 matrix-tools#100）")
+    return m.group(1)
 
 
 def collect() -> list[dict]:
@@ -58,6 +103,7 @@ def collect() -> list[dict]:
         ver = latest_version(repo)
         if not ver:
             continue
+        ensure_local_tag(d, ver)
         out.append({"repo": repo, "path": f"github.com/{ORG}/{repo}", "version": ver,
                     "go": go_floor(d, ver), "nested": False})
         seen: set[str] = set()
@@ -67,6 +113,7 @@ def collect() -> list[dict]:
             if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
                 continue
             seen.add(m.group(1))
+            ensure_local_tag(d, tag)
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{m.group(1)}",
                            "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True})
         out.extend(sorted(nested, key=lambda x: x["path"]))
