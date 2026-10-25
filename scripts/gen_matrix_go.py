@@ -40,7 +40,12 @@ BOM_GO = "1.26.0"  # 矩阵最高 go 地板（hertz/kitex 等 1.26 生态豁免�
 
 # 已废弃的嵌套模块（tag 还在、模块不再发版，不进 BOM）
 SKIP_NESTED = {("data", "all")}
-NESTED_ONLY_TAGS = re.compile(r"^([^/]+)/v\d+\.\d+\.\d+$")
+# 嵌套模块的 tag：<嵌套路径>/vX.Y.Z。嵌套路径**可以是多段**——
+# kitex 的 telemetry 模块的 tag 是
+# observability/tracing/instrumentation/kitexotel/v0.7.0，
+# 只匹配一段的正则会把它整个漏掉，于是 BOM 少钉一个地板（CI 的地板数量护栏
+# 报 34 而非 35）。
+NESTED_ONLY_TAGS = re.compile(r"^(.+)/v\d+\.\d+\.\d+$")
 
 
 def go_floor(repo_dir_path: str, tag: str) -> str:
@@ -64,7 +69,10 @@ def collect() -> list[dict]:
         nested: list[dict] = []
         for tag in _remote_tags(repo):
             m = NESTED_ONLY_TAGS.match(tag)
-            if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
+            # SKIP_NESTED 按嵌套模块的**末段名**登记（"data/all" → "all"），
+            # 嵌套路径改成多段后仍要能对上。
+            nested_name = m.group(1).rsplit("/", 1)[-1] if m else ""
+            if not m or m.group(1) in seen or (repo, nested_name) in SKIP_NESTED:
                 continue
             seen.add(m.group(1))
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{m.group(1)}",
