@@ -131,12 +131,61 @@ def case_ensure_local_tag_noop_when_present() -> None:
         assert go_floor(str(d), "v0.1.0") == "1.26.0"
 
 
+def case_unreadable_exits_with_code_2() -> None:
+    """反证 4：读不到远端 tag ⇒ **退出码 2 + 干净消息**，不是裸 traceback。
+
+    「读不到 ≠ 没有」（#79）：这**不是**「BOM 陈旧」，是「判不了」。
+    以前这里抛裸异常，audit 只取子进程输出的最后一行当漂移消息 ⇒
+    报告里出现「❌ matrix.RemoteReadError: registry: 远端 tag 读不到…」，
+    读的人看不出这是读取失败而不是产物陈旧（实测 2026-10-25）。
+    """
+    import gen_matrix_go
+
+    orig = gen_matrix_go.prefetch_remote_tags
+
+    def boom(*_args, **_kwargs):
+        raise gen_matrix_go.RemoteReadError(
+            "registry: 远端 tag 读不到（已试 https://github.com/oekit/registry.git）"
+            "——读不到 ≠ 没有，不能用本地 tag 顶替（matrix-tools#79）")
+
+    gen_matrix_go.prefetch_remote_tags = boom
+    old_argv = sys.argv
+    sys.argv = ["gen_matrix_go.py", "--check"]
+    try:
+        rc = gen_matrix_go.main()
+    finally:
+        gen_matrix_go.prefetch_remote_tags = orig
+        sys.argv = old_argv
+    assert rc == gen_matrix_go.EXIT_UNREADABLE == 2, \
+        f"读不到应退出码 2（EXIT_UNREADABLE），实得 {rc}"
+
+
+def case_classify_check_kinds() -> None:
+    """退出码分类：0=一致 / 1=真漂移 / 2=未核对（读不到）。"""
+    import gen_matrix_go
+
+    kind, msg = gen_matrix_go.classify_check(gen_matrix_go.EXIT_OK, "✓ 一致")
+    assert kind == "ok", f"退出码 0 应判为一致，实得 {kind}"
+
+    kind, msg = gen_matrix_go.classify_check(gen_matrix_go.EXIT_STALE, "❌ oekit BOM 陈旧：go.mod")
+    assert kind == "stale", f"退出码 1 应判为真漂移，实得 {kind}"
+    assert "BOM 陈旧" in msg, f"漂移消息应保留子进程原话，实得 {msg}"
+
+    kind, msg = gen_matrix_go.classify_check(gen_matrix_go.EXIT_UNREADABLE,
+                                             "读不到远端 tag ⇒ 无法核对 BOM 新鲜度")
+    assert kind == "unreadable", f"退出码 2 应判为未核对，实得 {kind}"
+    assert "未核对" in msg and "判不了" in msg, \
+        f"未核对消息必须说清「判不了 ≠ 通过」，实得 {msg}"
+
+
 CASES = [
     ("正常路径：本地有 tag ⇒ 取到真地板", case_local_tag_present),
     ("反证1：本地缺 tag ⇒ 必须抛错（不得兜底）", case_missing_tag_must_fail),
     ("反证2：go.mod 无 go 指令 ⇒ 必须抛错", case_no_go_directive_must_fail),
     ("反证3：ensure_local_tag 能从 origin 补取", case_ensure_local_tag_fetches_from_origin),
     ("稳态：tag 已在本地 ⇒ 不做额外 fetch", case_ensure_local_tag_noop_when_present),
+    ("反证4：读不到远端 tag ⇒ 退出码 2 + 干净消息（非裸 traceback）", case_unreadable_exits_with_code_2),
+    ("反证5：退出码分类（0/1/2 ⇒ 一致/真漂移/未核对）", case_classify_check_kinds),
 ]
 
 

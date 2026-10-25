@@ -20,6 +20,7 @@ from matrix import (  # noqa: E402
     RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
+import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
                                   check_nested_version_correspondence)
@@ -783,8 +784,12 @@ try:
                                                      "gen_matrix_go.py"), "--check"],
                        capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
-    if r.returncode != 0:
-        issues.append(out.splitlines()[-1] if out else "oekit: BOM 新鲜度检查失败")
+    # 退出码契约由**生产方**定义（gen_matrix_go.EXIT_*），这里不靠猜消息文本：
+    # 0=一致 / 1=真漂移（产物陈旧）/ 2=读不到远端 tag（判不了 ≠ 通过，#79）。
+    # 「读不到」与「有漂移」混在一起报，一次网络抖动就会变成一条假的矩阵漂移。
+    _kind, _msg = gen_matrix_go.classify_check(r.returncode, out)
+    if _kind != "ok":
+        issues.append(_msg)
 except Exception as e:  # noqa: BLE001
     print(f"  ⚠ BOM 检查跳过：{e}")
 
