@@ -242,7 +242,12 @@ def missing_releases(repos: list[str]) -> tuple[dict[str, list[str]], list[str]]
     out: dict[str, list[str]] = {}
     skipped: list[str] = []
     tripped = False
-    for repo in repos:
+    for i, repo in enumerate(repos, 1):
+        # 进度写 stderr（实时落盘，不进 stdout 的报告）：这一步是 24 次**串行**
+        # 的 GitHub API 调用，是整条审计里最长的阶段；没有进度行时，
+        # 它一旦卡住就只能看到「进程还在、但不动了」（2026-10-25 实测：
+        # 后台审计任务 900s 超时时，日志里一个字都没有）。
+        print(f"[releases] 对账 {i}/{len(repos)} {repo}", file=sys.stderr, flush=True)
         if tripped:
             skipped.append(f"{repo}: 未核对（限速熔断：配额已耗尽，停止后续请求以免空转）")
             continue
