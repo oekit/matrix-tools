@@ -20,6 +20,7 @@ from matrix import (  # noqa: E402
     RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
+import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
                                   check_nested_version_correspondence)
@@ -31,6 +32,32 @@ EXEMPT_QUICKUSE = {"pkg", "kitex-examples"}      # pkg 全文即用法；kitex-e
 EXEMPT_TABLE = set()                              # 矩阵总览表所有仓都必须有
 
 issues: list[str] = []
+
+
+# ---------- 进度与缓冲 ----------
+#
+# 为什么要有进度行（2026-10-25 实测）：本脚本的 stdout 在**重定向/管道**时是
+# **块缓冲**（Python 默认），实测一次 48s 的审计写进日志文件时，
+# **整个运行期间文件都是 0 字节**，只在进程退出那一刻一次性落盘。
+# 于是「跑到一半被 kill / 超时」这种形态 ⇒ 日志里**一个字都没有**
+# （实测后台任务「Re-run audit for final truth」900s 超时，输出日志只有
+# 运行时那句 "Command timed out after 900 seconds"，审计自己的输出全丢）。
+# 排查时既不知道跑到哪，也不知道当时在查什么。
+#
+# 修法两条：
+#  1. stdout 改成**行缓冲** ⇒ 印一行落一行，进程被 kill 也留下已印的部分；
+#  2. **进度行写 stderr**：stderr 默认行缓冲（Python 3.9+），且 CI 里
+#     `audit.py > audit-report.txt` 收集的是 stdout ⇒ 进度进的是**日志**，
+#     报告文件（会被贴进漂移 issue）保持干净，格式一个字不变。
+try:                                    # 某些环境下 stdout 可能不是 TextIOWrapper
+    sys.stdout.reconfigure(line_buffering=True)
+except (AttributeError, ValueError):   # noqa: BLE001 - 拿不到就认了，不该因此崩
+    pass
+
+
+def progress(msg: str) -> None:
+    """进度行写 stderr（实时落盘，不进报告文件）。"""
+    print(f"[audit] {msg}", file=sys.stderr, flush=True)
 
 
 def check(cond: bool, msg: str):
@@ -354,11 +381,14 @@ def check_go_floor_pairing(repo: str, d):
 # 「读不到」永远不等于「没有 tag」。
 enable_tag_cache()
 if REMOTE_TAGS:
+    progress(f"阶段 1/7 预取远端事实（{len(MODULES)} 仓，并发）…")
     prefetch_remote_tags(MODULES, BASE, on_fail=lambda repo, e: check(
         False, f"{e}（该仓版本事实未核对，不能当通过）"))
+    progress("阶段 1/7 完成")
 
 # ---------- 模块仓 ----------
-for repo in MODULES:
+for _i, repo in enumerate(MODULES, 1):
+    progress(f"阶段 2/7 逐仓检查 {_i}/{len(MODULES)} {repo}")
     d = repo_dir(repo, BASE)
     # 0) Go 地板三层口径 + go.mod/CI 成对
     check_go_floor_pairing(repo, d)
@@ -446,6 +476,7 @@ for d in check_sync(BASE):
     issues.append(d)
 
 # ---------- 站点仓 ----------
+progress("阶段 3/7 站点仓与产物")
 try:
     site = repo_dir(SITE_REPO, BASE)
     llms = site / "docs" / "public" / "llms.txt"
@@ -604,6 +635,7 @@ def check_version_line():
           + "; ".join(res["unreadable"][:4]))
 
 
+progress("阶段 4/7 独立门禁（breakingIndex oracle / 死路径 / 版本线）")
 check_breaking_oracle()
 check_dead_paths()
 check_version_line()
@@ -725,6 +757,7 @@ check_dependabot_directories()
 # 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
 # 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
 # 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
+progress("阶段 5/7 GitHub Release 对账（24 仓）")
 try:
     from gen_releases import missing_releases  # noqa: E402
 
@@ -746,16 +779,22 @@ except Exception as e:  # noqa: BLE001 对账不可用不阻塞其余门禁
 # oekit BOM（github.com/oekit/oekit）新鲜度：快照必须与各仓远端 tag 一致，
 # 否则 `go get github.com/oekit/oekit@latest` 拉到的是旧组合。
 try:
+    progress("阶段 6/7 oekit BOM 新鲜度（子进程）")
     r = subprocess.run([sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                                      "gen_matrix_go.py"), "--check"],
                        capture_output=True, text=True)
     out = (r.stdout + r.stderr).strip()
-    if r.returncode != 0:
-        issues.append(out.splitlines()[-1] if out else "oekit: BOM 新鲜度检查失败")
+    # 退出码契约由**生产方**定义（gen_matrix_go.EXIT_*），这里不靠猜消息文本：
+    # 0=一致 / 1=真漂移（产物陈旧）/ 2=读不到远端 tag（判不了 ≠ 通过，#79）。
+    # 「读不到」与「有漂移」混在一起报，一次网络抖动就会变成一条假的矩阵漂移。
+    _kind, _msg = gen_matrix_go.classify_check(r.returncode, out)
+    if _kind != "ok":
+        issues.append(_msg)
 except Exception as e:  # noqa: BLE001
     print(f"  ⚠ BOM 检查跳过：{e}")
 
 # ---------- 报告 ----------
+progress("阶段 7/7 出报告")
 #
 # 覆盖证据（#79）：结论行「✓ 矩阵审计通过」**不能**自证「真的读了远端事实」——
 # 读不到时这句话长得一模一样（#26：23/24 仓被跳过，报告仍显示通过）。

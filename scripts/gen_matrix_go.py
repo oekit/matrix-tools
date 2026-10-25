@@ -31,6 +31,7 @@ import sys
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import (  # noqa: E402
     MODULES, repo_dir, ensure_clean_all, enable_tag_cache, prefetch_remote_tags,
+    RemoteReadError,
 )
 from gen_versions import _remote_tags  # noqa: E402
 
@@ -43,6 +44,31 @@ BOM_GO = "1.26.0"  # 矩阵最高 go 地板（hertz/kitex 等 1.26 生态豁免�
 # 已废弃的嵌套模块（tag 还在、模块不再发版，不进 BOM）
 SKIP_NESTED = {("data", "all")}
 NESTED_ONLY_TAGS = re.compile(r"^((?:[^/]+/)*[^/]+)/v\d+\.\d+\.\d+$")
+
+# ---------- 子进程退出码契约（audit.py 按这个分类，不靠猜消息） ----------
+#
+# 0 = 一致；1 = 真漂移（产物陈旧）；2 = **读不到远端 tag**（判不了 ≠ 通过，#79）。
+# 2 单独一个码，是因为「读不到」与「有漂移」是两件事：混在一起报，
+# 一次网络抖动就会变成一条假的矩阵漂移（实测 2026-10-25）。
+EXIT_OK = 0
+EXIT_STALE = 1
+EXIT_UNREADABLE = 2
+
+
+def classify_check(rc: int, out: str) -> tuple[str, str]:
+    """把子进程退出码翻译成 (kind, message)。
+
+    kind ∈ {"ok", "stale", "unreadable"}；message 是可直接进审计报告的一句话。
+    契约的**生产方**是本脚本（子进程），消费方是 audit.py —— 口径只此一处。
+    """
+    last = out.splitlines()[-1].strip() if out.strip() else ""
+    if rc == EXIT_OK:
+        return "ok", last
+    if rc == EXIT_UNREADABLE:
+        return ("unreadable",
+                f"oekit: BOM 新鲜度**未核对**（读不到远端 tag，判不了 ≠ 通过）："
+                f"{last or '（子进程无输出）'}")
+    return "stale", last or "oekit: BOM 新鲜度检查失败"
 
 
 def ensure_local_tag(repo_dir_path: str, tag: str) -> None:
@@ -241,8 +267,22 @@ def existing_const(name: str, default: str) -> str:
 
 
 def main() -> int:
-    modules = collect()
     check = "--check" in sys.argv
+    try:
+        modules = collect()
+    except RemoteReadError as e:
+        # **读不到 ≠ 没有**（#79）：这不是「BOM 陈旧」，是「判不了」。
+        # 用**独立的退出码 2** 表达，audit.py 据此把它归到「未核对」而不是「漂移」——
+        # 混在一起报，一次网络抖动就会变成一条假的矩阵漂移。
+        #
+        # 以前这里是裸 traceback：audit 只取子进程输出的**最后一行**当漂移消息，
+        # 于是报告里出现的是「❌ matrix.RemoteReadError: registry: 远端 tag 读不到…」，
+        # 读的人看不出这是读取失败（实测 2026-10-25）。
+        print(f"读不到远端 tag ⇒ 无法核对 BOM 新鲜度（**不是**「BOM 陈旧」）：{e}",
+              file=sys.stderr)
+        print("先修好网络/凭证再重试；若 HTTPS 被代理挡住，可用 clone 的 origin 兜底"
+              "（matrix.remote_tags 会依次试 canonical HTTPS 与 origin）。", file=sys.stderr)
+        return EXIT_UNREADABLE
     version = sys.argv[sys.argv.index("--version") + 1] if "--version" in sys.argv else existing_const("Version", "v0.1.0")
     now = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     generated_at = existing_const("GeneratedAt", now) if check else now
