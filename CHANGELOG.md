@@ -4,6 +4,85 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.18] — 2026-10-25
+
+### fix(tools)：审计加实时进度行 + BOM「读不到」与「陈旧」分开报
+
+修后台审计任务「Re-run audit for final truth」（`bg_19b83328`，900s 超时）暴露出来的
+两个问题：**超时后日志里一个字都没有**，以及**「读不到」被当成「漂移」报出来**。
+
+#### 一、超时后日志全丢
+
+该任务的输出日志只有 **59 字节**——运行时那句
+`Background bash failed: Command timed out after 900 seconds`，审计自己的输出全丢。
+两个原因叠在一起：
+
+1. **stdout 块缓冲**：Python 的 stdout 在重定向/管道时是块缓冲的。实测一次 48s 的
+   审计写进日志文件时，**整个运行期间文件都是 0 字节**，只在进程退出那一刻一次性
+   落盘 ⇒ 跑到一半被 kill/超时 ⇒ 什么都没有。
+2. **命令形状**：`... | grep -E "..." | tail -15`（管道两端都缓冲，中间还要等进程
+   结束才吐）+ 开头的 `sleep 90`（白等 90s 预算）。
+
+改动：
+
+- `scripts/audit.py`：stdout 改**行缓冲**（`sys.stdout.reconfigure(line_buffering=True)`）
+  ⇒ 印一行落一行，进程被 kill 也留下已印的部分。
+- `scripts/audit.py`：新增 `progress()`，**进度行写 stderr**（stderr 默认行缓冲）。
+  写 stderr 而不是 stdout 是刻意的：CI 里 `audit.py > audit-report.txt` 收集的是
+  stdout（那份文件会被贴进漂移 issue），进度进的是**日志**（CI 上实时可见），
+  **报告文件格式一个字不变** ⇒ `grep -c '❌'` 的漂移计数不受影响。
+  进度分 7 个阶段：预取远端事实 / 逐仓检查（24 仓逐个报）/ 站点仓 / 独立门禁 /
+  Release 对账 / BOM 新鲜度 / 出报告。
+- `scripts/gen_releases.py`：Release 对账是 24 次**串行** GitHub API 调用，是整条
+  审计最长的阶段 ⇒ 逐仓进度写 stderr。
+
+改前/改后实测（同一台机器、同一网络条件）：
+
+| | 运行期间日志大小 | 进程被杀时留下什么 |
+|---|---|---|
+| 改前 | **0 字节**（T+10/20/30/40s 全是 0） | 什么都没有 |
+| 改后 | **1346 字节**（T+10s 已有进度） | 「跑到哪一步」清清楚楚 |
+
+#### 二、「读不到」不该混进「漂移」
+
+兄弟会话那条同名任务（`bg_b4bfd6cf`，local 模式）报出 2 项漂移，其中一条：
+
+```
+❌ matrix.RemoteReadError: registry: 远端 tag 读不到（已试 https://github.com/oekit/registry.git）——读不到 ≠ 没有，不能用本地 tag 顶替（matrix-tools#79）
+```
+
+那是 **BOM 子进程**崩了、audit 取它输出的**最后一行**当漂移消息——读的人根本看不出
+这是**读取失败**而不是**产物陈旧**（违反 #79 的口径）。
+
+改动：
+
+- `scripts/gen_matrix_go.py`：新增**退出码契约**（契约的**生产方**是子进程、
+  **消费方**是 audit.py，口径只此一处）：`0 = 一致` / `1 = 真漂移（产物陈旧）` /
+  `2 = 读不到远端 tag（判不了 ≠ 通过）`。`main()` 捕获 `RemoteReadError` ⇒ 打印干净、
+  带修复步骤的消息并返回 2，**不再抛裸 traceback**。
+- `scripts/gen_matrix_go.py`：新增 `classify_check(rc, out)`，把退出码翻译成
+  (`ok` | `stale` | `unreadable`, 消息)；audit.py 直接调用它，**不靠猜消息文本**。
+- `scripts/audit.py`：BOM 子进程退出码 2 ⇒ 报成「BOM 新鲜度**未核对**（读不到远端
+  tag，判不了 ≠ 通过）」，不再混进「漂移」。
+- `scripts/gen_matrix_go_selftest.py`：新增 2 例（现 7 例）——「读不到 ⇒ 退出码 2 +
+  干净消息（不是裸 traceback）」与「退出码分类（0/1/2 ⇒ 一致/真漂移/未核对）」；
+  已接线进 `.github/workflows/audit.yml` 的 selftest job。
+
+#### 三、该任务重跑（修正命令形状）
+
+去掉 `sleep 90`、去掉 `| grep | tail`，日志直接落盘：
+
+```
+[Re-run audit for final truth — 修正命令形状后重跑]
+退出码=0 耗时=54s
+[audit] 阶段 6/7 oekit BOM 新鲜度（子进程）
+[audit] 阶段 7/7 出报告
+远端 tag 读取：24/24 仓成功（0 读失败）
+✓ 矩阵审计通过（24 模块 + 站点）
+```
+
+审计结论与报告格式**不变**；BOM 产物零变化（`--check` 仍报
+`✓ oekit BOM 与远端 tag 一致（v0.1.44，35 模块）`）。
 ## [v0.1.17] — 2026-10-25
 
 ### perf(tools)：远端 tag 读取加进程内缓存 + 并发预取——审计 281s → 48s
