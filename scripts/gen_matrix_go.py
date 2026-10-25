@@ -43,6 +43,23 @@ SKIP_NESTED = {("data", "all")}
 NESTED_ONLY_TAGS = re.compile(r"^((?:[^/]+/)*[^/]+)/v\d+\.\d+\.\d+$")
 
 
+def nested_module_of(repo: str, tag: str) -> str | None:
+    """判断 tag 是否是某仓的嵌套模块 tag；是则返回嵌套模块路径，否则 None。
+
+    SKIP_NESTED 按嵌套模块的**末段名**登记（"data/all" → "all"）：嵌套路径
+    支持多层之后（#37），group(1) 是完整子路径（"data/all"），拿它整体去比
+    登记项就对不上，已废弃、不再发版的嵌套模块会被重新纳入 BOM。
+    """
+    m = NESTED_ONLY_TAGS.match(tag)
+    if not m:
+        return None
+    path = m.group(1)
+    name = path.rsplit("/", 1)[-1]
+    if (repo, name) in SKIP_NESTED:
+        return None
+    return path
+
+
 def go_floor(repo_dir_path: str, tag: str) -> str:
     r = subprocess.run(["git", "-C", repo_dir_path, "show", f"{tag}:go.mod"],
                        capture_output=True, text=True)
@@ -64,7 +81,8 @@ def collect() -> list[dict]:
         nested: list[dict] = []
         for tag in _remote_tags(repo):
             m = NESTED_ONLY_TAGS.match(tag)
-            if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
+            nested_path = nested_module_of(repo, tag)
+            if nested_path is None or nested_path in seen:
                 continue
             seen.add(m.group(1))
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{m.group(1)}",
