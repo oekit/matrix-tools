@@ -4,6 +4,54 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.15] — 2026-10-24
+
+### fix(tools)：维护轮门禁此前从未生效——读不到仓却报「零漂移」，且维护轮标签不存在
+
+月度 workflow `maintenance.yml`（2026-10-19 加入，cron `0 4 5 * *`）**至今 0 次运行、
+0 个维护轮 issue**，而**真实地板漂移是 20 仓**（阈值 8）——门禁到期不报，
+且没人知道信号丢了。三个根因互相叠加：
+
+1. **`maintenance_check.py` 不认 `MATRIX_BASE`**，CI 布局下 24 仓全部「读不到」。
+   脚本硬编码 `BASE = parent.parent.parent`，而 `matrix.repo_dir(repo, base)` 的语义是
+   `base or os.environ.get("MATRIX_BASE", ...)`——**base 非空就把环境变量短路掉**。
+   于是 docstring 里写的 `MATRIX_BASE=repos python3 scripts/maintenance_check.py` 是无效的；
+   CI 里仓克隆在 `$GITHUB_WORKSPACE/repos/<name>`，`repo_dir` 的三个候选一个都不命中
+   ⇒ 24 仓全抛 `FileNotFoundError` ⇒ 被 `except Exception` 吞掉 ⇒ `MAINTENANCE_COUNT=0`。
+2. **后果是反向的**：`count == '0'` 走的正是「**关闭**维护轮 issue」分支
+   ⇒ 门禁方向反了——到期不报、反而关单。
+3. **标签 `matrix-maintenance` 在本仓不存在** ⇒ 即使走对分支，`issues.create` 也会
+   422 Validation Failed，issue 依然开不出来。（`matrix-drift` 存在，所以 `audit.yml`
+   的漂移 issue 开得出来——这就是两个 workflow 表现不一致的原因。）
+
+连带：`align_floors.py` 是同一行硬编码，而它是维护轮**唯一**的整改工具
+⇒ 定位错 ⇒ 整改命令打到错误目录。
+
+改动：
+
+- `scripts/maintenance_check.py`：base 解析认 `MATRIX_BASE`（与 `audit.py` 同口径），
+  `--base` 可显式覆盖，新增 `--repos` 单仓盘点；**「读不到」与「真的没漂移」分开**——
+  读不到的仓计入 `MAINTENANCE_UNDETERMINED`，且**不再打印「✓ 全矩阵地板零漂移」**
+  （与 audit 在 #79 对 remote tag 的处理同口径：读不到 ≠ 事实为空）。
+- `scripts/align_floors.py`：同样认 `MATRIX_BASE` / 新增 `--base`。
+- `.github/workflows/maintenance.yml`：显式传 `--base "$PWD/repos"`；
+  `set -o pipefail` 让脚本崩溃传导为步骤失败（而不是被 `tee` 吞成 0）；
+  关闭分支收紧为 `count == '0' && undetermined == '0'`——**只有确定没有漂移才关单**；
+  计数缺失（脚本崩了）⇒ 明确失败、**不**改动任何维护轮 issue；
+  开 issue 前确保标签存在（自愈，不依赖仓外的带外设置）。
+- `scripts/maintenance_check_selftest.py`（新）：一道没人验证过的门禁，很可能自己就是
+  个假绿。自测用**临时目录 + 临时 git 仓**（不联网、不碰真仓）复刻 CI 布局，证明仓能
+  被认出、漂移能被算出来、仓读不到时**不许**输出「零漂移」、`align_floors.py` 同样认
+  `MATRIX_BASE`。**改前红 4/5、改后绿 5/5**（同一命令行，失败原因只能是 bug 本身）。
+- `.github/workflows/audit.yml`：自测接入既有 `selftest` job。
+- `README.md`：补维护轮 workflow 说明与两个工具的 base 口径。
+
+### feat(tools)：维护轮盘点新增 `--repos` 单仓盘点
+
+`maintenance_check.py` 新增 `--repos`，只盘点指定仓（逗号分隔，缺省全矩阵）。
+与 `align_floors.py` 的 `--repos` 同款用法——维护轮整改通常是逐仓推进，
+全矩阵盘点每次都要重跑 24 仓。
+
 ## [v0.1.14] — 2026-10-24
 
 ### fix(tools)：嵌套模块支持多层子目录路径——五处「单层目录」假设在 kitex v0.7.0 后全部算错
