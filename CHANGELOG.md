@@ -4,6 +4,52 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.16] — 2026-10-25
+
+### fix(tools)：BOM 生成器的 Go 地板取不到就报错——v0.1.42 曾把 hertz 的 1.26.0 写成 1.24.0
+
+`gen_matrix_go.py` 生成 BOM 时**版本取远端 tag、Go 地板取本地 clone**，两路口径分裂：
+
+- 版本：`gen_versions.latest_version` → `_remote_tags`（**远端**）
+- 地板：`git -C <dir> show <tag>:go.mod`（**本地 clone 的 git 对象**）
+
+本地 clone 还没 fetch 到那个 tag 时（多仓并行发版、clone 刚建、网络不稳），
+`git show` 直接失败 ⇒ 落到旧实现的兜底分支 `return m.group(1) if m else "1.24.0"`。
+
+**关键点**：兜底值 `1.24.0` 不是「未知」而是**一个具体的、看起来合法的地板**——它和
+「真的是 1.24.0 的仓」在产物里长得一模一样，下游无从分辨。地板**低报比不报更危险**：
+不报会让人去查，报一个具体数字会让人以为那就是事实（按 BOM 选型的消费方会以为
+Go 1.24 装得下，拉下 hertz v0.8.5 构建直接失败）。
+
+已污染一个发布物：BOM **v0.1.42** 把 hertz 写成 `Go: "1.24.0"`，而 hertz v0.8.4 /
+v0.8.5 的 `go.mod` 都是 `go 1.26.0`（触发条件：生成时本地 hertz clone 尚未 fetch 到
+`v0.8.5`）。v0.1.42 已发布、tag 不可撤，只能补发 v0.1.43 修正——**但根因仍在**，
+下一个 BOM 版本只要再撞上「本地 clone 缺 tag」就会重犯。
+
+改动：
+
+- `scripts/gen_matrix_go.py`：`go_floor()` **fail-loud**——取不到 `go.mod`、或 `go.mod`
+  里没有 `go` 指令 ⇒ 抛 SystemExit，错误消息里带可执行的修复步骤（`git fetch --tags`）
+  与 issue 编号；**不再有任何默认地板**。这与 `matrix.remote_tags` 已有的口径一致
+  （「读到空」≠「事实为空」，#79）。
+- `scripts/gen_matrix_go.py`：新增 `ensure_local_tag()`——取地板前若本地缺该 tag，
+  补一次 `git fetch --tags`（**只在真缺时做**，稳态零额外网络开销；fetch 失败不抛，
+  真因仍由 `go_floor` 报，它的消息里带 git 的原始 stderr，更可诊断）。
+- `scripts/gen_matrix_go_selftest.py`（新）：**反证怎么构造**——把「取不到就报错」
+  改回「兜底」，自测必须失败。5 例覆盖：正常路径取到真地板 / 本地缺 tag 必须抛错
+  （且消息里不含任何看起来合法的地板值）/ `go.mod` 无 `go` 指令同样抛错 /
+  `ensure_local_tag` 能从 origin 补取 / 稳态不做额外 fetch。无副作用、不联网、
+  不依赖工作区布局（临时目录造 fixture 仓，「远端」用本地 bare 仓当 origin）。
+  已接线进 `.github/workflows/audit.yml` 的 selftest job。
+- 兼容性：happy path **零行为变化**——`gen_matrix_go.py --check` 实跑仍报
+  `✓ oekit BOM 与远端 tag 一致（v0.1.43，35 模块）`；产物格式零变化（仍是 `Go:` 字段），
+  只有「取不到」时从「写假值」变成「报错退出」。
+
+**变异验证（实跑）**：把兜底改回 `return m.group(1) if m else "1.24.0"` ⇒ 反证 1、2
+两条用例立刻 FAIL（`应当抛 SystemExit，却正常返回了`）；还原后 5 例全绿。
+
+关联 oekit/matrix-tools#100（产物侧已由 BOM v0.1.43 修正）。
+
 ## [v0.1.15] — 2026-10-24
 
 ### fix(tools)：维护轮门禁此前从未生效——读不到仓却报「零漂移」，且维护轮标签不存在
