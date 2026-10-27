@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 import subprocess
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -246,26 +247,38 @@ def prefetch_remote_tags(repos, base: str | None = None, on_fail=None, workers: 
             on_fail(repo, err)
 
 
-def _ls_remote_tags(url: str, timeout: int = 60) -> tuple[list[str], bool]:
+def _ls_remote_tags(url: str, timeout: int = 60, attempts: int = 3) -> tuple[list[str], bool]:
     """(tags, ok)。
 
     ok=False ⇒ **读失败**（网络/认证/超时/非零退出）；
     ok=True 且 tags=[] ⇒ 真的一个 tag 都没有（这是合法事实，不是故障）。
     这两者的区分是 #79 的核心——混在一起就会把「不知道」当成「没有」。
+
+    **重试**（2026-10-27 实测踩过）：跑 gormx 的发版后置链时，middleware 的远端
+    tag 读不到（一次网络瞬时抖动），整条链（版本行 → 站点 versions.json → BOM）
+    在第三步直接死掉 ⇒ 版本行 PR 开了、站点与 BOM 都没开，只能整条重跑。
+    远端读失败**大多数是瞬时的**（代理抽风 / DNS 抖动 / 连接被重置），
+    不是「这个仓真的读不到」⇒ 每个 URL 最多试 attempts 次，退避 0.5/1/2s。
+
+    ⚠️ 重试**只吸收瞬时抖动，不改 #79 的口径**：全试完仍失败照样抛
+    RemoteReadError，**绝不**降级成本地 tag（读到空 ≠ 读不到）。
     """
-    try:
-        r = subprocess.run(["git", "ls-remote", "--tags", url],
-                           capture_output=True, text=True, timeout=timeout)
-    except Exception:
-        return [], False
-    if r.returncode != 0:
-        return [], False
-    tags = []
-    for line in r.stdout.splitlines():
-        ref = line.split("\t")[-1].strip()
-        if ref.startswith("refs/tags/") and not ref.endswith("^{}"):
-            tags.append(ref[len("refs/tags/"):])
-    return tags, True
+    for attempt in range(attempts):
+        try:
+            r = subprocess.run(["git", "ls-remote", "--tags", url],
+                               capture_output=True, text=True, timeout=timeout)
+        except Exception:
+            r = None
+        if r is not None and r.returncode == 0:
+            tags = []
+            for line in r.stdout.splitlines():
+                ref = line.split("\t")[-1].strip()
+                if ref.startswith("refs/tags/") and not ref.endswith("^{}"):
+                    tags.append(ref[len("refs/tags/"):])
+            return tags, True
+        if attempt + 1 < attempts:
+            time.sleep(0.5 * (2 ** attempt))
+    return [], False
 
 
 def remote_tags(repo: str, base: str | None = None) -> list[str]:
