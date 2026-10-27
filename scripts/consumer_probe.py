@@ -124,6 +124,21 @@ def _paths(res: dict) -> set[str]:
     return {str(x).split()[0] for x in raw if str(x).strip()}
 
 
+def _under_nested_module(repo_dir: Path, rel: Path) -> bool:
+    """这个文件是否位于某个**嵌套模块**目录内（该目录或它的任一上级有 go.mod）。
+
+    ⚠️ 只看**第一层**会漏掉深层嵌套——kitex 的 kitexotel 在
+    `observability/tracing/instrumentation/kitexotel`（深度 4），而第一层
+    `observability/` 没有 go.mod ⇒ kitexotel 的 import 会被算成**父仓**的
+    ⇒ 父←子泄漏判据变成假阴性（父仓看起来「自己 import 了」）。
+    """
+    parts = rel.parts[:-1]  # 去掉文件名，只留目录部分
+    for k in range(1, len(parts) + 1):
+        if (repo_dir.joinpath(*parts[:k]) / "go.mod").is_file():
+            return True
+    return False
+
+
 def _source_imports(repo_dir: Path) -> set[str]:
     """仓内所有 Go 源码 import 到的第三方路径（**排除嵌套模块目录**——它们是独立 module）。"""
     out: set[str] = set()
@@ -131,14 +146,26 @@ def _source_imports(repo_dir: Path) -> set[str]:
         return out
     for p in sorted(repo_dir.rglob("*.go")):
         rel = p.relative_to(repo_dir)
-        if len(rel.parts) > 1 and (repo_dir / rel.parts[0] / "go.mod").is_file():
-            continue  # 嵌套模块：不算父仓的依赖
+        if len(rel.parts) > 1 and _under_nested_module(repo_dir, rel):
+            continue  # 嵌套模块（任意深度）：不算父仓的依赖
         try:
             body = p.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
         out |= set(re.findall(r'"([a-z0-9.\-]+\.[a-z]+/[^"]+)"', body))
     return out
+
+
+def _imports_module(imports: set[str], mod: str) -> bool:
+    """源码是否 import 了这个**模块**（按模块前缀比，不按全等）。
+
+    ⚠️ 必须按前缀：源码里写的是**子包路径**（`github.com/cloudwego/kitex/server`），
+    而 go.mod 里列的是**模块路径**（`github.com/cloudwego/kitex`）⇒ 拿全等去比会
+    把「父仓确实 import 了这个模块」误判成「没 import」⇒ **假阳性**。
+    实测 2026-10-27：kitex 父仓被判「替 kitexotel / kitex-istio 背重依赖」，
+    而它自己的 bootstrap.go 就 import 了 `github.com/cloudwego/kitex/server`。
+    """
+    return any(ip == mod or ip.startswith(mod + "/") for ip in imports)
 
 
 def check_parent_isolation(child_unit: str, parent_res: dict, base: str) -> list[str]:
@@ -164,7 +191,10 @@ def check_parent_isolation(child_unit: str, parent_res: dict, base: str) -> list
     parent_dir = Path(base) / parent
     parent_direct = set(_direct_third_party(parent_dir / "go.mod"))
     parent_imports = _source_imports(parent_dir)
-    leak = sorted(h for h in heavy if h in parent_direct and h not in parent_imports)
+    # 「父仓自己 import 了它吗」按**模块前缀**判（源码里写的是子包路径，
+    # go.mod 里是模块路径）⇒ 全等比会造出假阳性。
+    leak = sorted(h for h in heavy
+                  if h in parent_direct and not _imports_module(parent_imports, h))
     if leak:
         return [f"{parent}: go.mod 仍直接 require 子模块 {child_unit} 扛的重依赖 {leak}"
                 f"（且本仓源码并未 import 它们）——拆分没做干净，父仓仍在替子模块背依赖"]
@@ -310,29 +340,60 @@ def _selftest() -> int:
     assert any("兄弟单元" in x for x in check_sibling_isolation("bootstrap/nacos", versioned)), \
         "带版本号的模块行也必须能被判出兄弟泄漏"
 
-    print("✅ consumer_probe 判据自测通过（父←子泄漏 / 兄弟泄漏 / 零捆绑 / 一次拉齐）")
+    # ⑦ 粒度陷阱：源码 import 的是**子包**，go.mod 里是**模块路径** ⇒ 必须按前缀判。
+    #    2026-10-27 实测踩过：kitex 父仓 import `github.com/cloudwego/kitex/server`，
+    #    判据拿全等比 ⇒ 误判成「父仓没 import」⇒ 报了两条**假阳性**
+    #    （「父仓替 kitexotel / kitex-istio 背重依赖」——而 kitex 的 go.mod 是对的）。
+    #    ⛔ 这条断言本身就是反证样本：若前缀比退回全等，它立刻变红。
+    base3 = _fixture_base(leak=True, parent_imports_subpkg=True)
+    p3 = check_parent_isolation("bootstrap/nacos", r, base3)
+    assert not p3, f"父仓 import 的是该模块的子包时不该报泄漏（假阳性）：{p3}"
+
+    # ⑧ 深层嵌套模块的 import 不该算成父仓的（kitexotel 在深度 4）。
+    #    只排除第一层 ⇒ kitexotel 的 import 会算到父仓头上 ⇒ 泄漏判据变假阴性。
+    base4 = _fixture_base(leak=True, deep_nested=True)
+    imp = _source_imports(Path(base4) / "bootstrap")
+    assert "github.com/nacos-group/nacos-sdk-go/v2/config" not in imp, \
+        f"深层嵌套模块的 import 被算成父仓的了：{imp}"
+
+    print("✅ consumer_probe 判据自测通过（父←子泄漏 / 兄弟泄漏 / 零捆绑 / 一次拉齐 / "
+          "子包粒度 / 深层嵌套）")
     return 0
 
 
-def _fixture_base(leak: bool = True) -> str:
+def _fixture_base(leak: bool = True, parent_imports_subpkg: bool = False,
+                  deep_nested: bool = False) -> str:
     """造夹具：子仓 go.mod 带重依赖；父仓 go.mod 是否也带（leak=True = 拆分没做干净）。
 
     父仓的源码**不** import 那个重依赖——所以「父仓 require 了它」就是实打实的
     泄漏（父仓在替子模块背依赖）。
+
+    parent_imports_subpkg：父仓源码 import 该重依赖的**子包**（真实世界的常态：
+      源码写 `github.com/cloudwego/kitex/server`，go.mod 写模块路径
+      `github.com/cloudwego/kitex`）⇒ 这时**不该**报泄漏。
+    deep_nested：子仓放在**深层**目录（`a/b/c`）⇒ 用来验「嵌套模块排除要覆盖任意深度」。
     """
     import atexit
     d = Path(tempfile.mkdtemp(prefix="probe_fixture_"))
     atexit.register(shutil.rmtree, d, True)
-    (d / "bootstrap" / "nacos").mkdir(parents=True)
-    (d / "bootstrap" / "nacos" / "go.mod").write_text(
+    sub = "bootstrap/nacos"
+    if deep_nested:
+        sub = "bootstrap/deep/nested/leaf"
+    (d / sub).mkdir(parents=True)
+    (d / sub / "go.mod").write_text(
         "module github.com/oekit/bootstrap/nacos\n\ngo 1.24\n\n"
         "require github.com/nacos-group/nacos-sdk-go/v2 v2.3.0\n")
     parent = "module github.com/oekit/bootstrap\n\ngo 1.24\n\n"
     if leak:
         parent += "require github.com/nacos-group/nacos-sdk-go/v2 v2.3.0\n"
     (d / "bootstrap" / "go.mod").write_text(parent)
-    (d / "bootstrap" / "app.go").write_text(
-        "package bootstrap\n\n// 父仓自己不用 nacos-sdk\n")
+    if parent_imports_subpkg:
+        (d / "bootstrap" / "app.go").write_text(
+            "package bootstrap\n\n"
+            "import _ \"github.com/nacos-group/nacos-sdk-go/v2/config\"\n")
+    else:
+        (d / "bootstrap" / "app.go").write_text(
+            "package bootstrap\n\n// 父仓自己不用 nacos-sdk\n")
     return str(d)
 
 
@@ -347,6 +408,14 @@ def main() -> int:
     args = ap.parse_args()
     if args.selftest:
         return _selftest()
+
+    # stdout 行缓冲：重定向/管道时 Python 默认块缓冲 ⇒ 整个运行期间日志都是 0 字节，
+    # 进程被杀/超时时**一个字都留不下**（2026-10-25 audit.py 踩过同一个坑）。
+    # 本脚本 34 个单元逐个 `go list -m all`，单次要好几分钟 ⇒ 进度必须能实时看见。
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+    except Exception:
+        pass
 
     base = args.base or str(Path(__file__).resolve().parent.parent.parent)
     units = [args.unit] if args.unit else (list(MODULES) + _nested_units() + [BOM_REPO])
