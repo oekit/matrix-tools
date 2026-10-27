@@ -175,9 +175,14 @@ jobs:
         # 不直接推 main。时间戳不计入差异，否则每周都会开一个内容无变化的 PR。
         if: github.event_name != 'pull_request'
         env:
-          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
-          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          # ⚠️ 跨仓写 oekit.github.io ⇒ 必须是 **PAT**（classic PAT 有 repo scope）。
+          # GITHUB_TOKEN 只对**本仓**（matrix-tools）有效 ⇒ 拿它推 oekit.github.io
+          # 必然 403/无凭据。OEKIT_PROJECT_TOKEN 是本 org 各仓都有的 classic PAT，
+          # 优先用它；MATRIX_AUDIT_TOKEN 留给将来换成更窄权限的专用 token。
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.OEKIT_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.OEKIT_PROJECT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           cd repos/oekit.github.io
           if python3 ../../scripts/gen_deps_doc.py --profile ../../consumer-profile.json --site . --check; then
             echo "画像与站点现状一致，无需改动"
@@ -190,7 +195,22 @@ jobs:
           git checkout -B chore/deps-profile
           git add docs/public/deps.json docs/guide/getting-started.md
           git commit -m "chore(site): 刷新消费面依赖画像（consumer_probe 实测）"
-          git push --force origin chore/deps-profile
+          # 跨仓 push 必须带凭据。
+          #
+          # 2026-10-27 实测踩过：上面 clone oekit.github.io 用的是**无凭据**的
+          # HTTPS URL ⇒ `git push` 报 "could not read Username for 'https://github.com'"
+          # ⇒ 写回必然失败 ⇒ 这个 job 从来没绿过 ⇒ 站点画像冻结在 2026-10-21。
+          # 关键：**GH_TOKEN / GITHUB_TOKEN 只对 `gh` CLI 生效，git 不认它们**
+          # ⇒ 必须显式塞进 http.extraheader（用 extraheader 而不是改 remote URL：
+          # token 不落进 .git/config，也不进 git remote -v 的输出）。
+          AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+          if ! git -c "http.https://github.com/.extraheader=$AUTH_HEADER" \
+               push --force origin chore/deps-profile; then
+            echo "::error::写回站点失败：git push 拿不到 oekit.github.io 的写权限。" \
+                 "跨仓 push 必须用 PAT（OEKIT_PROJECT_TOKEN / MATRIX_AUDIT_TOKEN）；" \
+                 "GITHUB_TOKEN 只对本仓有效，会在这里失败。"
+            exit 1
+          fi
           gh pr create --repo oekit/oekit.github.io --head chore/deps-profile \
             --title "chore(site): 刷新消费面依赖画像（consumer_probe 实测）" \
             --body "由 matrix-tools 的周巡检（audit.yml 的 consumer job）自动生成：每个发版单元的消费方模块图规模与第三方依赖数。数据变了才开 PR（时间戳不计入差异）。" || true
