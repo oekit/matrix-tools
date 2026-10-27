@@ -4,6 +4,54 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.19] — 2026-10-27
+
+### fix(tools)：远端 tag 读取加重试——一次网络抖动曾打死整条发版后置链
+
+2026-10-27 跑 gormx v0.6.2 的发版后置链（`release_post.py gormx`）时，链在**第三步**
+（站点 `versions.json`）死掉：
+
+```
+gen_versions 失败：matrix.RemoteReadError: middleware: 远端 tag 读不到
+（已试 https://github.com/oekit/middleware.git）——读不到 ≠ 没有，
+不能用本地 tag 顶替（#79）
+```
+
+⇒ 版本行 PR 已经开了（gormx#33），而**站点与 BOM 都没开**，只能整条链重跑一遍。
+实测手动 `git ls-remote` 同一个仓当场可读 ⇒ 是**瞬时**网络抖动，不是真读不到。
+
+#### 根因
+
+`matrix._ls_remote_tags()` 对每个 URL 只试**一次**，`remote_tags()` 再换 origin URL
+兜底一次 ⇒ 两次都撞上瞬时抖动就抛 `RemoteReadError`。而「读不到 ≠ 没有」是 #79 的
+核心口径（**不能**降级成本地 tag）⇒ 失败得抛，于是一次抖动就把整条链打断。
+
+远端读失败**大多数是瞬时的**（代理抽风 / DNS 抖动 / 连接被重置），不该和
+「这个仓真的读不到」用同一种处理。
+
+#### 改动
+
+- `_ls_remote_tags(url, timeout=60, attempts=3)`：每个 URL 最多试 3 次，
+  退避 0.5s / 1s / 2s；
+- ⚠️ **重试只吸收瞬时抖动，不改 #79 的口径**：全试完仍失败照样抛
+  `RemoteReadError`，**绝不**降级成本地 tag（读到空 ≠ 读不到）。
+
+`remote_tags` 是**所有**远端读的事实入口——审计（`audit.py`）、BOM 生成
+（`gen_matrix_go.py`）、站点版本表（`gen_versions.py`）、Release 对账
+（`gen_releases.py`）都走它 ⇒ 一次抖动原本能打断其中任何一条链。
+
+#### 自测（判据失效必须红）
+
+`scripts/tag_cache_selftest.py` 补 2 例（该文件已接进 CI 的 `selftest` job）：
+
+- **反证 7**：远端读遇到瞬时失败必须重试，不能一次就死（前两次失败、第三次成功
+  ⇒ 应读成功，尝试次数 == 3）；
+- **反证 8**：全试完仍失败 ⇒ **仍然抛 `RemoteReadError`**（#79 口径不变），
+  且尝试次数 == 2 URL × 3 次（证明重试真的发生了）。
+
+**变异验证**：`attempts` 从 3 改成 1（等价于去掉重试）⇒ 反证 7、8 双双变红；
+改回 3 ⇒ 7/7 全绿。
+
 ## [v0.1.18] — 2026-10-25
 
 ### fix(tools)：审计加实时进度行 + BOM「读不到」与「陈旧」分开报
