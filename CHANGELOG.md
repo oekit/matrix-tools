@@ -4,6 +4,94 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.20] — 2026-10-27
+
+### fix(tools)：consumer 探针判据粒度对齐——kitex 父仓被判假阳性，深层嵌套模块排除失效
+
+2026-10-27 跑消费面探针时，kitex 父仓被判出两条「父←子隔离」违规：
+
+```
+kitex: go.mod 仍直接 require 子模块 kitex/observability/tracing/instrumentation/kitexotel 扛的重依赖 […]
+kitex: go.mod 仍直接 require 子模块 kitex/istio 扛的重依赖 […]
+```
+
+但 kitex 的 `go.mod` 是**对的** —— 父仓自己就 import 了 kitex 自己的包。
+
+#### 根因（两处，都只在真实 org 数据上暴露，夹具看不出）
+
+**一、判据粒度错配（假阳性）**
+
+源码里写的是**子包路径** `github.com/cloudwego/kitex/server`，
+go.mod 里 require 的是**模块路径** `github.com/cloudwego/kitex`。
+判据拿**全等**去比这两个字符串 ⇒ 永远匹配不上 ⇒ 判定「父仓没 import 它」⇒ 报出假阳性。
+
+取证：kitex 父仓根级文件（`bootstrap.go` / `config.go` / `retry.go` / `chainmw/` /
+`kitexmeta/` / `nns/` / `registry/` / `internal/` 等共 80 处）确实 import 了
+`github.com/cloudwego/kitex/server`。
+
+**二、嵌套模块排除只覆盖第一层（假阴性）**
+
+排除逻辑只看 `rel.parts[0]/go.mod`。kitexotel 在
+`observability/tracing/instrumentation/kitexotel`（**深度 4**），`observability/` 没有 go.mod
+⇒ kitexotel 的 import 被算成**父仓**的 ⇒ 父仓「看起来自己 import 了重依赖」
+⇒ 这条判据对最深的嵌套模块**完全失效**（`istio/` 在第一层，被正确排除了）。
+
+#### 改动
+
+- 新增 `_imports_module(imports, mod)`：按**模块前缀**判（`ip == mod or ip.startswith(mod + "/")`）；
+- 新增 `_under_nested_module(repo_dir, rel)`：逐级向上找 `go.mod`，覆盖**任意深度**；
+- 顺带修 stdout 行缓冲：重定向/管道时 Python 默认块缓冲 ⇒ 34 个单元逐个
+  `go list -m all` 的那几分钟里日志全是 0 字节 ⇒ 进程被杀/超时时一个字都留不下。
+
+#### 自测（判据失效必须红）
+
+新增两条**判据用例**，都自带反证样本：
+
+- ⑦ 父仓 import 的是该模块的**子包**时不该报 ⇒ 若前缀比退回全等，**立刻变红**；
+- ⑧ **深层**嵌套模块的 import 不该算成父仓的。
+
+变异验证：前缀比退回全等 ⇒ ⑦ 红；还原 ⇒ 全绿。
+
+实测修正后 kitex 仓的两条假阳性违规消失，真实违规仍报得出。
+
+### fix(ci)：consumer job 跨仓写回 oekit.github.io 必须用 PAT——这个 job 从未绿过，真违规从未被报出
+
+`Matrix audit` 的 `consumer` job 长期是红的，站点消费面画像**冻结在 2026-10-21**：
+
+```
+could not read Username for 'https://github.com'
+fatal: could not read Username for 'https://github.com'
+```
+
+#### 根因
+
+1. 该 job 用**无凭据**的 HTTPS URL clone `oekit.github.io` ⇒ `git push` 要凭据时无人应答；
+2. `GH_TOKEN` / `GITHUB_TOKEN` 环境变量只对 **gh CLI** 生效，**git 不认这两个变量**；
+3. token 来源选错：`secrets.GITHUB_TOKEN` **只对本仓（matrix-tools）有效** ⇒ 拿它推
+   `oekit.github.io` 必然 403/无凭据。跨仓写回必须用 **classic PAT**
+   （`OEKIT_PROJECT_TOKEN` 在本 org 各仓都有，带 repo scope）；
+4. ⚠️ 更糟的一层：push 失败发生在 **"Open consumer issue" 之前** ⇒ 步骤失败即中断后续
+   ⇒ **真违规从来没人被报过**（这个 job 看上去在跑，实际只跑到写回就死了）。
+
+#### 改动
+
+- token 取 `secrets.MATRIX_AUDIT_TOKEN || secrets.OEKIT_PROJECT_TOKEN || secrets.GITHUB_TOKEN`；
+- push 显式塞 `http.extraheader`：
+
+  ```bash
+  AUTH_HEADER="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GH_TOKEN" | base64 | tr -d '\n')"
+  git -c "http.https://github.com/.extraheader=$AUTH_HEADER" push --force origin chore/deps-profile
+  ```
+
+  用 extraheader 而不是改 remote URL ⇒ token 不落进 `.git/config`，也不进 `git remote -v` 的输出；
+- push 失败时 `::error::` 给出**可执行诊断**（指明该用哪个 secret、为什么 GITHUB_TOKEN 不行）；
+- `set -euo pipefail`：让管道里的失败不被吞。
+
+#### 影响面
+
+`consumer_probe` 的判据只喂给 CI 的 `consumer` job 与本地画像生成 ⇒
+不影响发版链（`matrix.py` / `audit.py` / `release_post.py`）。
+
 ## [v0.1.19] — 2026-10-27
 
 ### fix(tools)：远端 tag 读取加重试——一次网络抖动曾打死整条发版后置链
