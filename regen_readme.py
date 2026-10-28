@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 """按 DESC 重新生成各仓 README 的「矩阵总览」表。只动该表区块，其余内容不碰。"""
 import re, sys
-sys.path.insert(0, '/Users/zhangyi/my_project/ekit-split/matrix-tools')
-from matrix import MODULES, ORG, DESC, repo_dir, ensure_clean_all, sibling_deps, DEFAULT_BASE
 from pathlib import Path
+# 按脚本自身位置定位 matrix-tools（写死旧工作区路径 ⇒ 工具在本机直接 ImportError，#116 同族）
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from matrix import MODULES, ORG, DESC, repo_dir, ensure_clean_all, sibling_deps, DEFAULT_BASE
 
 HEADING = f"## 矩阵总览（{len(MODULES)} 活跃模块，自动生成）"
 
