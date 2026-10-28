@@ -122,7 +122,12 @@ def main() -> None:
                           "docs: versions.json 重生成（release_post）",
                           "docs: versions.json 重生成（release_post）",
                           "release_post.py 发版后自动跟进。",
-                          edit=edit_site)
+                          edit=edit_site,
+                          # **排 auto-merge**（#115）：此前站点 PR 开了就没人管——
+                          # CI 全绿后它**静默悬着**，半截链没人收（实测 2026-10-28：
+                          # 站点 PR #104 全绿却一直 OPEN，只能手工合）。
+                          # 与模块仓版本行 PR / BOM PR 的处理保持一致。
+                          auto_merge=True)
             print(f"  ✓ 站点 PR: {url or '无变更'}")
 
     # 3.5) oekit BOM（按需发版下的组合锚点：github.com/oekit/oekit@latest = 推荐组合）
