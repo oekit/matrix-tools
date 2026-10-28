@@ -33,6 +33,9 @@ from pathlib import Path
 
 # `- package-ecosystem: gomod`（含前导 `- `）与 `directory: /sink`
 _ECOSYSTEM_RE = re.compile(r"^\s*-\s*package-ecosystem:\s*(\S+)")
+
+# 扫嵌套模块时跳过的目录名（vendor/testdata 之类不是嵌套模块）
+_SKIP_DIRS = {"vendor", "testdata", "third_party", "examples", "node_modules"}
 _DIRECTORY_RE = re.compile(r"^\s*directory:\s*(\S+)")
 
 
@@ -60,10 +63,18 @@ def check_dirs(repo_root: Path, text: str) -> list[str]:
     返回**问题描述列表**（空列表 = 通过）——判定与报错措辞都放这里，
     调用方只负责把每条塞进自己的 issues 列表。
 
-    两种失败分开报，因为修法不同：
+    三种失败分开报，因为修法不同：
       - 目录不存在 ⇒ 该嵌套模块已 retract/删目录 ⇒ 残留登记该删；
-      - 目录在但没有 go.mod ⇒ 路径写错 ⇒ 该改。
+      - 目录在但没有 go.mod ⇒ 路径写错 ⇒ 该改；
+      - **仓里有嵌套模块但 dependabot.yml 没登记** ⇒ 依赖被静默冻结（#118）。
     """
+    problems = list(check_registered_dirs(repo_root, text))
+    problems += check_nested_registered(repo_root, text)
+    return problems
+
+
+def check_registered_dirs(repo_root: Path, text: str) -> list[str]:
+    """已登记的目录必须存在、且目录里有 go.mod（反向：登记了却已 retract）。"""
     problems: list[str] = []
     repo = repo_root.name
     for d in gomod_dirs(text):
@@ -78,3 +89,44 @@ def check_dirs(repo_root: Path, text: str) -> list[str]:
                 f"{repo}: dependabot.yml 的 {d} 下没有 go.mod"
                 f"（gomod ecosystem 扫不到模块，该条 dependabot job 必失败）")
     return problems
+
+
+def check_nested_registered(repo_root: Path, text: str) -> list[str]:
+    """**每个**嵌套模块都必须被登记 ⇒ 未登记 ⇒ 其依赖被静默冻结（#118）。
+
+    为什么必须查这一侧：旧门禁只查「登记了却不存在」⇒ **「存在却没登记」零覆盖**
+    ⇒ 嵌套模块的依赖**永远不会被 dependabot 提议升级**，而且**没有任何报错**
+    （实测 2026-10-28：全矩阵 6 个嵌套模块（bootstrap/nacos、bootstrap/obs、
+    registry/nacos、registry/nacosimpl、kitex/istio、kitex 的 kitexotel）
+    未登记 ⇒ 共 130 项间接依赖冻结；形态是「直接依赖都是最新、落后全在间接依赖」
+    ⇒ 冻结的影响落在**下游的构建产物**上，不是「go.mod 不好看」）。
+
+    判据：仓内所有含 go.mod 的**子目录**（含多层路径）都必须在 gomod 条目里出现。
+    排除：仓根（`/` 已隐含登记）、`vendor` / `testdata` / `third_party` / `examples`
+    / 隐藏目录。
+    """
+    problems: list[str] = []
+    repo = repo_root.name
+    registered = {d.lstrip("/").rstrip("/") for d in gomod_dirs(text)}
+    for mod in nested_module_dirs(repo_root):
+        if mod in registered:
+            continue
+        problems.append(
+            f"{repo}: 嵌套模块 {mod} 没在 dependabot.yml 里登记（gomod ecosystem）"
+            f"⇒ 它的依赖**永远不会被提议升级**，且没有任何报错"
+            f"（补一条 directory: /{mod} 即可）")
+    return problems
+
+
+def nested_module_dirs(repo_root: Path) -> list[str]:
+    """仓内所有嵌套模块的相对路径（含多层，如 observability/tracing/x/kitexotel）。"""
+    out: list[str] = []
+    for go_mod in sorted(repo_root.rglob("go.mod")):
+        rel = go_mod.parent.relative_to(repo_root)
+        parts = rel.parts
+        if not parts:
+            continue  # 仓根（已由 directory: / 覆盖）
+        if any(p in _SKIP_DIRS or p.startswith(".") for p in parts):
+            continue
+        out.append(str(rel))
+    return out
