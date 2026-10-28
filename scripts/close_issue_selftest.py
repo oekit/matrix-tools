@@ -290,6 +290,28 @@ def main() -> None:
         if "已提交修复" not in recorded9:
             failures.append("用例9 PR 未合入，回执应写「已提交修复（PR 尚未合入）」")
 
+        # 用例 11（#119）：目标是 **issue**，但 --pr 指向**未合入**的 PR ⇒
+        # ① 回执**不得**声明「已合入修复」（那是假声明）；
+        # ② **绝不能关单**（修复尚未落地 ⇒ 关单＝问题提前从看板消失）。
+        #
+        # 旧实现只在「目标是 PR」时才查 PR 的合入状态 ⇒ 目标是 issue 时
+        # 无条件写「已合入修复 ✅」并关单。
+        # 2026-10-28 实测：`close_issue.py gormx#36 --no-release --pr 39` —— PR #39
+        # 当时 OPEN（CI 已绿、未合入），回执写成「已合入修复 ✅（无 SemVer 发布）」，
+        # issue 被 closed ⇒ 问题从看板消失，而修复还没进来。
+        rc11, recorded11, closed11, out11 = run_case(
+            tmp, "OPEN", "1",
+            extra=["--no-release", "--pr", "70", "--note", "改动摘要"],
+            kind="issue", pr_state="OPEN", case="c11")
+        if rc11 != 0:
+            failures.append(f"用例11 期望退出码 0，实得 {rc11}：{out11.strip()[:200]}")
+        if "已合入修复" in recorded11:
+            failures.append("用例11 PR 未合入却声明「已合入修复」——回执不得做假声明")
+        if "已提交修复" not in recorded11:
+            failures.append("用例11 PR 未合入，回执应写「已提交修复（PR 尚未合入）」")
+        if "CLOSE_CALLED" in closed11:
+            failures.append("用例11 修复未落地却关了单——问题会提前从看板消失")
+
         # 用例 10（幂等）：回执已在 ⇒ 不重复发（重跑不能堆一串重复回执）
         rc10, recorded10, _, out10 = run_case(
             tmp, "CLOSED", "1",
