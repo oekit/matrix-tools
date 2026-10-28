@@ -165,8 +165,35 @@ def insert_top(path: Path, heading: str, bullet: str) -> bool:
     return True
 
 
+def find_changelog_check() -> Path | None:
+    """定位 org 共享的 changelog_check.py（找不到返回 None）。
+
+    候选（按序）：
+      1. 环境变量 ``CHANGELOG_CHECK`` 显式指定的路径；
+      2. ``<matrix-tools 上级>/.github/scripts/changelog_check.py`` —— 矩阵工作区
+         布局（org 的共享脚本仓叫 **.github**）；
+      3. ``<matrix-tools>/scripts/changelog_check.py`` —— 本仓自带副本（若曾 vendored）。
+
+    **为什么换了路径**（#113）：旧实现写的是
+    ``<上级>/profile/scripts/changelog_check.py`` —— "profile" 是**很久以前的
+    org 名**（矩阵改名后共享脚本仓是 .github）⇒ 该路径**恒不存在** ⇒
+    ``if not chk.exists(): return`` ⇒ **预校验被静默跳过** ⇒ 发版本地放行、
+    CI 才拦（本地预校验形同虚设）。
+    """
+    env = os.environ.get("CHANGELOG_CHECK")
+    if env:
+        p = Path(env).expanduser()
+        return p if p.exists() else None
+    here = Path(__file__).resolve().parent.parent  # matrix-tools/
+    for cand in (here.parent / ".github" / "scripts" / "changelog_check.py",
+                 here / "scripts" / "changelog_check.py"):
+        if cand.exists():
+            return cand
+    return None
+
+
 def validate_changelog(path: Path) -> None:
-    """本地跑 org 的 changelog_check.py（缺失则跳过——CI 兜底）。
+    """本地跑 org 的 changelog_check.py（**缺失时明确告警**，不静默跳过）。
 
     必须在 CHANGELOG **所属仓的目录**里跑：changelog_check 用
     `git describe --exact-match --tags HEAD` 判断「HEAD 处于 tag」——在别的仓
@@ -174,8 +201,12 @@ def validate_changelog(path: Path) -> None:
     CHANGELOG 时，matrix-tools 的 HEAD 恰好有 tag v0.1.1，于是误报
     「data 的 HEAD 处于 tag v0.1.1」，发版被凭空拦下。
     """
-    chk = Path(__file__).resolve().parent.parent.parent / "profile" / "scripts" / "changelog_check.py"
-    if not chk.exists():
+    chk = find_changelog_check()
+    if chk is None:
+        # **不静默跳过**（#113）：找不到就明确说出来，让「本地没拦」这件事可见。
+        print("[changelog] 警告：未找到 org 的 changelog_check.py ⇒ 本地预校验跳过。"
+              "CI 的 changelog 检查项仍会兜底，但本地放行、CI 才拦的老毛病依旧。"
+              "（可用环境变量 CHANGELOG_CHECK 指向脚本路径）")
         return
     repo_root = path.parent
     while repo_root != repo_root.parent and not (repo_root / ".git").exists():
@@ -200,9 +231,27 @@ def wait_pr_merged(repo: str, number: int, timeout: int = 900) -> None:
     raise SystemExit(f"{repo}: 等待 CHANGELOG PR #{number} 合并超时（CI 可能仍在跑）——稍后重跑 train")
 
 
+def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: str) -> str:
+    """把 --changelog 的多条 bullet 拼成版本节正文（**不丢条目**，#114）。
+
+    ``--changelog`` 可多次给出，每多一条就是一条 bullet ⇒ 版本节应当把它们
+    **全部**写进去。旧实现只取 ``bullets[0]``，其余**静默丢弃** ⇒ 发版说明
+    缺条目（且没有任何提示）。
+
+    拼接形态：``"\\n- ".join(bullets)`` —— 因为版本节模板已经带了首个 ``- ``，
+    拼出来的结果是::
+
+        - 第一条
+        - 第二条
+    """
+    if nested_self or not bullets:
+        return f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+    return "\n- ".join(bullets)
+
+
 def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) -> None:
     """缺版本节时：生成（置顶）→ 预校验 → PR → 排程合并 → 等合并 → 拉齐。
-    dry-run 只报告不落 PR。bullets 来自 --changelog（可多次），第一条给主模块。"""
+    dry-run 只报告不落 PR。bullets 来自 --changelog（可多次，**全部写入**）。"""
     wanted = wanted_sections(root, specs)
     todo = []
     for path, heading in wanted:
@@ -222,8 +271,7 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) ->
         changed: set[Path] = set()
         for path, heading in todo:
             nested_self = path != root / "CHANGELOG.md"
-            bullet = bullets[0] if (not nested_self and bullets) else \
-                f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+            bullet = format_bullets(bullets, nested_self, repo, main_tag)
             if insert_top(path, heading, bullet):
                 changed.add(path)
         for path in sorted(changed):
