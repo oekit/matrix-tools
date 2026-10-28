@@ -36,11 +36,23 @@ CLAIM_RE = re.compile(r"(\d+)\s*合\s*1\s*（([^；）]*)")
 SKIP_DIRS = {"internal", "testdata", "vendor", "node_modules"}
 
 
-def public_subpackages(repo: str) -> set[str]:
-    """仓里的公开子包（有 .go 文件、且不是 internal/testdata 之类）。"""
-    d = repo_dir(repo)
+def public_subpackages(repo: str) -> set[str] | None:
+    """仓里的公开子包（有 .go 文件、且不是 internal/testdata 之类）。
+
+    **读不到仓时返回 None**（不是空集）——「读不到 ≠ 事实为空」：
+    matrix-tools 在 CI 里是**独立 clone**（兄弟仓不在旁边）⇒ 此时应当**跳过**
+    而不是「判定为 0 个子包 ⇒ 判红」（否则 CI 恒红，且报的还是假问题）。
+    """
+    try:
+        d = repo_dir(repo)
+    except Exception:  # noqa: BLE001 — 仓读不到（独立 clone / 布局不同）⇒ 跳过
+        return None
     out: set[str] = set()
-    for sub in d.iterdir():
+    try:
+        children = list(d.iterdir())
+    except Exception:  # noqa: BLE001
+        return None
+    for sub in children:
         if not sub.is_dir():
             continue
         if sub.name in SKIP_DIRS or sub.name.startswith((".", "_")):
@@ -52,6 +64,8 @@ def public_subpackages(repo: str) -> set[str]:
 
 def main() -> int:
     failures: list[str] = []
+    checked = 0
+    skipped: list[str] = []
 
     for repo in MODULES:
         desc = DESC.get(repo, "")
@@ -61,8 +75,12 @@ def main() -> int:
         claimed_n = int(m.group(1))
         claimed_names = {x.strip() for x in m.group(2).split("/") if x.strip()}
         actual = public_subpackages(repo)
-        if not actual:
-            continue  # 读不到仓 ⇒ 不误报（读不到 ≠ 事实为空）
+        if actual is None:
+            # 仓读不到（CI 里 matrix-tools 是独立 clone，兄弟仓不在旁边）⇒ 跳过。
+            # 「读不到 ≠ 事实为空」——判红报的是假问题。
+            skipped.append(repo)
+            continue
+        checked += 1
         if claimed_n != len(actual):
             failures.append(
                 f"{repo}: DESC 声明「{claimed_n} 合 1」，实际公开子包 {len(actual)} 个"
@@ -79,7 +97,9 @@ def main() -> int:
         for f in failures:
             print("  -", f)
         raise SystemExit(1)
-    print("✓ DESC 子包口径自测通过：声明的合 1 数字与包名清单都等于实际公开子包")
+    note = f"（跳过 {len(skipped)} 个仓：本地无兄弟仓检出）" if skipped else ""
+    print(f"✓ DESC 子包口径自测通过：声明的合 1 数字与包名清单都等于实际公开子包{note}")
+    return 0
 
 
 if __name__ == "__main__":
