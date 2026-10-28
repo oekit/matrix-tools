@@ -37,11 +37,36 @@ def parse_semver(v: str) -> tuple[int, int, int]:
     return (int(a), int(b), int(c))
 
 
+def find_gomods(root: Path) -> list[Path]:
+    """仓内所有 go.mod（根 + 任意深度的嵌套模块），排除 vendor/.git。
+
+    **必须递归**：嵌套模块的路径深度不固定——bootstrap/nacos、logx/sink 是
+    一层，而 kitex 的 observability/tracing/instrumentation/kitexotel 在**第 4 层**。
+    只扫一层（`glob("*/go.mod")`）会漏掉深层嵌套模块 ⇒ 父仓地板抬升后
+    子模块 go.mod 仍指向旧版本 ⇒ CI 的 `go mod tidy -diff` 门禁判红
+    （kitex#58 的真实成因：kitexotel 的 require 停在 pkg v0.15.1，
+    而父仓已抬到 v0.30.0）。
+
+    嵌套模块之间有 `replace ... => ../../..` 指向父仓源码，父仓地板一动，
+    子模块的间接依赖集合随之变化 ⇒ 子模块必须同步抬，否则 tidy 不一致。
+    """
+    out = [root / "go.mod"]
+    for gm in root.rglob("go.mod"):
+        rel = gm.relative_to(root)
+        if rel == Path("go.mod"):
+            continue
+        parts = rel.parts
+        if any(p in (".git", "vendor", "node_modules", "testdata") for p in parts):
+            continue
+        out.append(gm)
+    return sorted(out)
+
+
 def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
     """{go.mod 路径: [(完整模块路径, 现地板, 目标)]}——只含需要抬升的行。"""
     root = repo_dir(repo, base)
     plans: dict[Path, list[tuple[str, str, str]]] = {}
-    gomods = [root / "go.mod"] + sorted(root.glob("*/go.mod"))
+    gomods = find_gomods(root)
     latest_cache: dict[str, str | None] = {}
     for gm in gomods:
         if not gm.exists():
