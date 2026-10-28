@@ -194,6 +194,31 @@ def latest_version(repo: str) -> str | None:
     return None
 
 
+def _ensure_tags(repo: str, wanted: list[str]) -> None:
+    """确保本地 clone 有这些 tag（缺则 `git fetch --tags`）。
+
+    为什么需要：hostVersion 靠 **commit 祖先关系**推导，而 ls-remote 只给
+    tag 名、给不出 commit ⇒ 必须读本地 git。而 `git pull` **不带 --tags**
+    ⇒ 嵌套 tag 常常只在本地缺失 ⇒ 推导静默失败（host_version 返回 None）
+    ⇒ 产物丢掉 hostVersion 字段，且没有任何输出说明原因（2026-10-28 实测：
+    logx/hlog 的 hostVersion 消失、矩阵门禁随即判红）。
+    """
+    d = repo_dir(repo, BASE)
+    try:
+        have = set(subprocess.check_output(
+            ["git", "-C", str(d), "tag", "--list"], text=True,
+            stderr=subprocess.DEVNULL).split())
+    except Exception:  # noqa: BLE001 — git 不可用时不该让生成器崩
+        return
+    if not [t for t in wanted if t not in have]:
+        return
+    try:
+        subprocess.run(["git", "-C", str(d), "fetch", "--tags", "--quiet", "origin"],
+                       capture_output=True, text=True, timeout=180)
+    except Exception:  # noqa: BLE001 — 拿不到就由调用方报「读不到」
+        pass
+
+
 def _local_tag_meta(repo: str) -> dict[str, tuple[str, int]]:
     """本地 clone 的 tag → (commit sha, commit unix 时间)。
 
@@ -266,6 +291,13 @@ def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -
     """
     sha = meta.get(nested_tag, (None, 0))[0]
     if not sha:
+        # **读不到 ≠ 没有**（#79/#96 同族）：本地 clone 缺这个 tag 时，
+        # 静默返回 None ⇒ 产物里嵌套条目**丢掉 hostVersion 字段** ⇒
+        # 下游看不到「这次嵌套发布对应哪个父仓版本」，而门禁按 tag 日期
+        # 推导出别的值 ⇒ 发布后矩阵永远判红，且没有任何输出说明原因。
+        # ⇒ 这里明确喊出来（调用方已先 fetch --tags，落到这里说明真的拿不到）。
+        print(f"⚠️ 嵌套 tag {nested_tag} 在本地 clone 里找不到 ⇒ 无法推导对应父仓版本"
+              f"（本地缺 tag ⇒ 请 `git fetch --tags`；本地产物将缺 hostVersion）")
         return None
     cands: list[tuple[tuple, tuple, str]] = []
     for name, (s, ct) in meta.items():
@@ -300,7 +332,14 @@ def nested_versions(repo: str) -> list[dict]:
         if not (repo_dir(repo, BASE) / p).is_dir():
             continue
         item: dict = {"path": p, "latest": v}
-        hv = host_version(repo, f"{p}/{v}", meta)
+        nested_tag = f"{p}/{v}"
+        # **先确保本地有这些 tag**：hostVersion 靠 **commit 祖先关系**推导，
+        # 而 ls-remote 只给 tag 名、给不出 commit ⇒ 必须读本地 git。
+        # 本地 clone 若缺 tag（`git pull` 不带 --tags ⇒ 嵌套 tag 常常缺），
+        # 推导会**静默失败**（返回 None）⇒ 产物丢掉 hostVersion 字段。
+        _ensure_tags(repo, [nested_tag])
+        meta = _local_tag_meta(repo)
+        hv = host_version(repo, nested_tag, meta)
         if hv:
             item["hostVersion"] = hv
         out.append(item)
