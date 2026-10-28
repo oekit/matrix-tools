@@ -218,11 +218,27 @@ def main() -> None:
         raise SystemExit(f"--pr 应为 PR 号，实得 {pr!r}")
     meta = pr_meta(repo, pr) if pr else {}
     is_pr = target_is_pr(repo, num)
-    pr_merged = (meta.get("state") == "MERGED") if (is_pr and meta) else False
+    # **--pr 指向的 PR 是否已合入，与「目标是不是 PR」无关**（#119）：
+    #
+    # 旧实现只在「目标是 PR」时才查 meta ⇒ 目标是 **issue** 时**无条件**写
+    # 「已合入修复 ✅」并把 issue **关掉** ⇒ 回执是**假声明**（PR 还没合入），
+    # 且问题在修复落地前就从看板上消失。
+    #
+    # 2026-10-28 实测：`close_issue.py gormx#36 --no-release --pr 39` —— PR #39
+    # 当时 OPEN（CI 已绿、未合入），回执写成「已合入修复 ✅（无 SemVer 发布）」，
+    # issue 被 closed。
+    linked_state = str(meta.get("state") or "")
+    linked_merged = linked_state == "MERGED"
+    pr_merged = linked_merged
+    # 修复尚未落地（--pr 指向未合入的 PR）⇒ **只发回执、绝不关单**：
+    # 由 PR 正文的 `Closes #N` 在合入时关单。
+    #
+    # 「读不到 PR 状态」按**未合入**处理（fail-closed）：宁可多发一条回执、
+    # 少关一个单，也不要在修复未落地时把问题从看板抹掉。
+    pending = bool(pr) and not linked_merged and no_release
 
     if no_release:
-        head = ("已合入修复 ✅" if (not is_pr or pr_merged)
-                else "已提交修复（PR 尚未合入）")
+        head = ("已提交修复（PR 尚未合入）" if pending else "已合入修复 ✅")
         parts = [f"{head}（**无 SemVer 发布**：本次改动不发版本）",
                  "## 变更内容\n\n" + (note or f"见 PR #{pr}。")]
         parts += pr_lines(meta)
@@ -258,10 +274,12 @@ def main() -> None:
     # ⇒ 已关闭走 `gh issue comment` 单独补回执；未关闭才走 close+comment。
     # ⇒ 目标是 **PR** 时**只发回执、绝不 close**：合入才是 PR 的「关闭」，
     #    对未合入的 PR 调 close 就是「不合并直接关掉」。
-    if is_pr:
+    # ⇒ **--pr 指向未合入的 PR** 时同样**只发回执、绝不 close**（#119）：
+    #    修复尚未落地 ⇒ 关单就是「问题从看板上消失了，而修复还没进来」。
+    if is_pr or pending:
         r = subprocess.run(["gh", "issue", "comment", num, "--repo", f"{ORG}/{repo}",
                             "--body", body], capture_output=True, text=True)
-        action = "回执（PR 不关闭）"
+        action = "回执（PR 不关闭）" if is_pr else "回执（修复未落地，不关单）"
     else:
         state = issue_state(repo, num)
         if state == "closed":
@@ -280,12 +298,18 @@ def main() -> None:
         raise SystemExit(
             f"回执未落地：oekit/{repo}#{num} 上找不到 {needles} 的回执评论——"
             "命令返回成功不等于回执已发（gh issue close 对已关闭 issue 返回 0 却不贴评论）")
-    if not is_pr:
+    if not is_pr and not pending:
         after = issue_state(repo, num)
         if after != "closed":
             raise SystemExit(f"关单未生效：oekit/{repo}#{num} 状态仍为 {after!r}")
     label = tag if tag else "无发布"
-    extra = "" if (not is_pr or pr_merged) else "；⚠️ PR 尚未合入，回执未声明「已合入」"
+    if pending:
+        extra = ("；⚠️ PR 尚未合入 ⇒ 回执未声明「已合入」，且**未关单**"
+                 "（由 PR 正文的 Closes #N 在合入时关）")
+    elif is_pr and not pr_merged:
+        extra = "；⚠️ PR 尚未合入，回执未声明「已合入」"
+    else:
+        extra = ""
     print(f"✓ oekit/{repo}#{num} 已{action}（{label}）{extra}")
 
 
