@@ -91,6 +91,13 @@ def make_repo(root: Path, dep_yaml: str, dirs: tuple[str, ...] = ("sink",)) -> P
     if "sink" in dirs:
         (repo / "sink" / "go.mod").write_text(
             "module github.com/oekit/fakerepo/sink\n", encoding="utf-8")
+    # 多层嵌套模块（相对路径带 / 的目录也要能造）
+    for d in dirs:
+        if "/" in d:
+            sub = repo / d
+            sub.mkdir(parents=True, exist_ok=True)
+            (sub / "go.mod").write_text(
+                f"module github.com/oekit/fakerepo/{d}\n", encoding="utf-8")
     return repo
 
 
@@ -107,7 +114,7 @@ def main() -> None:
             failures.append(f"用例1 期望零问题，实得 {problems}")
 
         # 用例 2：目录存在但没有 go.mod ⇒ 必须抓到
-        repo = make_repo(tmp / "c2", NO_GOMOD, dirs=("notamodule",))
+        repo = make_repo(tmp / "c2", NO_GOMOD, dirs=("notamodule",))  # 无嵌套模块 ⇒ 只测「无 go.mod」
         problems = check_dirs(repo, NO_GOMOD)
         if not problems:
             failures.append("用例2 期望抓到「目录存在但无 go.mod」，实得零问题")
@@ -115,13 +122,13 @@ def main() -> None:
             failures.append(f"用例2 报错未点名 go.mod：{problems[0]}")
 
         # 用例 3：非 gomod 生态 ⇒ 必须**不**判红（防全矩阵假红）
-        repo = make_repo(tmp / "c3", OTHER_ECO, dirs=())
+        repo = make_repo(tmp / "c3", OTHER_ECO, dirs=())  # 无嵌套模块
         problems = check_dirs(repo, OTHER_ECO)
         if problems:
             failures.append(f"用例3 期望零问题（非 gomod 生态不该判红），实得 {problems}")
 
         # 用例 4（关键反证）：data#39 的原始形态 ⇒ 必须抓到
-        repo = make_repo(tmp / "c4", STALE, dirs=())
+        repo = make_repo(tmp / "c4", STALE, dirs=())  # 无嵌套模块
         problems = check_dirs(repo, STALE)
         if not problems:
             failures.append("用例4 期望抓到 data#39 的残留目录条目，实得零问题")
@@ -134,6 +141,20 @@ def main() -> None:
             # ⇒ 门禁自己就成了它要防的那种假绿（2026-10-22 变异测试实测）
             failures.append(f"用例4 报错未区分「目录不存在」与「目录无 go.mod」：{problems[0]}")
 
+        # 用例 6（#118 的关键反证）：仓里有嵌套模块、但 dependabot.yml **没登记**
+        # ⇒ 它的依赖会被静默冻结 ⇒ 必须抓到。
+        repo = make_repo(tmp / "c6", VALID.replace("  - package-ecosystem: gomod\n    directory: /sink\n    schedule:\n      interval: weekly\n", ""),
+                         dirs=("sink",))
+        problems = check_dirs(repo, VALID.replace("  - package-ecosystem: gomod\n    directory: /sink\n    schedule:\n      interval: weekly\n", ""))
+        if not any("没在 dependabot.yml 里登记" in x for x in problems):
+            failures.append(f"用例6 期望抓到「嵌套模块未登记」，实得 {problems}")
+
+        # 用例 7：多层嵌套模块（相对路径带 /）同样要被认出来
+        repo = make_repo(tmp / "c7", VALID, dirs=("a/b/c",))
+        problems = check_dirs(repo, VALID)
+        if not any("a/b/c" in x for x in problems):
+            failures.append(f"用例7 期望抓到多层嵌套模块 a/b/c 未登记，实得 {problems}")
+
         # 用例 5：解析层单独验——只取 gomod 的 directory 条目
         if gomod_dirs(OTHER_ECO) != []:
             failures.append(f"用例5 非 gomod 生态被误收：{gomod_dirs(OTHER_ECO)}")
@@ -145,7 +166,7 @@ def main() -> None:
         for f in failures:
             print("  -", f)
         raise SystemExit(1)
-    print("✓ dependabot 目录门禁自测通过：残留条目/无 go.mod 都抓得到；非 gomod 生态不误报")
+    print("✓ dependabot 目录门禁自测通过：残留条目/无 go.mod/嵌套模块未登记都抓得到；非 gomod 生态不误报")
 
 
 if __name__ == "__main__":
