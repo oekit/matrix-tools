@@ -4,6 +4,55 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.21] — 2026-10-29
+
+### fix(tools)：align_floors 看不见嵌套模块——第 4 层的 kitexotel 被漏扫
+
+`align_floors.py` 扫 go.mod 用的是 `glob("*/go.mod")`，只覆盖**一层**子目录。
+而嵌套模块的路径深度并不固定：`bootstrap/nacos`、`logx/sink` 是一层，
+`kitex/observability/tracing/instrumentation/kitexotel` 在**第四层**。
+
+⇒ 深层嵌套模块被漏 ⇒ 父仓地板抬升后，子模块 go.mod 仍指向旧版本。
+子模块对父仓有 `replace ... => ../../..`，父仓一动，子模块的间接依赖集合
+随之变化 ⇒ CI 的 `go mod tidy -diff` 门禁必然判红（kitex#58 的真实成因）。
+
+修法：改用 `rglob` 递归扫描，排除 `.git` / `vendor` / `node_modules` /
+`testdata`（vendor 下的 go.mod 属于第三方依赖，被扫到会写出错误的 require 行）。
+新增 `align_floors_selftest.py` 钉住「深层嵌套模块必须扫得到、vendor 必须排除」，
+并接入 audit.yml 的 selftest job。
+
+### fix(tools)：align_floors 抬不动 indirect 行——工具说「零漂移」实际没对齐
+
+`plan_repo` 与 `apply_edits` 用的 require 行正则**以 `$` 收尾、不匹配行尾的
+`// indirect` 标记**。go.mod 的间接依赖行形如：
+
+```
+	github.com/oekit/concurrency v0.23.0 // indirect
+```
+
+而矩阵里**嵌套模块**的依赖几乎全是 indirect 形态（bootstrap/nacos、
+bootstrap/obs、timertask/redis …）⇒ 嵌套模块的地板既扫不到、也抬不动。
+
+**为什么这比报错更危险**：plan 阶段用同一个正则 ⇒ 嵌套模块根本不会进入计划
+⇒ 工具自报「✓ 全矩阵地板零漂移」而实际没对齐 ⇒ **假绿**一路走到 CI 门禁
+才炸（bootstrap#50 就是这么红的）。
+
+修法：新增 `FLOOR_REQ_RE`（容忍 ` // indirect` 标记），plan 与 apply 两侧都用它；
+`apply_edits` 改为按整行计数、逐行替换（同一模块可能同时有直接依赖行与 indirect
+行，两行都要抬），并加断言：计划里有的行在文件里找不到 ⇒ 直接报错，不再静默跳过。
+
+不改 `matrix.OEKIT_REQ_RE`：它的语义是「这个仓**直接**依赖哪些矩阵模块」
+（dep_matrix 的依赖矩阵在用），地板扫描是另一件事——「所有 oekit 依赖行（含间接）」。
+
+自测扩了两条断言，两向变异均验：正则退回 ⇒ 自测报「indirect 依赖行未扫到」；
+apply_edits 退回 ⇒ 自测触发断言「计划与实际不一致」。
+
+### 修好后的效果
+
+工具第一次看见真实的全矩阵地板漂移——修这两处之前，四轮维护轮共 49 个地板 PR
+里有一批**只抬了根模块、漏了嵌套模块**，被假绿掩盖；修好后首次暴露 5 仓真实漂移
+（etcdx、httpx、nns-endpoint、bootstrap、kitex-examples）。
+
 ## [v0.1.20] — 2026-10-27
 
 ### fix(tools)：consumer 探针判据粒度对齐——kitex 父仓被判假阳性，深层嵌套模块排除失效
