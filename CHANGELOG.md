@@ -4,6 +4,88 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.22] — 2026-10-30
+
+### fix(tools)：merge_pr 的回退会在 checks 未绿时立即合——绕过「PR 必须 CI 全绿」
+
+`merge_pr` 的 auto-merge 回退是**无条件立即合**：
+
+```python
+r = sh(["gh", "pr", "merge", ..., "--auto"], ...)   # 失败
+r2 = sh(["gh", "pr", "merge", ...], ...)            # ← 无条件立即合
+```
+
+⇒ 在**没有分支保护**（或保护里没挂 required checks）的仓上，那条回退等于
+「不等 CI 就合」⇒ 破坏本矩阵「PR 必须 CI 全绿才能合」的约定；而且它**不报错**
+（命令成功退出）⇒ 事后才发现时已经合进去了。
+
+修法：判据提成纯函数 `may_merge_without_checks(merge_state)`——只有
+`mergeStateStatus == CLEAN`（**没有任何 required check 挂起**）才允许立即合；
+`BLOCKED` / `BEHIND` / `DIRTY` / **状态读不到** ⇒ 明确返回「等 CI 绿后再合」，
+合并动作留给人或下一次调用。「读不到 ⇒ 不许合」是刻意的：**判不了 ≠ 没问题**。
+
+### fix(tools)：gen_changelog 从来没跑起来过，修好后又发现它没有闸门
+
+**① 它从来没跑起来过。** 旧版第 3 行是
+
+```python
+sys.path.insert(0, str(pathlib.Path(__file__).rsplit("/", 2)[0]))
+```
+
+`pathlib.Path` **没有** `rsplit`（那是 `str` 的方法）⇒ 一执行就 AttributeError。
+全仓 46 个脚本里只有它这么写（其余都是 `str(__file__).rsplit`）⇒ 而 README
+一直把它列在「可用工具」里 ⇒ 照着跑只会拿到 AttributeError。
+
+**② 跑起来也不能没有闸门。** 旧版一跑就把全矩阵 24 个仓的 CHANGELOG.md
+**整文件覆写**，且覆写出来的是「每个 tag 的 subject 一行」⇒ **release_train
+写的详实条目被替换掉**。实测损失：
+
+| 仓 | 现有 | 生成后 | 丢了多少 |
+|---|---|---|---|
+| hertz | 218 行 / 10699 字符 | 100 行 / 1459 字符 | **87%** |
+| kitex | 173 行 / 7015 字符 | 108 行 / 1737 字符 | 75% |
+| pkg | 382 行 | 172 行 | 详实的 CLI 设计说明被换成 tag 首行 |
+
+而且三个仓现在有**三种不同的抬头**（pkg 没有抬头、logx 是 ekit v0.34.0、
+bootstrap 是 Keep a Changelog）⇒ 旧版一跑就统一成第四种，还给 pkg 补上一个
+它没有的抬头。
+
+修法：跟矩阵既有约定对齐（align_floors / doc_wave / pr_flow 都是「默认只报告，
+`--apply` 才落地」）——缺省**只报告**哪些仓会被改、会不会丢内容、丢多少；
+`--apply` 才真写；`--push` 还要求 `--apply`；顺带把可执行部分收进 `main()`，
+模块可被 import。「丢内容」的判据用**字符数**而不是行数——详实条目是长句，
+行数少不代表没丢。
+
+### refactor(tools)：local_dir 上提共享层——两份逐字相同的实现
+
+`handoff.py` 与 `preflight.py` 各有一份**逐字相同**的 `local_dir` 实现。
+重复的代价不是「多几行」——是**改目录名规则时只改一处**，另一处悄悄落后。
+事实层的东西（路径解析）就该有一份 ⇒ 上提到 `matrix.py`（与 `repo_dir` 并列）。
+
+### test(tools)：工具链闸门自测
+
+新增 `scripts/toolchain_selftest.py`，钉住本轮的三道闸门：
+
+1. `may_merge_without_checks`：只有 CLEAN 放行；`BLOCKED` / `BEHIND` /
+   `DIRTY` / **状态读不到** 都必须挡；
+2. `changelog_write_allowed`：`--push` 不带 `--apply` 必须被拦；另外
+   **import 它本身**就是一道判据——旧版那行崩溃在 import 期就炸，import 成功
+   即证明崩溃行没了（不扫源码：docstring 里本就该写清这个坑的历史，扫源码会被
+   文档误伤——2026-10-30 实测先写成扫源码，结果被自己的文档字符串判红）；
+3. `local_dir`：行为（认 `<base>/<name>`、兼容 `ekit-<name>`、找不到返回
+   None）+ **源码级**断言（handoff.py / preflight.py 里不许再自己定义一份）。
+
+三处**变异验证**（改坏判据 ⇒ 自测必须转红，实测均转红、退出码 1）：
+放宽 merge 判据 ⇒ 用例 1b 转红；去掉 `push and not apply_` ⇒ 用例 2b 转红；
+在 handoff.py 塞回一份 local_dir 定义 ⇒ 用例 3b 转红。
+
+### docs(tools)：脚本表补全到 46 个并分类
+
+脚本表只列了 22/46 ⇒ 另外 23 个（含全部 `verify_*` 守卫与 12 个自测）在文档里
+查不到，新人不知道它们是干什么的、该不该跑。现在按**什么时候跑**分四组：
+日常 / 发版链 / 维护轮·跨仓文档 / 一次性·危险，另列自测与守卫库。
+同时把「本地用法」对齐新闸门（原来写着 `gen_changelog.py --push`，现在会被拒）。
+
 ## [v0.1.21] — 2026-10-29
 
 ### fix(tools)：align_floors 看不见嵌套模块——第 4 层的 kitexotel 被漏扫
