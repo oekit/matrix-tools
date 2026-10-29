@@ -107,7 +107,18 @@ def main() -> None:
                 print("  ⚠ 站点仓有未提交变更（--no-pr 模式，手工提交）")
         else:
             # 写入必须发生在 land_pr 的分支上（先写后落 PR 会被干净树守卫拒绝）
+            #
+            # 站点 versions.json 是**生成物** ⇒ 这里重置它是既有约定（重生成即可
+            # 复原）。但**必须说出来**：原来这一步是静默的 `git checkout --`，
+            # 别人看到自己的改动突然消失却没有任何说明。
+            # ⚠️ 只重置 versions.json 这**一个生成物**——站点的 llms.txt 是
+            # **手写文件**（verify_site_copy.py 明说它没有生成器），它的未提交
+            # 改动是别人的在途工作，**不许重置**。
             if is_dirty(site):
+                _dirty = sh(["git", "status", "--porcelain", "--", "docs/public/versions.json"],
+                            site, check=False).stdout.strip()
+                if _dirty:
+                    print(f"  ↺ 站点 versions.json 有未提交改动（生成物，将重置后重生成）")
                 sh(["git", "checkout", "--", "docs/public/versions.json"], site)
 
             def edit_site():

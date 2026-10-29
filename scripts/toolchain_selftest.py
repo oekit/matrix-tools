@@ -24,6 +24,7 @@
 """
 from __future__ import annotations
 
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -34,7 +35,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(HERE))
 
 from prkit import may_merge_without_checks  # noqa: E402
-from matrix import local_dir  # noqa: E402
+from matrix import ensure_file_clean, local_dir  # noqa: E402
 
 
 def main() -> None:
@@ -107,6 +108,37 @@ def main() -> None:
     # 判据在上面（import 期必须不炸）——**不扫源码**：docstring 里本来就该写清
     # 这个坑的历史，扫源码会被注释/文档误伤（2026-10-30 实测：先写成扫源码，
     # 结果被自己的文档字符串判红）。
+
+    # ---------- 4) 文件级干净守卫（gen_versions 用） ----------
+    # 判据收窄到「只看我自己要写的那个文件」——整树守卫会��共享工作区里别人的
+    # 在途改动卡死整条发版链（2026-10-30 实测：release_post 的站点步骤死在
+    # 一行与本生成器无关的 llms.txt 改动上）；但**我要写的那个文件**有未提交
+    # 改动时必须挡（否则生成会静默覆盖别人的内容）。
+    with tempfile.TemporaryDirectory() as td:
+        repo = Path(td) / "repo"
+        (repo / "docs" / "public").mkdir(parents=True)
+        subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=repo, check=True)
+        subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True)
+        (repo / "docs" / "public" / "versions.json").write_text("{}\n", encoding="utf-8")
+        (repo / "docs" / "public" / "llms.txt").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+        subprocess.run(["git", "commit", "-qm", "init"], cwd=repo, check=True)
+
+        # 场景 A：我要写的文件干净、**别的**文件脏 ⇒ 必须放行
+        (repo / "docs" / "public" / "llms.txt").write_text("dirty\n", encoding="utf-8")
+        try:
+            ensure_file_clean(repo, "docs/public/versions.json", "t")
+        except SystemExit:
+            failures.append("用例4a 别人的在途改动（llms.txt 脏）不该挡住写 versions.json 的生成器")
+
+        # 场景 B：我要写的文件自己脏 ⇒ 必须挡（否则静默覆盖）
+        (repo / "docs" / "public" / "versions.json").write_text("{}\n  // 别人的改动\n", encoding="utf-8")
+        try:
+            ensure_file_clean(repo, "docs/public/versions.json", "t")
+            failures.append("用例4b versions.json 自己有未提交改动时必须挡住（生成会覆盖它）")
+        except SystemExit:
+            pass
 
     if failures:
         print("✗ 工具链闸门自测未过：")
