@@ -25,7 +25,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, ORG, repo_dir, ensure_clean_all, sibling_deps, remote_tags  # noqa: E402
+from matrix import (MODULES, ORG, repo_dir, ensure_file_clean, sibling_deps,  # noqa: E402
+                    remote_tags)
 
 BASE = os.path.abspath(
     os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -700,7 +701,10 @@ def main() -> int:
     if "--stdout" in sys.argv:
         sys.stdout.write(text)
     else:
-        ensure_clean_all([SITE], "gen_versions")  # 产物必须落在已提交基线上
+        # **文件级**守卫（不是整树）：只判本生成器要写的那个文件。
+        # 整树守卫会��共享工作区里别人的在途改动（并行会话留下的 llms.txt 等）
+        # 卡死整条发版链——实测 2026-10-30 release_post 的站点步骤就死在这。
+        ensure_file_clean(SITE, "docs/public/versions.json", "gen_versions")
         out = Path(SITE) / "docs" / "public" / "versions.json"
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(text, encoding="utf-8")

@@ -460,3 +460,28 @@ def ensure_clean_all(dirs, what: str) -> None:
     if dirty:
         raise SystemExit(f"{what}: 工作树不干净，拒绝执行：{', '.join(dirty)}"
                          f"（先提交或 stash——生成器产物必须在干净基线上生成）")
+
+
+def ensure_file_clean(d: Path, rel: str, what: str) -> None:
+    """**文件级**干净守卫：只判本生成器要写的那个文件有没有未提交改动。
+
+    为什么需要它（2026-10-30 实测）：`ensure_clean_all` 判的是**整棵树**，而
+    共享工作区里别人的在途改动（并行会话留下的 llms.txt、某个手写页）会让
+    本生成器**整个跑不了**——实测 release_post 的站点步骤被一行 llms.txt 改动
+    卡死，整条发版链断在那里，而那行改动**与本生成器要写的文件毫无关系**。
+
+    但守卫不能整体放松：生成器要写的那个文件**自己**有未提交改动时，生成会
+    **静默覆盖别人的内容**（那才是真事故）⇒ 判据收窄到「只看我写的那个文件」。
+
+    判据用 git status 的**路径限定**，不看整树。
+    """
+    d = Path(d)
+    rel_p = d / rel
+    if not d.exists():
+        return
+    r = sh(["git", "status", "--porcelain", "--", rel], d, check=False)
+    if r is not None and r.stdout.strip():
+        raise SystemExit(
+            f"{what}: {rel} 有未提交改动，拒绝执行（生成会覆盖它）——"
+            f"先提交或 stash：\n{r.stdout.strip()}")
+
