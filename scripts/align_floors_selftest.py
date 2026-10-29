@@ -24,7 +24,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 
-from align_floors import find_gomods  # noqa: E402
+from align_floors import FLOOR_REQ_RE, apply_edits, find_gomods  # noqa: E402
 
 FAILURES: list[str] = []
 
@@ -46,6 +46,45 @@ def build_fixture(root: Path) -> None:
     vend = root / "vendor" / "dep"
     vend.mkdir(parents=True)
     (vend / "go.mod").write_text("module example.com/vendor/dep\n")
+
+
+def check_indirect_lines() -> None:
+    """**indirect 依赖行也必须能被扫描与抬升**（2026-10-29 修）。
+
+    go.mod 的间接依赖行形如 `\tgithub.com/oekit/concurrency v0.23.0 // indirect`。
+    此前 plan/apply 用的正则以 `$` 收尾、不匹配该标记 ⇒ **嵌套模块**（其依赖
+    几乎全是 indirect 形态）的地板**抬不动**，而工具自报「✓ 零漂移」——
+    假绿比报错更危险：bootstrap#50 就是这么把 CI 弄红的。
+    """
+    text = (
+        "module example.com/root\n"
+        "\n"
+        "require (\n"
+        "\tgithub.com/oekit/pkg v0.15.1\n"
+        ")\n"
+        "\n"
+        "require (\n"
+        "\tgithub.com/oekit/concurrency v0.23.0 // indirect\n"
+        ")\n"
+    )
+    hits = FLOOR_REQ_RE.findall(text)
+    found = {h[1]: h[2] for h in hits}
+    check("pkg" in found, f"直接依赖行未扫到：found={found}")
+    check("concurrency" in found, f"indirect 依赖行未扫到：found={found}")
+
+    with tempfile.TemporaryDirectory() as td:
+        gm = Path(td) / "go.mod"
+        gm.write_text(text)
+        apply_edits(gm, [("github.com/oekit/concurrency", "v0.23.0", "v0.23.1")])
+        after = gm.read_text()
+        check(
+            "github.com/oekit/concurrency v0.23.1 // indirect" in after,
+            f"indirect 行未被抬升：\n{after}",
+        )
+        check(
+            "github.com/oekit/pkg v0.15.1" in after,
+            f"不应被改动的行被动了：\n{after}",
+        )
 
 
 def main() -> None:
@@ -71,12 +110,14 @@ def main() -> None:
         # 5. 不得重复计入根模块
         check(len(found) == 3, f"扫描结果数量异常（期望 3）：found={sorted(found)}")
 
+    check_indirect_lines()
+
     if FAILURES:
         print("align_floors 自测失败：")
         for f in FAILURES:
             print(f"  ✗ {f}")
         sys.exit(1)
-    print("align_floors 自测通过：根/一层/第四层嵌套模块均扫到，vendor 被排除")
+    print("align_floors 自测通过：根/一层/第四层嵌套模块均扫到，vendor 被排除，indirect 行可抬升")
 
 
 if __name__ == "__main__":
