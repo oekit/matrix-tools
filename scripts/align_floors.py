@@ -127,6 +127,42 @@ def apply_edits(gm: Path, ups: list[tuple[str, str, str]]) -> None:
     gm.write_text(text)
 
 
+def apply_repo(repo: str, base: str, plans: dict[Path, list[tuple[str, str, str]]]) -> list[str]:
+    """把一个仓的地板抬到位，并返回变更文件清单（相对仓根）。
+
+    **关键：改完父仓后，该仓的**所有**嵌套模块都要重跑一次 tidy**——
+    哪怕它自身没有 ups（2026-10-30 实测，kitex#65 的真实成因）。
+
+    嵌套模块对父仓有 `replace github.com/oekit/kitex => ../../../..` ⇒ 父仓
+    go.mod 的 require 一变，**子模块的依赖图随之变化**：即便子模块自己不直接
+    require 那个依赖（如 kitexotel 不 require bootstrap），它的 go.sum 里也会
+    多出/换掉那个依赖的哈希（经父仓传递进来）。
+
+    ⇒ 只对「计划里有 ups 的 go.mod」跑 tidy 是不够的：kitexotel 压根不在
+    计划里（它没直接 require bootstrap）⇒ 它的 go.sum 永远滞后 ⇒
+    CI 的 `go mod tidy -diff` 门禁必红。而工具自报「✓ 已写入并 tidy」——
+    又一次**假绿**。
+
+    顺序：**先改全部 go.mod，再统一 tidy**（tidy 会用改后的父仓内容解析）。
+    """
+    d = repo_dir(repo, base)
+    files: list[str] = []
+    for gm, ups in plans.items():
+        apply_edits(gm, ups)
+    # 父仓改完后，仓内**每个**模块都要 tidy（根 + 全部嵌套模块）
+    for gm in find_gomods(d):
+        if run_tidy(gm.parent) != 0:
+            raise SystemExit(f"{repo}/{gm.parent.relative_to(d)}: go mod tidy 失败")
+    for gm in find_gomods(d):
+        rel = str(gm.relative_to(d))
+        if (d / rel).exists() and sh(["git", "status", "--porcelain", rel], d).stdout.strip():
+            files.append(rel)
+        rel_sum = rel.replace("go.mod", "go.sum")
+        if (d / rel_sum).exists() and sh(["git", "status", "--porcelain", rel_sum], d).stdout.strip():
+            files.append(rel_sum)
+    return files
+
+
 def main() -> None:
     args = sys.argv[1:]
     do_apply = "--apply" in args
@@ -187,10 +223,7 @@ def main() -> None:
             if is_dirty(d) or git_branch(d) != "main":
                 skipped.append(repo)
                 continue
-            for gm, ups in plans_all[repo].items():
-                apply_edits(gm, ups)
-                if run_tidy(gm.parent) != 0:
-                    raise SystemExit(f"{repo}/{gm.parent.name}: go mod tidy 失败")
+            apply_repo(repo, base, plans_all[repo])
             print(f"  ✓ {repo} 已写入并 tidy")
         print(f"\n下一步：{', '.join(changed)}\n"
               "  → 逐仓开 PR 可加 --pr，或手工处理；合入后 release_train 打 patch tag 才算对齐完成")
@@ -200,17 +233,7 @@ def main() -> None:
 
 def re_apply_for_pr(repo: str, base: str) -> list[str]:
     """land_pr 的 edit：在分支上重跑本仓的抬升（plan_repo 结果与主流程一致），返回变更文件。"""
-    d = repo_dir(repo, base)
-    files = []
-    for gm, ups in plan_repo(repo, base).items():
-        apply_edits(gm, ups)
-        if run_tidy(gm.parent) != 0:
-            raise SystemExit(f"{repo}: go mod tidy 失败")
-        files.append(str(gm.relative_to(d)))
-        rel_sum = str(gm.relative_to(d)).replace("go.mod", "go.sum")
-        if (d / rel_sum).exists() and sh(["git", "status", "--porcelain", rel_sum], d).stdout.strip():
-            files.append(rel_sum)
-    return files
+    return apply_repo(repo, base, plan_repo(repo, base))
 
 
 def run_tidy(module_dir: Path) -> int:
