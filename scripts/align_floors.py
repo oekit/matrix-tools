@@ -32,6 +32,23 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from matrix import MODULES, OEKIT_REQ_RE, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
 from prkit import land_pr  # noqa: E402
 
+# 地板扫描用的 require 行正则：**容忍行尾的 `// indirect` 标记**。
+#
+# 为什么不直接用 matrix.OEKIT_REQ_RE：它以 `$` 收尾、不匹配 indirect 行
+# （`\tgithub.com/oekit/concurrency v0.23.0 // indirect`）。而矩阵里**嵌套
+# 模块**的依赖几乎全是 indirect 形态（bootstrap/nacos、bootstrap/obs、
+# timertask/redis …）⇒ 用它扫描等于**看不见嵌套模块的地板**。
+#
+# 后果实测（2026-10-29）：bootstrap#50 只抬了根模块的 concurrency，
+# 嵌套模块 nacos/obs 里的 concurrency 仍停在 v0.23.0 ⇒ CI 的
+# `go mod tidy -diff` 门禁判红；而工具自报「✓ 全矩阵地板零漂移」——
+# **工具说对齐了，实际没对齐**，这类假绿比报错更危险。
+#
+# 独立定义而不改 matrix.OEKIT_REQ_RE：后者的语义是「这个仓**直接**依赖哪些
+# 矩阵模块」（dep_matrix 的依赖矩阵用），改动会影响那张表的语义。
+FLOOR_REQ_RE = re.compile(
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)( // indirect)?$", re.M)
+
 def parse_semver(v: str) -> tuple[int, int, int]:
     a, b, c = v[1:].split(".")
     return (int(a), int(b), int(c))
@@ -73,7 +90,7 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
             continue
         text = gm.read_text()
         ups = []
-        for m in OEKIT_REQ_RE.finditer(text):
+        for m in FLOOR_REQ_RE.finditer(text):
             full, dep, ver = m.group(1), m.group(2), m.group(3)
             if dep not in latest_cache:
                 latest_cache[dep] = latest_tag(dep, base)
@@ -90,10 +107,23 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
 def apply_edits(gm: Path, ups: list[tuple[str, str, str]]) -> None:
     text = gm.read_text()
     for full, ver, target in ups:
-        # 保留原行前缀（块内 tab / 单行 require）——logx/bootstrap 是单行形态
-        pat = re.compile(rf"^(\t|require )({re.escape(full)}) {re.escape(ver)}$", re.M)
-        assert len(pat.findall(text)) == 1, f"{gm}: {full} {ver} 行不唯一"
-        text = pat.sub(rf"\g<1>{full} {target}", text)
+        # 保留原行前缀（块内 tab / 单行 require）——logx/bootstrap 是单行形态。
+        #
+        # **必须容忍行尾的 `// indirect` 标记**（2026-10-29 修）：go.mod 的间接
+        # 依赖行形如 `\tgithub.com/oekit/concurrency v0.23.0 // indirect`。
+        # 原正则以 `$` 收尾且不匹配该标记 ⇒ 嵌套模块（bootstrap/nacos、
+        # bootstrap/obs 等）的间接依赖行**抬不动**——而 plan 阶段
+        # OEKIT_REQ_RE 同样以 `$` 收尾、也匹配不到……
+        # ⇒ plan 报「要抬」、apply 静默跳过 ⇒ 工具自称对齐、实际没动，
+        # CI 的 `go mod tidy -diff` 门禁随后判红（bootstrap#50 的真实成因）。
+        #
+        # 匹配要**唯一**：同一模块可能同时有直接依赖行与 indirect 行，
+        # 两行都要抬——所以按「整行」计数，允许多行命中但逐行替换。
+        pat = re.compile(
+            rf"^(\t|require )({re.escape(full)}) {re.escape(ver)}( // indirect)?$", re.M)
+        hits = pat.findall(text)
+        assert hits, f"{gm}: {full} {ver} 行未找到（计划与实际不一致？）"
+        text = pat.sub(rf"\g<1>{full} {target}\g<3>", text)
     gm.write_text(text)
 
 
