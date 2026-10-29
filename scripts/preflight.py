@@ -21,18 +21,11 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from matrix import DEFAULT_BASE, ORG, git_branch, is_dirty, sh  # noqa: E402
+from matrix import DEFAULT_BASE, ORG, git_branch, is_dirty, local_dir, sh  # noqa: E402
 from inflight import read, age_of, held  # noqa: E402
 
 BASE = Path(DEFAULT_BASE)
 META_DIRS = ["oekit", "matrix-tools", "oekit.github.io", "profile"]
-
-
-def local_dir(name: str) -> Path | None:
-    for cand in (BASE / name, BASE / f"ekit-{name}"):
-        if (cand / ".git").exists():
-            return cand
-    return None
 
 
 def main() -> None:

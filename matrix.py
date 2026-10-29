@@ -144,6 +144,23 @@ def repo_dir(repo: str, base: str | None = None) -> Path:
     raise FileNotFoundError(f"repo {repo} 不存在于 {base} 的任何已知布局中")
 
 
+def local_dir(name: str, base: str | None = None) -> Path | None:
+    """本地检出目录（找不到返回 None）——**元仓**用：矩阵模块仓之外的那些仓。
+
+    兼容旧目录名 `ekit-<name>`（拆分前的本地布局）。
+
+    **为什么上提到这里**：handoff.py 与 preflight.py 曾各有一份**逐字相同**的
+    实现。重复的代价不是「多几行」——是**改目录名规则时只改一处**，另一处
+    悄悄落后（2026-10-30 实测：两处都还在、但只有一处被审计过）。
+    事实层的东西（路径解析）就该有一份。
+    """
+    base_p = Path(base or DEFAULT_BASE)
+    for cand in (base_p / name, base_p / f"ekit-{name}"):
+        if (cand / ".git").exists():
+            return cand
+    return None
+
+
 def go_mod(repo: str, base: str | None = None) -> str:
     return (repo_dir(repo, base) / "go.mod").read_text()
 

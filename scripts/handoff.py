@@ -16,19 +16,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from matrix import MODULES, DEFAULT_BASE  # noqa: E402
+from matrix import MODULES, DEFAULT_BASE, local_dir  # noqa: E402
 from inflight import entries  # noqa: E402
 
 BASE = Path(DEFAULT_BASE)
 # 元仓：本地目录名与线上仓库名（profile = 线上 oekit/.github）
 META_DIRS = ["oekit", "matrix-tools", "oekit.github.io", "profile"]
-
-
-def local_dir(name: str) -> Path | None:
-    for cand in (BASE / name, BASE / f"ekit-{name}"):
-        if (cand / ".git").exists():
-            return cand
-    return None
 
 
 def repo_state(d: Path, fetch: bool) -> dict:
