@@ -121,10 +121,31 @@ def open_pr(repo: str, head: str) -> tuple[int, str] | None:
     return int(n), url
 
 
+def may_merge_without_checks(merge_state: str) -> bool:
+    """auto-merge 不可用时，允许「不等 CI 直接合」的条件。
+
+    只有**没有任何 required check 挂起**（mergeStateStatus == CLEAN）才允许。
+    BLOCKED = 有检查没过/还没跑完 ⇒ 合进去就是绕过 CI ⇒ 不许。
+    状态读不到（空）⇒ 保守当**不许**——「判不了」不等于「没问题」。
+
+    提成纯函数是为了**能自测**：判据藏在 merge_pr 的控制流里时，
+    没人能证明它真的按预期挡（2026-10-30 实测：旧实现是「auto 失败 ⇒ 无条件
+    立即合」，在无分支保护的仓上等于不等 CI 就合，且命令成功退出、不报错）。
+    """
+    return (merge_state or "").strip() == "CLEAN"
+
+
 def merge_pr(repo: str, number: int, method: str = "merge") -> str:
     """合并一个 PR：落后/分支过期（BEHIND/DIRTY）先 update-branch（真冲突会在此失败并上报），
     再 --auto（required checks 由 GitHub 等绿；allow_auto_merge 已全 org 启用）。
-    auto 不可用时回退立即合。返回终态描述。"""
+    **auto 不可用时，只有「没有任何 required check 挂起」才允许立即合**；
+    checks 没绿就明确返回「等 CI 绿」，不替人做合并决定。返回终态描述。
+
+    **为什么收紧这个回退**（2026-10-30）：旧实现是「auto 失败 ⇒ 无条件立即合」。
+    在**没有分支保护**（或保护里没挂 required checks）的仓上，那条回退等于
+    「不等 CI 就合」⇒ 破坏本矩阵「PR 必须 CI 全绿才能合」的约定，而且
+    **它不报错**（命令成功退出）⇒ 事后才发现时已经合进去了。
+    """
     full = f"{ORG}/{repo}"
     st = sh(["gh", "pr", "view", str(number), "--repo", full,
              "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"],
@@ -137,8 +158,15 @@ def merge_pr(repo: str, number: int, method: str = "merge") -> str:
             f"--{method}", "--auto"], None, check=False)
     if r.returncode == 0:
         return "auto-merge 已排程（等 checks 绿）"
+    # auto 不可用 ⇒ 重新问一次状态（auto 那次尝试期间状态可能已变）
+    st2 = sh(["gh", "pr", "view", str(number), "--repo", full,
+              "--json", "mergeStateStatus", "--jq", ".mergeStateStatus"],
+             None, check=False).stdout.strip()
+    if not may_merge_without_checks(st2):
+        return (f"auto-merge 不可用，且 checks 未全绿（mergeStateStatus={st2 or '读不到'}）"
+                f"——不自动合，等 CI 绿后再合（合并动作留给人或下一次调用）")
     r2 = sh(["gh", "pr", "merge", str(number), "--repo", full, f"--{method}"],
             None, check=False)
     if r2.returncode == 0:
-        return "merged"
+        return "merged（无 required check 挂起，auto 不可用 ⇒ 直接合）"
     return f"合并失败：{((r.stderr or '') + (r2.stderr or '')).strip()[:160]}"
