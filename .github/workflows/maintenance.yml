@@ -47,9 +47,27 @@ jobs:
           fi
           echo "count=$COUNT" >> "$GITHUB_OUTPUT"
           echo "undetermined=$UNDET" >> "$GITHUB_OUTPUT"
+      - name: Flaky scan（-count>1 的重复跑——CI 用 -count=1 看不见的那类）
+        # **为什么要有这一步**：矩阵 CI 的 test-script 默认 -count=1 ⇒ **只跑
+        # 一轮**。而「进程级全局状态在测试间/轮次间未隔离」这一类缺陷**第一轮
+        # 恒绿**、第二轮起才红 ⇒ CI 永远不会报（实测 2026-10-30 三例：
+        # logx 的 caller 跳过注册表、concurrency 的 sharedBreakers、redisx 的
+        # 兜底期计数混算后台探活）⇒ 只能靠固定跑一轮 -count>1 发现。
+        #
+        # **不阻塞**：扫描失败/超时都不该让维护轮中断（它只是"发现"，不是
+        # "判红"）⇒ 用 || true 吞掉退出码，结果写进报告文件供 issue 正文引用。
+        continue-on-error: true
+        id: flake
+        run: |
+          set +e
+          MATRIX_BASE="$PWD/repos" python3 scripts/flake_scan.py \
+            --base "$PWD/repos" --count 4 --jobs 4 2>&1 | tee flake-report.txt
+          echo "exit=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
+          exit 0
       - name: Close previous maintenance issue
-        # 只有**确定**没有漂移、没有仓读不到，才关单。读不到 ≠ 零漂移（#96）。
-        if: steps.drift.outputs.count == '0' && steps.drift.outputs.undetermined == '0'
+        # 只有**确定**没有漂移、没有仓读不到、也没有 flaky 用例，才关单。
+        # 读不到 ≠ 零漂移（#96）；flaky ≠ 健康（CI 的 -count=1 看不见它）。
+        if: steps.drift.outputs.count == '0' && steps.drift.outputs.undetermined == '0' && steps.flake.outputs.exit == '0'
         uses: actions/github-script@v9
         with:
           script: |
@@ -63,7 +81,7 @@ jobs:
             }
       - name: Ensure maintenance label exists
         # 标签不存在时 issues.create 会 422（#96）——先自愈，不依赖仓外带外设置。
-        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0'
+        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0' || steps.flake.outputs.exit != '0'
         uses: actions/github-script@v9
         with:
           script: |
@@ -78,18 +96,30 @@ jobs:
                 description: '维护轮到期：依赖地板落后最新 tag（由 maintenance.yml 自动开/更新）' });
             }
       - name: Open maintenance round issue
-        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0'
+        if: steps.drift.outputs.count != '0' || steps.drift.outputs.undetermined != '0' || steps.flake.outputs.exit != '0'
         uses: actions/github-script@v9
         with:
           script: |
             const fs = require('fs');
             const count = '${{ steps.drift.outputs.count }}';
             const undet = '${{ steps.drift.outputs.undetermined }}';
+            const flakeExit = '${{ steps.flake.outputs.exit }}';
             const headline = undet === '0'
               ? '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期。'
               : '全矩阵 **' + count + '** 仓依赖地板落后最新 tag（≥ 阈值 8）——维护轮到期；'
                 + '另有 **' + undet + '** 仓漂移状态未知（读不到，不能当零漂移），先查检出布局。';
-            const body = headline + '\n\n' +
+            // flaky 扫描的结论单独成段：即使地板零漂移，只要 -count>1 的重复跑
+            // 仍有红用例，本条也要开——CI 的 -count=1 永远看不见它。
+            const flakeSection = flakeExit === '0'
+              ? ''
+              : '\n\n## ⚠️ 另发现 flaky 用例（CI 的 -count=1 看不见）\n\n'
+                + '重复跑（`-race -count=4`）时全矩阵有红用例：\n\n```\n'
+                + (fs.existsSync('flake-report.txt') ? fs.readFileSync('flake-report.txt', 'utf8') : '(报告缺失)')
+                + '\n```\n\n这类缺陷的特征：**第一轮恒绿、第二轮起才红** ⇒ 典型成因是'
+                + '「进程级全局状态在测试间/轮次间未隔离」（全局注册表只增不删、'
+                + '固定 name 被上一轮占用、后台流量被算进业务计数）。'
+                + '复跑确认（同一用例单独再跑一次仍红）后再改。\n';
+            const body = headline + flakeSection + '\n\n' +
               '按需发版模型下这不阻塞任何人；到达期阈值说明组合漂移已可观，建议跑一轮：\n\n' +
               '```\n' +
               '# 逐仓对齐 + 开 PR（auto-merge）\n' +
