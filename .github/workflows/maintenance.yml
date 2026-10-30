@@ -21,6 +21,14 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          # 矩阵的 Go 地板口径：基础层 1.24、业务层 1.24/1.25/1.26 均可。
+          # 巡检链要跑 flaky 扫描（go test -race），**必须有 Go**——
+          # 缺了它，扫描步骤会因找不到 go 命令而**静默失效**
+          # （工具捕获异常后报「无失败用例」⇒ 看起来扫过了，其实没跑）。
+          go-version: '1.26'
+          cache: false
       - name: Clone all matrix repos（清单来自 matrix.py，不再手工硬编码）
         run: |
           mkdir -p repos
