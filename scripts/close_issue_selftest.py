@@ -49,6 +49,24 @@ FAKE_GH = r'''#!/bin/sh
 REC="$FAKE_GH_RECORD"
 CLOSE_REC="$FAKE_GH_CLOSE_REC"
 
+# **瞬时故障注入**（2026-10-30）：前 $FAKE_GH_EOF_CALLS 次调用报 EOF，
+# 之后正常——复刻真实 GitHub API 的间歇性 EOF（实测会发生的瞬时故障）。
+# ghsafe 的 TRANSIENT_RE 含 "unexpected EOF" ⇒ 应自动重试 ⇒ 脚本不受影响。
+if [ -n "$FAKE_GH_EOF_CALLS" ]; then
+  TARGET="$FAKE_GH_EOF_TARGET"
+  # ⚠️ 必须用 `grep -q -e "$TARGET"`：pattern 以 "-" 开头（--json state）时，
+  # `grep -q "$TARGET"` 会把它当成**选项**而不是 pattern ⇒ 永远匹配不上
+  # （实测：注入静默不生效，用例1d 假绿）。
+  if [ -z "$TARGET" ] || echo "$*" | grep -q -e "$TARGET"; then
+    N=$(cat "$FAKE_GH_EOF_CALLS_FILE" 2>/dev/null || echo 0)
+    if [ "$N" -lt "$FAKE_GH_EOF_CALLS" ]; then
+      echo $((N + 1)) > "$FAKE_GH_EOF_CALLS_FILE"
+      echo "failed to get run: Get \"https://api.github.com/...\": EOF" >&2
+      exit 1
+    fi
+  fi
+fi
+
 # PR 判定用（gh api repos/{o}/{r}/issues/{n} 的返回体）
 if [ "$1" = "api" ]; then
   echo "$FAKE_GH_ISSUE_JSON"
@@ -110,6 +128,8 @@ def run_case(tmp: Path, state: str, comment_works: str,
              comments_body: str | None = None,
              kind: str = "issue",
              pr_state: str = "MERGED",
+             eof_calls: int = 0,
+             eof_target: str = "",
              case: str = "c") -> tuple[int, str, str, str]:
     """跑一遍 close_issue.py，返回 (退出码, 评论记录, close 记录, 组合输出)。
 
@@ -117,7 +137,8 @@ def run_case(tmp: Path, state: str, comment_works: str,
     记录文件里的评论被下一个用例读成「回执已在」（实测踩坑：用例4 与用例10
     参数完全相同 ⇒ 共享记录文件 ⇒ 用例10 误判为「重复发布了评论」）。
     """
-    suffix = f"{case}-{state}-{comment_works}-{'nr' if extra else 'tg'}-{kind}-{pr_state}"
+    suffix = (f"{case}-{state}-{comment_works}-{'nr' if extra else 'tg'}-{kind}"
+              f"-{pr_state}-eof{eof_calls}-{eof_target.replace(' ', '_')}")
     bindir = tmp / f"bin-{suffix}"
     bindir.mkdir(parents=True, exist_ok=True)
     gh = bindir / "gh"
@@ -139,6 +160,10 @@ def run_case(tmp: Path, state: str, comment_works: str,
     env["FAKE_GH_RECORD"] = str(rec)
     env["FAKE_GH_CLOSE_REC"] = str(close_rec)
     env["FAKE_GH_STATE"] = state
+    if eof_calls:
+        env["FAKE_GH_EOF_CALLS"] = str(eof_calls)
+        env["FAKE_GH_EOF_TARGET"] = eof_target
+        env["FAKE_GH_EOF_CALLS_FILE"] = str(tmp / f"eof-{suffix}.txt")
     env["FAKE_GH_COMMENT_WORKS"] = comment_works
     env["FAKE_GH_COMMENTS_BODY"] = comments_body or ""
     env["FAKE_GH_ISSUE_JSON"] = PR_ISSUE_JSON if kind == "pr" else ISSUE_JSON
@@ -168,6 +193,33 @@ def main() -> None:
             failures.append(f"用例1 期望退出码 0，实得 {rc}：{out.strip()[:200]}")
         if "v0.19.0" not in recorded:
             failures.append("用例1 回执未落地：假 gh 没收到 gh issue comment 调用")
+
+        # ── 用例 1c/d：瞬时 EOF（2026-10-30 新增）────────────────────
+        # 背景：真实 GitHub API 会间歇性返回 EOF（实测会发生的瞬时故障）。
+        # 旧实现**直接 subprocess.run 调 gh** ⇒ 一次 EOF 就把整条回执打死；
+        # 且 `issue_state` 失败时返回空串 ⇒ 「已关闭」与「读不到」不可区分
+        # ⇒ 会把已关闭的 issue 错走 `gh issue close --comment`
+        # ⇒ GitHub 静默不贴评论 ⇒ **回执丢失**（只能靠末尾复核兜住）。
+        #
+        # 期望：ghsafe.run_gh 识别 EOF 为瞬时错误 ⇒ 自动重试 ⇒ 脚本照常成功。
+        rc1c, recorded1c, _, out1c = run_case(tmp, "CLOSED", "1", eof_calls=2, case="c1c")
+        if rc1c != 0:
+            failures.append(f"用例1c 期望退出码 0（EOF 应被重试后成功），实得 {rc1c}：{out1c.strip()[:200]}")
+        if "v0.19.0" not in recorded1c:
+            failures.append("用例1c 回执未落地（EOF 重试后应正常投递）")
+
+        # 用例 1d：EOF 次数**超过**重试上限 ⇒ 必须**明确报错**，
+        # 而不是把「读不到」当成「未关闭」去走 close 路径（回执会静默丢失）。
+        # 注入目标精确到 `--json state`（状态查询）：幂等检查走的是
+        # `--json comments`，必须让它正常返回 ⇒ 才能真正走到 issue_state。
+        rc1d, _, closed1d, out1d = run_case(tmp, "CLOSED", "1", eof_calls=99,
+                                          eof_target="--json state", case="c1d")
+        if rc1d == 0:
+            failures.append("用例1d 期望非 0 退出（读不到状态必须明确失败），实得 0")
+        if "失败" not in out1d:
+            failures.append(f"用例1d 期望报「读取失败」（读不到 ≠ 未关闭），实得：{out1d.strip()[:200]}")
+        if "CLOSE_CALLED" in closed1d:
+            failures.append("用例1d 读不到状态时不得走 close 路径（会把已关闭 issue 的回执静默丢掉）")
 
         # 用例 1b：小写 state 也要认（大小写容错）
         rc1b, recorded1b, _, out1b = run_case(tmp, "closed", "1", case="c1b")

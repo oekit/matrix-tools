@@ -38,10 +38,18 @@ from typing import Any, Callable
 
 # 像「瞬时错误」的特征：限速 / 5xx / 超时 / 连接被掐。
 # 命中这些才值得重试；404、权限不足这类**确定性**失败要立刻抛。
+#
+# ⚠️ EOF 的两种真实格式都要覆盖（2026-10-30 实测）：
+#   - `failed to get run: Get "https://api.github.com/...": EOF` ← **真实 gh**
+#   - `unexpected EOF`
+# 原先只写 `unexpected EOF` ⇒ **真实 gh 的报错格式匹配不上** ⇒ 读取层遇到
+# GitHub API 的间歇性 EOF 时**不重试、直接抛** ⇒ 整条回执/巡检链被打死
+# （本次实测：close_issue 读 issue 元数据的 `gh api` 直接 EOF 失败）。
+# ⇒ 写成「可选的 unexpected + EOF」，两种都匹配。
 TRANSIENT_RE = re.compile(
     r"rate limit|abuse detection|secondary rate|abuse|"
     r"\b5\d\d\b|timed out|timeout|connection reset|connection refused|"
-    r"temporarily unavailable|unexpected EOF",
+    r"temporarily unavailable|(?:\bunexpected\s+)?\bEOF\b",
     re.I,
 )
 
