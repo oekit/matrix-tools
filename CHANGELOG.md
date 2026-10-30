@@ -4,6 +4,66 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.24] — 2026-10-30
+
+### fix(tools)：父仓地板变了，嵌套模块的 go.sum 必须跟着 tidy——否则 CI 必红而工具说「已对齐」
+
+**现象**：kitex#65（地板对齐 PR）的 CI 在 tidy 门禁**连续两次**判红：
+
+```
+diff current/go.sum tidy/go.sum
+-github.com/oekit/bootstrap v0.6.5 h1:...
++github.com/oekit/bootstrap v0.6.6 h1:...
+```
+
+而工具自报「✓ kitex 已写入并 tidy」。
+
+**根因**：嵌套模块对父仓有 `replace github.com/oekit/kitex => ../../../..`
+⇒ 父仓 go.mod 的 require 一变，**子模块的依赖图随之变化**：即便子模块
+**自己不直接 require** 那个依赖（kitexotel 不 require bootstrap），它的 go.sum
+里也会换掉那个依赖的哈希（经父仓传递进来）。
+
+⇒ 旧实现只对「计划里有 ups 的 go.mod」跑 tidy：kitexotel **压根不在计划里**
+⇒ 它的 go.sum 永远滞后于父仓 ⇒ CI 的 `go mod tidy -diff` 门禁必红，
+而工具自报「已写入并 tidy」——又一次**假绿**。
+
+**修法**：抽出 `apply_repo`，改成
+1. **先改完全部 go.mod**（tidy 要用改后的父仓内容解析，反序会算出旧依赖图）；
+2. 再对仓内**每个** go.mod（根 + 全部嵌套模块，含没有 ups 的）跑 tidy。
+
+**实测**：修好后 kitex 的改动从 2 个文件变成 3 个——根 go.mod/go.sum **+
+observability/tracing/instrumentation/kitexotel/go.sum**（之前漏的就是它）；
+kitex / kitexotel / istio 三个模块的 `go mod tidy -diff` 均干净。
+
+**变异验证**（自测新增契约断言，两向都验）：
+- tidy 循环退回「只遍历 plans」⇒ 自测红 ✅
+- 顺序反了（先 tidy 后改 go.mod）⇒ 自测红 ✅
+
+> ⚠️ 这是 align_floors 的**第三个**同族假绿坑（#129 漏扫深层嵌套模块、
+> #130 抬不动 `// indirect` 行、本次嵌套模块 go.sum 不跟随父仓）。共同形状：
+> **判定（plan）与执行（apply）共用同一套不完整的规则** ⇒ 两边一起漏 ⇒
+> 工具报成功而实际没改。
+
+### feat(tools)：巡检链加 flaky 扫描——CI 的 -count=1 永远看不见的那类缺陷
+
+**背景**：矩阵 CI 的 test-script 默认 `go test -race -count=1` ⇒ **只跑一轮**。
+而有一类缺陷**第一轮恒绿、第二轮起才红** ⇒ **CI 永远不会报**。2026-10-30
+实测三例，全是同一形态（**进程级全局状态在测试间/轮次间未隔离**）：
+
+- **logx**：caller 跳过注册表只增不删 ⇒ 用例自己注册的探针文件留在全局 ⇒
+  第二轮起探针帧被自己跳过（logx#52 已修）
+- **concurrency**：GetBreaker 的 sharedBreakers 全局 ⇒ 冲突回调只在「首次
+  创建」时有对比对象 ⇒ 第二轮起指纹相同 ⇒ 回调不触发（concurrency#119 已修）
+- **redisx**：兜底期断言把**后台探活**那次 EVAL 也算进业务计数 ⇒ 计数 +1
+  ⇒ 断言误判（redisx#67 已修，实测 100 轮红 14 次）
+
+**修法**：新增 `scripts/flake_scan.py`（全矩阵并发跑 `-race -count=N`，收集
+`--- FAIL` 用例名），并接进 `maintenance.yml`：
+- 扫描**不阻塞**维护轮主流程（它是"发现"不是"判红"）⇒ `continue-on-error`
+  + 吞退出码，结果写进 `flake-report.txt` 供 issue 正文引用；
+- 「关单」与「开单」的条件都加上「且无 flaky 用例」——**地板零漂移 ≠ 健康**；
+- issue 正文新增独立一段，点明这类缺陷的特征与典型成因。
+
 ## [v0.1.23] — 2026-10-30
 
 ### fix(tools)：gen_versions 的干净守卫收窄到文件级——别人的在途改动不该卡死发版链
