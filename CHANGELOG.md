@@ -4,6 +4,58 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.25] — 2026-10-31
+
+### fix(tools)：真实 gh 的 EOF 报错格式没被识别成瞬时错误——读取层遇 EOF 直接打死整条链
+
+**现象**：2026-10-30 巡检链查 CI 状态时 `gh run view` 报：
+
+```
+failed to get run: Get "https://api.github.com/repos/oekit/matrix-tools/actions/runs/...?...": EOF
+```
+
+退出码 1 ⇒ 整个「Check both scans progress」判失败；但本地扫描部分**实际成功**、
+CI 部分随后单独查也是 success —— **一次 GitHub API 的间歇性 EOF 打死了整条链**。
+
+**根因一（读取层）**：`ghsafe.TRANSIENT_RE` 只匹配 `unexpected EOF`，而**真实 gh
+的报错格式是 `: EOF`（没有 "unexpected"）** ⇒ 命中不了 ⇒ **不重试、直接抛**。
+⇒ 正则改成「可选的 unexpected + EOF」，两种格式都判瞬时：
+
+```python
+TRANSIENT_RE = re.compile(r"(?:\bunexpected\s+)?\bEOF\b", re.IGNORECASE)
+```
+
+**根因二（close_issue 的判读层与投递层）**：三个判读（`issue_state` /
+`receipt_posted` / `pr_meta`）与投递路径**直接 `subprocess.run` 调 gh，不走
+ghsafe** ⇒ 即使格式被识别也**没人重试**。更隐蔽的是 `issue_state()` 失败时返回
+**空串** ⇒ 空串**同时**表示「未关闭」与「读不到」⇒ 读不到时会把**已关闭**的 issue
+错走 `gh issue close --comment` ⇒ GitHub 对已关闭 issue **静默不贴评论** ⇒
+**回执丢失**（只靠末尾复核兜住，失败得晚且难查）。
+
+⇒ 三个判读与投递路径都改走 `ghsafe.run_gh`（带瞬时重试），并把「读不到」与
+「事实为空」**拆开**：
+
+| 判读 | 读不到时 |
+|---|---|
+| `issue_state` | **明确报错**（绝不据此选投递路径） |
+| `receipt_posted` | **明确报错**（不知道发没发过 ⇒ 不敢重投，否则评论区堆重复回执） |
+| `pr_meta` | 保持「证据缺失 ⇒ 回执退化」（软失败，符合原设计） |
+| 投递路径 | EOF 自动重试（安全：首次其实成功只是响应丢了时，末尾复核会认出「回执已在」） |
+
+**变异验证**（自测新增用例 1c / 1d + 假 gh 的**定向** EOF 注入）：
+
+- **变异 A**：TRANSIENT_RE 退回只匹配 `unexpected EOF` ⇒ **用例 1c 红** ✅
+- **变异 B**：`issue_state` 退回「失败返回空串」⇒ **用例 1d 红**（读不到状态时
+  不得走 close 路径，否则已关闭 issue 的回执被静默丢掉）✅
+- **修复后**：13 个 matrix-tools 自测全绿 ✅
+
+额外核对 TRANSIENT_RE 精度：EOF / 502 ⇒ 重试；404 / 权限不足 / 资源不存在 ⇒
+立即失败。
+
+**踩坑记录**：假 gh 里 `grep -q "$TARGET"` 且 TARGET 以 `-` 开头（如 `--json state`）
+时，grep 会把它当**选项**而不是 pattern ⇒ 注入静默不生效 ⇒ 用例**假绿**
+⇒ 必须 `grep -q -e "$TARGET"`。
+
 ## [v0.1.24] — 2026-10-30
 
 ### fix(tools)：父仓地板变了，嵌套模块的 go.sum 必须跟着 tidy——否则 CI 必红而工具说「已对齐」
