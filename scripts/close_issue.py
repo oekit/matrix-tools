@@ -60,8 +60,30 @@ def tag_on_remote(repo: str, tag: str) -> bool:
     return remote_tag_exists(repo, tag)
 
 
+def gh_deliver(args: list[str]) -> subprocess.CompletedProcess:
+    """投递回执（发评论 / 关单）。
+
+    **走 ghsafe.run_gh ⇒ 瞬时错误（限速/5xx/超时/EOF）自动重试**
+    （2026-10-30 改：旧实现直接 subprocess.run，一次 EOF 就整条回执失败；
+    而 GitHub API 的 EOF 是**实测会发生的**瞬时故障）。
+
+    **重试是安全的**：若首次其实已成功、只是响应丢了，重试不会造成重复回执——
+    末尾的 `receipt_posted` 复核会认出「回执已在」；而 `gh issue close --comment`
+    对**已关闭**的 issue 本就静默不贴评论（那是既有行为，靠复核兜住）。
+
+    返回一个带 returncode/stdout/stderr 的对象，形状与 subprocess.run 一致
+    （调用方按 `r.returncode != 0` 判失败）。
+    """
+    try:
+        out, err = ghsafe.run_gh(args)
+    except ghsafe.GhCommandError as e:
+        return subprocess.CompletedProcess(args=args, returncode=e.returncode,
+                                          stdout=e.stdout, stderr=e.stderr)
+    return subprocess.CompletedProcess(args=args, returncode=0, stdout=out, stderr=err)
+
+
 def issue_state(repo: str, num: str) -> str:
-    """读 issue 当前状态（closed / open）；读不到返回空串。
+    """读 issue 当前状态（closed / open）。
 
     **归一化成小写**：真实 `gh issue view --json state --jq .state` 返回的是
     **大写**（CLOSED / OPEN）。大小写敏感的比较会让「已关闭 ⇒ 改走
@@ -70,11 +92,22 @@ def issue_state(repo: str, num: str) -> str:
     （打印 already closed、退出 0）⇒ 回执再次丢失（2026-10-21 实测：
     上一轮的修复只补了「回执没落地要判红」，没补「大小写」，
     于是判据抓到了丢失、投递路径却仍是坏的）。
+
+    **读不到 ⇒ 明确报错**（2026-10-30 改）：旧实现失败时返回空串，
+    而空串**同时**表示「未关闭」与「读不到」⇒ 读不到时会把
+    **已关闭**的 issue 错走 `gh issue close --comment` ⇒ GitHub 静默不贴
+    评论 ⇒ 回执丢失（只能靠末尾的复核兜住，失败得晚且难查）。
+    现在走 ghsafe.run_gh：**瞬时错误（限速/5xx/超时/EOF）内部重试**，
+    重试后仍读不到 ⇒ 抛错，绝不猜。
     """
-    r = subprocess.run(["gh", "issue", "view", num, "--repo", f"{ORG}/{repo}",
-                        "--json", "state", "--jq", ".state"],
-                       capture_output=True, text=True)
-    return r.stdout.strip().lower() if r.returncode == 0 else ""
+    try:
+        out, _err = ghsafe.run_gh(["issue", "view", num, "--repo", f"{ORG}/{repo}",
+                                    "--json", "state", "--jq", ".state"])
+    except ghsafe.GhCommandError as e:
+        raise SystemExit(
+            f"读 issue 状态失败（oekit/{repo}#{num}）：{(e.stderr or e.stdout).strip()[:300]}"
+            "——读不到 ≠ 未关闭，绝不据此选投递路径")
+    return out.strip().lower()
 
 
 def receipt_posted(repo: str, num: str, needles: list[str]) -> bool:
@@ -88,13 +121,20 @@ def receipt_posted(repo: str, num: str, needles: list[str]) -> bool:
     needle 取「本次回执独有的字符串」：发版模式取 tag，无发布模式取
     「无 SemVer 发布」标记（+ PR 号）。**不能**取「issue 上有任何评论」——
     那种判据在「评论发到了别的 issue」或「旧回执还在」时都会假绿。
+
+    **读不到 ⇒ 明确报错**（2026-10-30 改）：旧实现失败时返回 False（=「没发过」）
+    ⇒ 重投 ⇒ 评论区堆一串重复回执。而「读不到」的真实含义是**不知道发没发过**
+    ⇒ 不敢重投 ⇒ 报错让人重跑（幂等由下次成功读到时保证）。
     """
-    r = subprocess.run(["gh", "issue", "view", num, "--repo", f"{ORG}/{repo}",
-                        "--json", "comments", "--jq", "[.comments[].body] | join(\"\\n\")"],
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        return False
-    body = r.stdout
+    try:
+        out, _err = ghsafe.run_gh(["issue", "view", num, "--repo", f"{ORG}/{repo}",
+                                    "--json", "comments", "--jq",
+                                    "[.comments[].body] | join(\"\\n\")"])
+    except ghsafe.GhCommandError as e:
+        raise SystemExit(
+            f"读 issue 评论失败（oekit/{repo}#{num}）：{(e.stderr or e.stdout).strip()[:300]}"
+            "——读不到 ≠ 没发过，不能据此重投（会堆重复回执）")
+    body = out
     return all(n in body for n in needles)
 
 
@@ -103,24 +143,29 @@ def pr_meta(repo: str, pr: str) -> dict:
 
     取不到就返回空 dict（回执退化为只给 PR 链接）——**不得**因为取不到证据
     就让整条回执失败：回执的**投递**是硬要求，证据的**完整**是软要求。
+
+    **瞬时错误（限速/5xx/超时/EOF）由 ghsafe.run_gh 内部重试**；
+    重试后仍读不到 ⇒ 退化为「无证据」（软失败，符合本函数的既定语义）。
     """
     out: dict = {"number": pr, "url": f"https://github.com/{ORG}/{repo}/pull/{pr}"}
-    r = subprocess.run(["gh", "pr", "view", pr, "--repo", f"{ORG}/{repo}",
-                        "--json", "number,title,url,mergedAt,mergeCommit,state"],
-                       capture_output=True, text=True)
-    if r.returncode == 0:
+    try:
+        raw, _err = ghsafe.run_gh(["pr", "view", pr, "--repo", f"{ORG}/{repo}",
+                                    "--json", "number,title,url,mergedAt,mergeCommit,state"])
         try:
-            out.update(json.loads(r.stdout))
+            out.update(json.loads(raw))
         except json.JSONDecodeError:
             pass
-    c = subprocess.run(["gh", "pr", "checks", pr, "--repo", f"{ORG}/{repo}",
-                        "--json", "name,state,bucket"],
-                       capture_output=True, text=True)
-    if c.returncode == 0:
+    except ghsafe.GhCommandError:
+        pass  # 证据缺失 ⇒ 软失败（回执照发）
+    try:
+        raw, _err = ghsafe.run_gh(["pr", "checks", pr, "--repo", f"{ORG}/{repo}",
+                                    "--json", "name,state,bucket"])
         try:
-            out["checks"] = json.loads(c.stdout)
+            out["checks"] = json.loads(raw)
         except json.JSONDecodeError:
             pass
+    except ghsafe.GhCommandError:
+        pass  # 无 check / 读不到 ⇒ 软失败
     return out
 
 
@@ -277,18 +322,18 @@ def main() -> None:
     # ⇒ **--pr 指向未合入的 PR** 时同样**只发回执、绝不 close**（#119）：
     #    修复尚未落地 ⇒ 关单就是「问题从看板上消失了，而修复还没进来」。
     if is_pr or pending:
-        r = subprocess.run(["gh", "issue", "comment", num, "--repo", f"{ORG}/{repo}",
-                            "--body", body], capture_output=True, text=True)
+        r = gh_deliver(["issue", "comment", num, "--repo", f"{ORG}/{repo}",
+                        "--body", body])
         action = "回执（PR 不关闭）" if is_pr else "回执（修复未落地，不关单）"
     else:
         state = issue_state(repo, num)
         if state == "closed":
-            r = subprocess.run(["gh", "issue", "comment", num, "--repo", f"{ORG}/{repo}",
-                                "--body", body], capture_output=True, text=True)
+            r = gh_deliver(["issue", "comment", num, "--repo", f"{ORG}/{repo}",
+                            "--body", body])
             action = "回执"
         else:
-            r = subprocess.run(["gh", "issue", "close", num, "--repo", f"{ORG}/{repo}",
-                                "--comment", body], capture_output=True, text=True)
+            r = gh_deliver(["issue", "close", num, "--repo", f"{ORG}/{repo}",
+                            "--comment", body])
             action = "回执并关闭"
     if r.returncode != 0:
         raise SystemExit(f"关单失败：{(r.stderr or r.stdout).strip()[:300]}")
