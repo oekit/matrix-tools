@@ -75,7 +75,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 
 ## 脚本
 
-46 个脚本按**什么时候跑**分四组。新会话先看「日常」那组；「一次性」那组
+47 个脚本按**什么时候跑**分四组。新会话先看「日常」那组；「一次性」那组
 除非明确要做那件事，否则不要碰（其中两个会**整文件覆写**各仓文件）。
 
 ### 日常（会话内高频）
@@ -89,6 +89,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 | `scripts/prkit.py` | PR 落地共用件（`doc_wave`/`release_post`/`align_floors` 内部复用）：sync main → 分支 → 提交 → 开 PR → update-branch/auto 合并 |
 | `scripts/audit.py` | **全量审计**（module 行/残留引用/门面/AGENTS/CHANGELOG/安装行版本/矩阵表新鲜度/站点/嵌套地板/dependabot 目录）——发现漂移 exit 1 |
 | `scripts/dep_matrix.py` | **依赖版本矩阵**：`dep_matrix.py pkg` 看谁在用哪个版本（★=最新）；全矩阵视图——按需发版模型的决策面 |
+| `scripts/ledger_write.py` | **巡检台账写入器**（`.oekit-cron-state.json`）：`--new-run` 开新一轮 / `--issue repo#N [--pr N] [--tag vX.Y.Z] [--closed]` 记一条 / `--run-end` 收口。**事实一律从 GitHub 回读**（issue 状态、PR 是否已合并、tag 是否在远端）⇒ **与要记的内容不符就拒绝写入**（宁可缺一条，也不要假的）；`--run-end` 会把本轮每条事实**再回读一遍**⇒ 记录期间现实变了就报出漂移 |
 
 ### 发版链（顺序不可反）
 
@@ -130,7 +131,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 
 `align_floors_selftest.py` / `close_issue_selftest.py` / `dependabot_dirs_selftest.py` /
 `desc_count_selftest.py` / `gen_matrix_go_selftest.py` / `ghsafe_selftest.py` /
-`maintenance_check_selftest.py` / `release_train_selftest.py` /
+`ledger_write_selftest.py` / `maintenance_check_selftest.py` / `release_train_selftest.py` /
 `remote_reads_selftest.py` / `tag_cache_selftest.py` /
 `verify_release_units_selftest.py` / `verify_version_line_selftest.py`
 
