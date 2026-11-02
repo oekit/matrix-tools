@@ -219,6 +219,18 @@ def required_tag_form(module_path: str, version: str) -> tuple[str, str]:
     return target_repo, "/".join(subs) + "/" + version
 
 
+def remote_read_failed(exc: Exception) -> bool:
+    """★ **判定点**：远端 tag 读不到 ⇒ 该不该**判红**（fail closed）。
+
+    读不到 ≠ 已发布（matrix-tools#85 口径）⇒ 默认恒判红。
+
+    ⚠️ 这是**可注入的判定点**：`scripts/release_train_requires_selftest.py --mutate`
+    会临时替换它，验证「fail open」这个最要命的失效模式**确实**被用例 6/13 抓到
+    ⇒ 避免自测只「跑过」却从未验证过它能转红。
+    """
+    return True
+
+
 def check_requires_resolvable(repo: str, name: str, module_dir, planned_tags, failures,
                                tag_exists=None) -> None:
     """被 tag 的模块，其 go.mod 里每条 `github.com/oekit/*` require 必须**下游可解析**。
@@ -263,8 +275,9 @@ def check_requires_resolvable(repo: str, name: str, module_dir, planned_tags, fa
         try:
             ok = tag_exists(target_repo, tag)
         except RemoteReadError as e:
-            failures.append(f"{name}: 远端 tag 读不到（{e}）⇒ 无法判定 "
-                            f"{target_repo}@{tag} 是否已发布 ⇒ 判不了，不许放行")
+            if remote_read_failed(e):
+                failures.append(f"{name}: 远端 tag 读不到（{e}）⇒ 无法判定 "
+                                f"{target_repo}@{tag} 是否已发布 ⇒ 判不了，不许放行")
             continue
         if not ok:
             failures.append(
@@ -274,6 +287,63 @@ def check_requires_resolvable(repo: str, name: str, module_dir, planned_tags, fa
                 f"Go 忽略依赖里的 replace）⇒ 请先发 {target_repo} {ver}，"
                 f"或把它一起放进本次 train")
 
+
+def gate_verdict(unresolved: list[str]) -> bool:
+    """★ **判定点**：「本次 train 只有嵌套模块」时**是否阻断**。
+
+    ⇒ `unresolved` 非空（确有未发布 / 判不了的 require）⇒ 阻断；
+      全空（每条 require 都已发布）⇒ 放行。
+
+    ⚠️ 这是**可注入的判定点**：`scripts/release_train_requires_selftest.py --mutate`
+    会临时替换它，验证「一刀切守卫」（恒阻断）与「恒放行」两个失效方向
+    **确实**分别被用例 11 / 12 / 13 抓到 ⇒ 避免自测只「跑过」却从未验证过它能转红。
+    """
+    return bool(unresolved)
+
+
+def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
+    """「本次 train 只有嵌套模块、没有父仓 main=」⇒ **条件守卫**。
+
+    ⇒ 返回 (是否放行, 提示/报错文本)。
+
+    ★ **判据不是「有没有 main=」，而是 matrix-tools#148 那条**：
+      「每条 oekit require 的版本，要么**已在远端发布**，要么**本次 train 一起发**」
+      —— 它由 `check_requires_resolvable` 实现 ⇒ 本函数**复用它**，不另写一套更粗的。
+
+    ⚠️ **为什么不能一刀切**（实测 2026-11-03）：
+      一刀切守卫（「只有嵌套 ⇒ 拒绝」）会挡死「把新地板带进**已发布产物**」的唯一修法
+      —— 8 个待发嵌套模块里 **7 个的 require 全部已发布**（只发嵌套**安全**），
+      真正需要同 train 的只有 `timertask/redis`（require `timertask v0.2.7` 未发布）。
+
+    ⚠️ **远端读不到 ⇒ fail closed**（读不到 ≠ 已发布，#85 口径）⇒ 判红。
+    """
+    if any(name == "main" for name, _d, _t in specs):
+        return True, ""
+    only = "、".join(f"{name}={_t.split('/', 1)[1]}" for name, _d, _t in specs)
+    planned = {(repo, tag) for _n, _d, tag in specs}
+    unresolved: list[str] = []
+    for name, d, tag in specs:
+        check_requires_resolvable(repo, name, d, planned, unresolved, tag_exists=tag_exists)
+    if gate_verdict(unresolved):
+        return False, (
+            f"{repo}: 本次 train 只有嵌套模块（{only}），且有**未发布的 require** ⇒ 不许发。\n"
+            f"  ⇒ 判据（matrix-tools#148）：每条 oekit require 要么**已发布**，"
+            f"要么**本次 train 一起发**。\n"
+            f"  ⇒ 未满足的 require：\n"
+            + "".join(f"      - {u}\n" for u in unresolved)
+            + f"  ⇒ 修法：把上面列出的仓一起放进本次 train（"
+            f"例：python3 scripts/release_train.py {repo} main=vX.Y.Z {only} "
+            f"--apply --changelog \"...\"）\n"
+            f"  ⇒ 若这些 require 其实**已发布**，那是远端读 tag 失败 ⇒ "
+            f"**fail closed**（读不到 ≠ 已发布）⇒ 查网络/权限后重试。"
+        )
+    return True, (
+        f"[note] 本次 train 只有嵌套模块（{only}），没有父模块 main=。\n"
+        f"       ✔ 已核：这些模块的每条 oekit require **都已发布** ⇒ 只发嵌套**安全**"
+        f"（判据同 matrix-tools#148）。\n"
+        f"       ⚠️ 两个副作用（已就地修掉，不会漏出去）：版本节文案里的父模块版本号"
+        f"为空 ⇒ 不再写成「跟随 {repo}  发版」；分支名不再退化成 `chore/rel-`。"
+    )
 
 # ---------- --changelog：版本节自动生成 + PR + 等合并 ----------
 
@@ -536,9 +606,17 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
         return [str(p.relative_to(root)) for p in sorted(changed)]
 
     from prkit import land_pr, merge_pr, open_pr
-    url = land_pr(root, repo, f"chore/rel-{main_tag}",
-                  f"chore: CHANGELOG 补 {main_tag}（release_train --changelog）",
-                  f"chore: CHANGELOG 补 {main_tag}",
+    # ★ 分支名**不能退化成 `chore/rel-`**（没有版本号 ⇒ 分支名无法区分批次）。
+    #   只发嵌套模块时 main_tag 为空 ⇒ 用**本次 train 的 tag** 兜底（多模块则取全部）。
+    if main_tag:
+        rel_slug = main_tag
+        rel_title_tag = main_tag
+    else:
+        rel_slug = "+".join(t for _n, _d, t in specs)
+        rel_title_tag = rel_slug
+    url = land_pr(root, repo, f"chore/rel-{rel_slug}",
+                  f"chore: CHANGELOG 补 {rel_title_tag}（release_train --changelog）",
+                  f"chore: CHANGELOG 补 {rel_title_tag}",
                   "release_train 自动生成（版本节置顶，过 changelog_check 预校验）。",
                   edit=edit, auto_merge=True)
     print(f"[changelog] PR: {url or '无变更'}")
@@ -546,7 +624,7 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
         return
     m = re.search(r"/pull/(\d+)", url)
     if m:
-        pr = open_pr(repo, f"chore/rel-{main_tag}")
+        pr = open_pr(repo, f"chore/rel-{rel_slug}")
         if pr:  # 尚未自动合并则等待（auto-merge 等 CI）
             wait_pr_merged(repo, int(m.group(1)))
     sh(["git", "pull", "--ff-only", "origin", "main"], root)
@@ -609,26 +687,29 @@ def main():
                 sys.exit(2)
             specs.append((name, sub, f"{name}/{ver}"))
 
-    # ★ 只发嵌套模块（没有 main=）⇒ 显式拒绝并给出正确用法。
-    #   ⚠️ 位置要紧：**在 preflight_gate 之前** —— 用法错误应当**先**于工作区检查报出，
+    # ★ 只发嵌套模块（没有 main=）⇒ **条件守卫**：只在**确有未发布 require** 时拒绝。
+    #
+    #   ⚠️ **位置要紧**：在 preflight_gate 之前 —— 用法错误应当**先**于工作区检查报出，
     #   否则用户看到的是「须在 main 上（当前 ）」这类与真正问题无关的报错。
-    #   原因（实测）：main_tag 为空会一路漏下去 ⇒
-    #     ① 版本节文案写成「跟随 {repo}  发版」（**双空格**，父模块版本号是空的）；
-    #     ② 自动生成的分支名变成 `chore/rel-`（**没有版本号**）⇒ 分支名无法区分批次；
-    #     ③ 嵌套模块**脱离父仓单独发版** ⇒ 下游解析失败（matrix-tools#148：
-    #        父仓版本没发布就发嵌套模块，消费方直接解析失败）。
-    #   ⇒ 这不是「不支持的用法」，是**必须连父仓一起发**的发版 ⇒ 直接讲清楚。
-    if not any(name == "main" for name, _d, _t in specs):
-        only = "、".join(f"{name}={tag.split('/', 1)[1]}" for name, _d, tag in specs)
-        raise SystemExit(
-            f"{repo}: 本次 train 只有嵌套模块（{only}），没有父模块 main=。\n"
-            f"  ⇒ 嵌套模块**必须与父仓同 train**：父仓版本没发布，下游解析会失败"
-            f"（matrix-tools#148）。\n"
-            f"  ⇒ 请把父仓一并给出，例如：\n"
-            f"       python3 scripts/release_train.py {repo} main=vX.Y.Z {only} "
-            f"--apply --changelog \"...\"\n"
-            f"  ⇒ 若父仓本次无需发版（地板已就位），**不要**单独发嵌套模块。"
-        )
+    #
+    #   ★ **为什么不能一刀切**（实测 2026-11-03）：
+    #   #195 的旧实现是**无条件**拒绝（「本次 train 只有嵌套模块 ⇒ 拒绝」），并写
+    #   「若父仓本次无需发版（地板已就位），**不要**单独发嵌套模块」——
+    #   **这句是反的**：地板已就位恰恰是「可以单独发嵌套模块」的**前提**
+    #   （要修的正是「仓库树已抬地板、但**已发布产物**还带旧地板」那批）。
+    #
+    #   ⇒ **真判据不是「有没有 main=」，而是 #148 那条**：
+    #     「每条 oekit require 的版本，要么**已在远端发布**，要么**本次 train 一起发**」——
+    #     它**已在同一脚本里实现**（`check_requires_resolvable`）⇒ 守卫应当**复用它**，
+    #     而不是另写一套更粗的（一刀切 = 误伤安全用例）。
+    #   ⇒ **实测**：8 个待发嵌套模块里 **7 个的 require 全部已发布** ⇒ 只发嵌套**安全**；
+    #     真正需要同 train 的只有 `timertask/redis`（require `timertask v0.2.7` 未发布）。
+    #     一刀切守卫会把这 7 个安全用例全挡死 ⇒ **「把新地板带进已发布产物」的唯一修法被堵死**。
+    ok_nested, nested_msg = nested_only_gate(repo, specs)
+    if not ok_nested:
+        raise SystemExit(nested_msg)          # 报错 ⇒ 只走这一条出口
+    if nested_msg:
+        print(nested_msg)                     # 放行 ⇒ 打提示
 
     preflight_gate(root, apply)
 
