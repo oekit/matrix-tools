@@ -11,12 +11,19 @@
    ⇒ 重渲染后正文含「**本条修复**」且指向**正确的那条条目**；
    ⇒ **其余部分原样保留**（Release 行 / 合入证据行 / CI 行）；
    ⇒ **只编辑原评论**：不发新评论、不关单（PATCH 恰好 1 次）；
-2. 版本节**只在叙述文字里**提到本 issue
+2. 版本节**只在叙述文字里**提到本 issue ⇒ **门禁拦下**（fail closed，#175）：
+   **不改**（PATCH 恰好 0 次）、原评论**逐字保留**、明确报「未改动」；
+2b. 同一情形 + `--allow-unlocated` ⇒ 允许写 warn 形态
    ⇒ 明说「未绑定到具体条目」，且**不做**「不含本条修复」这种事实断言（#158）；
 3. 已是 #153 形态 ⇒ **幂等跳过**（不改写、不重复 PATCH）；
 4. 没有回执 ⇒ 明确失败（不许「没找到就当没事」）；
 5. 一条 issue 上有多条回执 ⇒ **要求 --tag 消歧**（不许瞎挑一条改）；
-6. CLI 端到端（子进程）跑通（证明 main() 这条路也是通的）。
+6. CLI 端到端（子进程）跑通（证明 main() 这条路也是通的）；
+…
+11. 门禁**零误伤**：能定位 ⇒ 照常改（PATCH 恰好 1 次）；
+12. 版本节叙述里**含「**本条修复**」四字**（不在行首）⇒ 仍必须拦下
+    （**子串**判据在这里会假绿放行 ⇒ 判据必须行锚定 + 只看变更内容段第一行）；
+13. CLI 端到端：定位不到 ⇒ 退出码非 0 且**零 PATCH**；加 `--allow-unlocated` ⇒ 放行。
 
 变异自证（每条必须**精确转红**，否则这份断言没有牙齿）：
 
@@ -24,13 +31,17 @@
 - M2「渲染退回 pre-#153 形态」（整段版本节）⇒ 用例1 转红
 - M3「幂等检查失效」⇒ 用例3 转红
 - M4「尾部（Release 行 / 合入证据）被丢掉」⇒ 用例1 的「其余部分保留」断言转红
+- M8「门禁失效（定位不到也照写）」⇒ 用例2 转红
+- M9「门禁改用**子串**判据」⇒ 用例12 转红
 
 用法：python3 scripts/rerender_receipt_selftest.py
 """
 from __future__ import annotations
 
+import inspect
 import json
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -120,6 +131,17 @@ CHANGELOG_NARRATIVE = """## [v0.19.0] — 2026-10-21
 ### 修好了某件事
 
 这节正文提到了 #45，但它不是 bullet ⇒ 定位器绑不到具体条目。
+
+- 另一条修复
+"""
+
+# 版本节：#45 只在**叙述文字**里出现，且叙述里**含「**本条修复**」四字**（不在行首）
+# ⇒ 门禁若用**子串**判据会**假绿放行**（#175：判据必须行锚定）
+CHANGELOG_INLINE_MARK = """## [v0.19.0] — 2026-10-21
+
+### 修好了某件事
+
+这节正文提到了 #45，但它不是 bullet（旧文案里出现过 **本条修复** 四字）⇒ 定位器绑不到条目。
 
 - 另一条修复
 """
@@ -215,16 +237,28 @@ def make_env(tmp: Path, suffix: str, comments: list[dict], release_body: str,
 
 
 def call(env: dict, repo: str, num: str, tag: str | None = None,
-         apply: bool = True, force: bool = False) -> tuple[bool, str]:
-    """在假环境里跑一次重渲染（进程内 ⇒ 变异可打桩）。"""
+         apply: bool = True, force: bool = False,
+         allow_unlocated: bool = False) -> tuple[bool, str]:
+    """在假环境里跑一次重渲染（进程内 ⇒ 变异可打桩）。
+
+    `allow_unlocated` 对应 CLI 的 `--allow-unlocated` 逃生口（#175）。
+    ⚠️ 用 `inspect` 探测形参是否存在：被测实现**还没修**时（还没有逃生口）
+    ⇒ 明确报「缺逃生口」，而不是让整个自测抛异常崩掉 ⇒ RED 要**精确**。
+    """
     saved_env = dict(os.environ)
     saved_base = matrix.DEFAULT_BASE
+    kwargs: dict = dict(
+        apply=apply, force=force,
+        backup_dir=Path(env["MATRIX_BASE"]).parent / f"backup-{repo}")
+    params = inspect.signature(rerender_receipt.rerender).parameters
+    if "allow_unlocated" in params:
+        kwargs["allow_unlocated"] = allow_unlocated
+    elif allow_unlocated:
+        return False, "被测实现还没有 --allow-unlocated 逃生口（#175 未实现）"
     try:
         os.environ.update(env)
         matrix.DEFAULT_BASE = env["MATRIX_BASE"]
-        return rerender_receipt.rerender(
-            repo, num, tag, apply=apply, force=force,
-            backup_dir=Path(env["MATRIX_BASE"]).parent / f"backup-{repo}")
+        return rerender_receipt.rerender(repo, num, tag, **kwargs)
     finally:
         os.environ.clear()
         os.environ.update(saved_env)
@@ -272,20 +306,48 @@ def run_all(tmp: Path, rid: str) -> list[str]:
         failures.append("用例1 重渲染**只该编辑原评论**，不该发新评论/关单："
                         f"{orec.read_text(encoding='utf-8')[:200]}")
 
-    # ── 用例 2：版本节只在叙述文字里提到 ⇒ 明说「未绑定」，不做事实断言 ──
+    # ── 用例 2：版本节只在叙述文字里提到 ⇒ **门禁拦下**（fail closed，#175）──
+    # 定位不到本条却照改**已发布**的评论 ⇒ ① 把本来能对上的回执改成更差形态
+    # （本地 checkout 陈旧时）；② 批量场景必然双重写（先写 warn、回头再写一遍）。
     env, cfile, prec, _ = make_env(
         tmp, f"{rid}-c2",
         [{"id": 901, "body": old_receipt(), "html_url": "https://example.invalid/c/901"}],
         rel_body, CHANGELOG_NARRATIVE)
+    before2 = patched_body(cfile, 901)
+    # 预览先跑（预览不改任何东西）⇒ 后面 apply 才不会撞上「幂等跳过」路径
+    ok2p, msg2p = call(env, "pkg", "45", apply=False)
+    if not ok2p:
+        failures.append(f"用例2 预览失败：{msg2p[:200]}")
+    if "门禁" not in msg2p:
+        failures.append(f"用例2 预览必须提示「门禁会拦下」（不许静默拦住），实得：{msg2p[:200]}")
+    if prec.exists() and prec.read_text(encoding="utf-8").strip():
+        failures.append("用例2 预览不该有任何 PATCH")
     ok, msg = call(env, "pkg", "45")
+    if ok:
+        failures.append("用例2 定位不到条目时必须被门禁拦下（fail closed，#175），"
+                        f"实得成功：{msg[:160]}")
+    if "未改动" not in msg:
+        failures.append(f"用例2 期望报「未改动」，实得：{msg[:200]}")
+    patches2 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches2) != 0:
+        failures.append(f"用例2 门禁拦下时 PATCH 应恰好 0 次，实得 {len(patches2)} 次")
+    if patched_body(cfile, 901) != before2:
+        failures.append("用例2 门禁拦下时**原评论必须逐字保留**（不许改成 warn 形态）")
+
+    # ── 用例 2b：同一情形 + `--allow-unlocated` ⇒ 允许写 warn 形态 ──
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c2b",
+        [{"id": 911, "body": old_receipt(), "html_url": "https://example.invalid/c/911"}],
+        rel_body, CHANGELOG_NARRATIVE)
+    ok, msg = call(env, "pkg", "45", allow_unlocated=True)
     if not ok:
-        failures.append(f"用例2 重渲染失败：{msg[:200]}")
-    body = patched_body(cfile, 901)
-    if "未绑定到具体条目" not in body:
-        failures.append("用例2 定位不到条目时必须明说「未绑定到具体条目」"
-                        f"（读者需要知道这版讲的是哪些修复）：{body[:200]}")
-    if "不含本条修复" in body:
-        failures.append("用例2 回执写了「不含本条修复」——那是关于版本内容的"
+        failures.append(f"用例2b --allow-unlocated 应放行，实得失败：{msg[:200]}")
+    body2b = patched_body(cfile, 911)
+    if "未绑定到具体条目" not in body2b:
+        failures.append("用例2b 定位不到条目时必须明说「未绑定到具体条目」"
+                        f"（读者需要知道这版讲的是哪些修复）：{body2b[:200]}")
+    if "不含本条修复" in body2b:
+        failures.append("用例2b 回执写了「不含本条修复」——那是关于版本内容的"
                         "**事实断言**，与事实可能相反（#158）")
 
     # ── 用例 3：已带**动作痕迹标记** ⇒ 幂等跳过（判据与「能否定位」无关）──
@@ -390,11 +452,13 @@ def run_all(tmp: Path, rid: str) -> list[str]:
     # ── 用例 8：warn 形态（定位不到）⇒ 重渲染后必须**幂等**（第二次跳过，不再 PATCH）──
     # 旧判据是「正文含 `**本条修复**`」⇒ warn 形态产物**不含**它 ⇒ 重跑不跳过
     # ⇒ 同一评论被**重复 PATCH**（内容相同、但重复写；批量场景下还会连带覆盖备份）。
+    # ⚠️ 默认门禁下 warn 形态**压根不会被写** ⇒ 这条用例要显式加 `--allow-unlocated`
+    #    才能测到「warn 形态写完之后幂等」这件事。
     env, cfile, prec, _ = make_env(
         tmp, f"{rid}-c8",
         [{"id": 908, "body": old_receipt(), "html_url": "https://example.invalid/c/908"}],
         rel_body, CHANGELOG_NARRATIVE)
-    ok, msg = call(env, "pkg", "45")
+    ok, msg = call(env, "pkg", "45", allow_unlocated=True)
     if not ok:
         failures.append(f"用例8 第一次重渲染失败：{msg[:200]}")
     body8 = patched_body(cfile, 908)
@@ -464,6 +528,69 @@ def run_all(tmp: Path, rid: str) -> list[str]:
     ok, msg = call(env, "pkg", "45")
     if "跳过" not in msg:
         failures.append(f"用例10 带标记的回执再次跑必须幂等跳过，实得：{msg[:160]}")
+
+    # ── 用例 11：门禁**零误伤**——能定位 ⇒ 照常改（不许把该改的也拦住）──
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c11",
+        [{"id": 913, "body": old_receipt(), "html_url": "https://example.invalid/c/913"}],
+        rel_body, CHANGELOG_BOUND)
+    ok, msg = call(env, "pkg", "45")
+    if not ok:
+        failures.append(f"用例11 能定位到本条时不该被门禁拦下，实得失败：{msg[:200]}")
+    patches11 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches11) != 1:
+        failures.append(f"用例11 能定位时 PATCH 应恰好 1 次，实得 {len(patches11)} 次")
+    body11 = patched_body(cfile, 913)
+    if not re.search(r"(?m)^\*\*本条修复\*\*", body11):
+        failures.append("用例11 能定位时产物应含**独立一行**的「**本条修复**」："
+                        f"{body11[:200]}")
+    if "#45：回执重渲染" not in body11:
+        failures.append("用例11 产物应指向本 issue 的那条条目")
+
+    # ── 用例 12：版本节叙述里**含「**本条修复**」四字**（不在行首）⇒ 仍必须拦下 ──
+    # ⚠️ **子串**判据（`"**本条修复**" in body`）在这里会**假绿放行** ⇒
+    #    判据必须**行锚定**，且只看**变更内容段的第一行**（warn 形态会把整段版本节
+    #    附在后面 ⇒ 版本节里出现这四个字不能算「定位到了」）。
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c12",
+        [{"id": 914, "body": old_receipt(), "html_url": "https://example.invalid/c/914"}],
+        rel_body, CHANGELOG_INLINE_MARK)
+    before12 = patched_body(cfile, 914)
+    ok, msg = call(env, "pkg", "45")
+    if ok:
+        failures.append("用例12 定位不到条目时必须被门禁拦下（版本节叙述里的"
+                        f"「**本条修复**」四字**不算**定位到），实得成功：{msg[:160]}")
+    patches12 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches12) != 0:
+        failures.append(f"用例12 门禁拦下时 PATCH 应恰好 0 次，实得 {len(patches12)} 次")
+    if patched_body(cfile, 914) != before12:
+        failures.append("用例12 门禁拦下时**原评论必须逐字保留**")
+
+    # ── 用例 13：CLI 端到端——定位不到 ⇒ 退出码非 0 且零 PATCH；加 --allow-unlocated ⇒ 放行 ──
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c13",
+        [{"id": 915, "body": old_receipt(), "html_url": "https://example.invalid/c/915"}],
+        rel_body, CHANGELOG_NARRATIVE)
+    p = subprocess.run(
+        [sys.executable, str(HERE / "rerender_receipt.py"), "pkg#45", "--apply"],
+        capture_output=True, text=True, env=env)
+    if p.returncode == 0:
+        failures.append("用例13 CLI 定位不到时必须**失败退出**（门禁拦下），实得退出码 0："
+                        f"{(p.stdout or '')[:200]}")
+    patches13 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches13) != 0:
+        failures.append(f"用例13 CLI 门禁拦下时 PATCH 应恰好 0 次，实得 {len(patches13)} 次")
+    p2 = subprocess.run(
+        [sys.executable, str(HERE / "rerender_receipt.py"), "pkg#45", "--apply",
+         "--allow-unlocated"],
+        capture_output=True, text=True, env=env)
+    if p2.returncode != 0:
+        failures.append("用例13 CLI --allow-unlocated 应放行，实得退出码 "
+                        f"{p2.returncode}：{(p2.stdout or '') + (p2.stderr or '')[:200]}")
+    patches13b = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches13b) != 1:
+        failures.append(f"用例13 CLI --allow-unlocated 后 PATCH 应恰好 1 次，"
+                        f"实得 {len(patches13b)}")
 
     return failures
 
@@ -536,6 +663,16 @@ def _mutate_drop_tail():
     rerender_receipt.rebuild_body = rebuild
 
 
+def _mutate_gate_disabled():
+    """M8：门禁**完全失效**（定位不到本条也照改已发布的评论）。"""
+    rerender_receipt.locates_entry = lambda body, repo, tag: True
+
+
+def _mutate_gate_substring():
+    """M9：门禁改用**子串**判据 ⇒ 版本节叙述里的「本条修复」四字会假绿放行。"""
+    rerender_receipt.locates_entry = lambda body, repo, tag: ("**本条修复**" in body)
+
+
 MUTATIONS = [
     ("变更内容段原样保留", _mutate_keep_change_section),
     ("渲染退回 pre-#153 形态", _mutate_pre153_rendering),
@@ -544,6 +681,8 @@ MUTATIONS = [
     ("幂等判据退回子串匹配", _mutate_substring_criterion),
     ("渲染产物不写动作痕迹标记", _mutate_no_marker),
     ("动作痕迹标记重复写入", _mutate_marker_duplicated),
+    ("门禁完全失效", _mutate_gate_disabled),
+    ("门禁改用子串判据", _mutate_gate_substring),
 ]
 
 
@@ -560,7 +699,8 @@ def main() -> None:
 
         saved = (rerender_receipt.rebuild_body, rerender_receipt.build_change_content,
                  rerender_receipt.split_receipt,
-                 getattr(rerender_receipt, "already_rendered", None))
+                 getattr(rerender_receipt, "already_rendered", None),
+                 getattr(rerender_receipt, "locates_entry", None))
         for i, (name, mutate) in enumerate(MUTATIONS):
             try:
                 mutate()
@@ -573,6 +713,11 @@ def main() -> None:
                 elif hasattr(rerender_receipt, "already_rendered"):
                     # 被测实现里本来就没这个函数（还没修）⇒ 把变异留下的残渣抹掉
                     delattr(rerender_receipt, "already_rendered")
+                if saved[4] is not None:
+                    rerender_receipt.locates_entry = saved[4]
+                elif hasattr(rerender_receipt, "locates_entry"):
+                    # 同上：门禁函数还没实现时，抹掉变异留下的残渣
+                    delattr(rerender_receipt, "locates_entry")
             if not fs:
                 print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
                 raise SystemExit(1)

@@ -14,13 +14,42 @@
 用法
 ----
   python3 scripts/rerender_receipt.py <repo>#<N> [...] [--tag vX.Y.Z]
-                                      [--apply] [--force] [--backup-dir DIR]
+                                      [--apply] [--force] [--allow-unlocated]
+                                      [--backup-dir DIR]
 
 - 默认**只预览**（不动任何东西）；要真改加 `--apply`
   （改的是**已发布**的评论 ⇒ 先看清预览再动手）。
 - `--tag`：一条 issue 上可能有多条回执 ⇒ 用它指明要重渲染哪一条。
 - `--force`：已重渲染过（含动作痕迹标记）也重渲。
+- `--allow-unlocated`：**逃生口**——定位不到本条时也允许写「无法定位」形态
+  （默认**禁止**，见下节）。
 - 可一次给多个 `<repo>#<N>`（批量重渲染）。
+
+fail closed 门禁（#175）
+-----------------------
+**定位不到本条 ⇒ 不改**（保持原评论），并明确报「未改动」。
+
+为什么：定位不到时写进去的是 warn 形态（「⚠️ 无法定位到本条修复」+ 整段版本节），
+它相对 pre-#153 原文多了信息，但——
+
+- ① 可能把**本来能对上的回执改成更差的形态**：上游已写回版本节、只是**本地
+  checkout 陈旧**（渲染读本地工作树、不是 tag 快照 ⇒ 忘了 `git pull --ff-only`
+  就会读到改前的节）⇒ 定位器在陈旧的节里找不到 ⇒ 写出「无法判定」；
+- ② **批量作业里必然双重写**：写回前的回执先写一次 warn、回头写回版本节后
+  **再重写**一遍 ⇒ 同一评论被改两次。
+
+⇒ 门禁**默认开**，定位不到就**不改**；确实要写 warn 形态时显式加
+`--allow-unlocated`（明确要求 ⇒ 责任在调用方）。
+
+判据 = **变更内容段的第一行**形如 `**本条修复**（…）：`
+- **行锚定**（不是子串）：warn 文案与版本节叙述里都可能出现「本条修复」四字
+  ⇒ 子串判据会**假绿放行**（该拦的没拦）；
+- **只看第一行**：warn 形态的变更内容段后面会附**整段版本节** ⇒ 版本节里某行
+  以 `**本条修复**` 开头时，「有没有这一行」会假绿；
+- **只看变更内容段**：头部/尾部（Release 行、合入证据行）不参与判断。
+
+⚠️ 本门禁约束的是**改写已发布评论**（本工具的 apply 路径）；**新发回执**
+（`close_issue.py` 的投递路径）仍然只提示不阻断（#158）——两者不是一回事。
 
 为什么默认只预览
 ----------------
@@ -69,6 +98,16 @@ CHANGE_HEADING = "## 变更内容"
 # 「定位得到」与「定位不到」两个分支**都幂等**（#170）。
 RERENDER_MARK = "<!-- rerendered-by matrix-tools -->"
 MARK_LINE_RE = re.compile(r"(?m)^[ \t]*<!--\s*rerendered-by matrix-tools\s*-->[ \t]*$")
+
+# **门禁判据**（fail closed，#175）：产物是否**绑定到了本条**。
+#
+# 判据 = **变更内容段的第一行**形如 `**本条修复**（…）：`
+# - **行锚定**（不是子串 `in`）：warn 文案（「无法据此定位到本条修复」）与版本节
+#   叙述里都可能出现「本条修复」四字 ⇒ 子串判据会**假绿放行**（该拦的没拦）；
+# - **只看第一行**：warn 形态的变更内容段后面会附**整段版本节** ⇒ 版本节里某行
+#   以 `**本条修复**` 开头时，「有没有这一行」会假绿；
+# - **只看变更内容段**：头部/尾部（Release 行、合入证据行）不参与判断。
+LOCATED_HEAD_RE = re.compile(r"^\*\*本条修复\*\*")
 
 
 def already_rendered(body: str) -> bool:
@@ -152,6 +191,30 @@ def rebuild_body(body: str, sec: str | None, repo: str, num: str, tag: str,
     return out + "\n\n" + RERENDER_MARK + "\n"
 
 
+def change_segment(body: str, repo: str, tag: str) -> str:
+    """回执正文里的「变更内容」段正文（去掉 `## 变更内容` 标题行）。
+
+    只取这一段 ⇒ 头部（首行 / 附注）与尾部（Release 行 / 合入证据 / CI 行）
+    **不参与**门禁判断。
+    """
+    _head, mid, _tail = split_receipt(body, repo, tag)
+    lines = mid.split("\n")
+    if lines and lines[0].strip() == CHANGE_HEADING:
+        lines = lines[1:]
+    return "\n".join(lines).strip("\n")
+
+
+def locates_entry(body: str, repo: str, tag: str) -> bool:
+    """这条（重渲染后的）回执**是否绑定到了本条**？
+
+    判据 = **变更内容段的第一行**形如 `**本条修复**（在 `vX.Y.Z` 的版本节里定位到）：`
+    ⇒ 行锚定（不是子串）+ 只看第一行 + 只看变更内容段（三条理由见模块说明）。
+    """
+    content = change_segment(body, repo, tag)
+    first = next((l for l in content.splitlines() if l.strip()), "")
+    return bool(LOCATED_HEAD_RE.match(first.strip()))
+
+
 def list_comments(repo: str, num: str) -> list[dict]:
     """读该 issue 的全部评论。
 
@@ -191,7 +254,8 @@ def backup_body(backup_dir: Path, repo: str, num: str, cid: int, body: str) -> P
 
 
 def rerender(repo: str, num: str, tag: str | None = None, *, apply: bool = False,
-             force: bool = False, backup_dir: Path | None = None) -> tuple[bool, str]:
+             force: bool = False, backup_dir: Path | None = None,
+             allow_unlocated: bool = False) -> tuple[bool, str]:
     """重渲染一条历史回执。返回 (成功?, 给人看的说明)。"""
     comments = list_comments(repo, num)
     receipts = [(c, receipt_tag(c.get("body") or "")) for c in comments]
@@ -220,9 +284,24 @@ def rerender(repo: str, num: str, tag: str | None = None, *, apply: bool = False
     evidence = release_mentions_issue(repo, rtag, num)
     new_body = rebuild_body(body, sec, repo, num, rtag, evidence)
 
+    located = locates_entry(new_body, repo, rtag)
+
     if not apply:
-        return True, (f"{repo}#{num}: 预览（未改动）——{rtag} 的回执将重渲染为：\n"
-                      f"{new_body}")
+        msg = (f"{repo}#{num}: 预览（未改动）——{rtag} 的回执将重渲染为：\n"
+               f"{new_body}")
+        if not located:
+            msg += ("\n⚠️ 定位不到本条（版本节里绑不到本 issue 的条目）⇒ "
+                    "--apply 会被**门禁拦下**（fail closed，#175）；"
+                    "确实要写「无法定位」形态请加 --allow-unlocated。")
+        return True, msg
+
+    # ── fail closed 门禁（#175）：定位不到本条 ⇒ **不改**，保持原评论 ──
+    # 返回 ok=False（未达目标状态 ⇒ 批量作业必须看得见，不静默跳过）。
+    if not located and not allow_unlocated:
+        return False, (f"{repo}#{num}: 定位不到本条（{rtag} 的版本节里绑不到 #{num} 的条目）"
+                       f" ⇒ **未改动**（fail closed，#175）。"
+                       f"先写回版本节（把本条号写进该版的 bullet 首行）再重渲；"
+                       f"确实要写「无法定位」形态请加 --allow-unlocated。")
 
     bdir = backup_dir or (Path(tempfile.gettempdir()) / "rerender-backup")
     bpath = backup_body(bdir, repo, num, cid, body)
@@ -243,6 +322,7 @@ def main() -> None:
     args = sys.argv[1:]
     apply = "--apply" in args
     force = "--force" in args
+    allow_unlocated = "--allow-unlocated" in args
     tag = args[args.index("--tag") + 1] if "--tag" in args and args.index("--tag") + 1 < len(args) else None
     backup_dir: Path | None = None
     if "--backup-dir" in args and args.index("--backup-dir") + 1 < len(args):
@@ -261,7 +341,7 @@ def main() -> None:
             failed += 1
             continue
         ok, msg = rerender(m.group(1), m.group(2), tag, apply=apply, force=force,
-                            backup_dir=backup_dir)
+                            backup_dir=backup_dir, allow_unlocated=allow_unlocated)
         print(("✓ " if ok else "✗ ") + msg)
         if not ok:
             failed += 1
