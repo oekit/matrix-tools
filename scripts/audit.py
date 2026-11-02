@@ -17,7 +17,7 @@ sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
-    RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags,
+    RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags, remote_tags,
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
@@ -728,6 +728,232 @@ def check_nested_module_floors():
 
 
 check_nested_module_floors()
+
+# ---------- 各仓自身 go.mod 的 oekit 地板 vs 远端最新 tag（oekit/oekit#102） ----------
+# **根模块形态**：`github.com/oekit/<短名>`
+#
+# ⚠️ 与「嵌套模块形态」（`github.com/oekit/<仓>/<子路径>`）**刻意分两个判据**：
+#   · 根模块形态 → 本判据（scan_repo_floors），比「各模块远端最新 tag」；
+#   · 嵌套模块形态 → check_nested_floors_of_other_repo（#104 方向），
+#     比「**该嵌套模块**的远端最新 tag」——两者的「最新」不是同一个东西。
+# 合并成一个正则会让「最新」的定义自相矛盾。
+_FLOOR_REQ_RE = re.compile(
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)( // indirect)?$",
+    re.M)
+
+# 嵌套模块形态（oekit/oekit#104）：`github.com/oekit/<仓>/<子路径>`
+# ⚠️ 路径段允许 `-`（仓名带连字符）与 `.`（如 hertzlog），**不含** `/` 开头/结尾。
+_NESTED_FLOOR_REQ_RE = re.compile(
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)/([a-z0-9._-]+(?:/[a-z0-9._-]+)*))"
+    r" (v\d+\.\d+\.\d+)( // indirect)?$",
+    re.M)
+
+
+def scan_repo_floors(repo: str, root, latest_of) -> list[str]:
+    """扫一个仓内**每个** go.mod 的根模块地板，返回「落后远端最新 tag」的清单。
+
+    **纯函数**（不碰网络、不读全局状态）：`latest_of(dep) -> str | None`
+    由调用方注入 ⇒ 自测能用假仓 + 假 tag 表驱动，不需要真网络。
+
+    为什么覆盖**仓内每个 go.mod**（根 + 嵌套模块）：嵌套模块对**别的**根模块的
+    地板（如 bootstrap/nacos → concurrency）同样是漂移，且嵌套模块自己发版
+    不会自动带起它对别仓的根模块地板。
+    """
+    known = set(MODULES)
+    out: list[str] = []
+    for gomod in sorted(root.glob("**/go.mod")):
+        if ".git" in gomod.parts or "vendor" in gomod.parts:
+            continue
+        rel = str(gomod.relative_to(root))
+        for m in _FLOOR_REQ_RE.finditer(gomod.read_text()):
+            dep, ver = m.group(2), m.group(3)
+            if dep == repo:
+                continue          # 自己的 tag：本仓不与自己比
+            if dep not in known:
+                continue          # 非矩阵模块（无 tag 可比）⇒ 不判
+            lt = latest_of(dep)
+            if not lt:
+                continue          # 读不到由调用方记为漂移，这里不重复记
+            floor, cur = parse_semver(ver), parse_semver(lt)
+            if not floor or not cur:
+                out.append(f"{repo}/{rel}: 地板 {dep} {ver} 或最新 {lt} 不可解析")
+                continue
+            if floor < cur:
+                out.append(f"{repo}/{rel}: 地板 {dep} {ver} 落后远端最新 {lt}")
+    return out
+
+
+def scan_repo_nested_floors(repo: str, root, latest_nested_of) -> list[str]:
+    """扫一个仓内**每个** go.mod 里对**别仓嵌套模块**的 require 地板。
+
+    **纯函数**（同 scan_repo_floors）：`latest_nested_of(module_path) -> str | None`
+    由调用方注入 ⇒ 自测不联网。
+
+    口径（oekit/oekit#104）：某仓 require `github.com/oekit/<仓>/<子路径>`
+    （**别的仓**的嵌套模块）时，地板不得落后于**该嵌套模块**的远端最新 tag。
+
+    ⚠️ 为什么要单独一个判据（而不是并进 scan_repo_floors）：
+    「最新」的**定义不同**——根模块形态比的是「该仓的根 tag」，嵌套模块形态
+    比的是「该嵌套模块的 tag」（形如 `hlog/v0.1.6`，**带子路径前缀**）。
+    并成一个正则 ⇒ 一边用错口径 ⇒ 判据自相矛盾。
+
+    ⚠️ **「别仓」的判定**：嵌套模块的 require 行里，`<仓>` 段是**该嵌套模块的
+    父仓**（nns require `registry/nacosimpl` ⇒ 父仓是 registry）⇒
+    「别仓」= **父仓名 ≠ 当前仓名**。自己仓的嵌套模块（kitex require
+    `kitex/…/kitexotel`）归 check_nested_module_floors 按「子→父」方向管，
+    口径不同，刻意不合并。
+    """
+    out: list[str] = []
+    for gomod in sorted(root.glob("**/go.mod")):
+        if ".git" in gomod.parts or "vendor" in gomod.parts:
+            continue
+        rel = str(gomod.relative_to(root))
+        for m in _NESTED_FLOOR_REQ_RE.finditer(gomod.read_text()):
+            module_path, dep_repo, sub, ver = m.group(1), m.group(2), m.group(3), m.group(4)
+            # ⚠️ **必须校验组数与类型**（2026-11-02 变异自证实测）：
+            # 正则被改回「只匹配根模块」形态时捕获组从 5 个变 4 个 ⇒
+            # `ver` 拿到 None ⇒ parse_semver(None) 抛 TypeError ⇒
+            # **自测崩在异常而不是判红**（异常不算「抓住变异」）。
+            # ⇒ 这里显式挡掉：形状不对就跳过（并由自测的变异断言转红）。
+            if not isinstance(module_path, str) or not isinstance(ver, str):
+                continue
+            if dep_repo == repo:
+                # **自己仓的嵌套模块**归 check_nested_module_floors 按「子→父」
+                # 方向管（发版正确性要求），口径不同，刻意不合并。
+                continue
+            lt = latest_nested_of(module_path)
+            if not lt:
+                continue          # 读不到由调用方记为漂移，这里不重复记
+            floor, cur = parse_semver(ver), parse_semver(lt)
+            if not floor or not cur:
+                out.append(f"{repo}/{rel}: 嵌套地板 {module_path} {ver} 或最新 {lt} 不可解析")
+                continue
+            if floor < cur:
+                out.append(f"{repo}/{rel}: 嵌套地板 {module_path} {ver} 落后远端最新 {lt}")
+    return out
+
+
+def check_repo_go_mod_floors():
+    """各仓 go.mod 里 `github.com/oekit/*` 的地板，不得落后于该模块的远端最新 tag。
+
+    为什么要有这道门禁（oekit/oekit#102，2026-11-01 提出 / 2026-11-02 落地）：
+    此前**各仓自身的 go.mod 地板没有任何自动判据**——阶段 6 只核对 **BOM 快照**
+    的新鲜度 ⇒ 2026-11-01 pkg v0.31.1 发布后，**18 处地板漂移**（跨 13 个仓）
+    只能靠人翻出来，issue 提了才有人动。
+
+    口径与阶段 6 同源：**各仓远端 tag**（本地 clone 陈旧 ⇒ 误报一片红），
+    版本**按数字**比（字符串排序会把 `v0.3.0` 排在 `v0.31.0` 之后）。
+
+    ⚠️ **判据独立于 align_floors.py**（那是整改工具，不是判据）：两者若共享
+    同一套解析逻辑，解析漏收时两边一起漏 ⇒ 门禁全绿、而矩阵实际有漂移
+    （与「门禁不得与被检对象共享判断逻辑」同族）。这里自己解析。
+    """
+    def latest_of(dep: str) -> str | None:
+        return remote_latest(dep)
+
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for msg in scan_repo_floors(repo, root, latest_of):
+            check(False, f"{msg}（跑 align_floors.py --plan 抬升）")
+
+
+check_repo_go_mod_floors()
+
+
+# ---------- 各仓对**别仓嵌套模块**的地板 vs 该嵌套模块远端最新 tag（#104） ----------
+
+def _nested_tag_prefixes() -> dict[str, str]:
+    """模块 import 路径 → 其嵌套 tag 前缀（**完整子路径**，非最后一段）。
+
+    ⚠️ **这里自己解析，不复用 matrix.nested_tag_prefix**：门禁不得与被检对象
+    共享判断逻辑——若共享，登记表一改或前缀推导一错，门禁跟着一起错 ⇒
+    又一次「门禁全绿、实际有漂移」。
+
+    事实依据（Go 的子目录模块规则，实测 2026-11-02）：
+      github.com/oekit/logx/hlog          → tag `hlog/v0.1.6`
+      github.com/oekit/kitex/…/kitexotel  → tag
+        `observability/tracing/instrumentation/kitexotel/v0.7.4`
+    ⇒ 前缀 = **父仓名之后的完整子路径**（不是最后一段）。
+
+    数据来源：**各仓嵌套模块自己的 go.mod**（module 路径写在第一行）⇒
+    不依赖任何登记表 ⇒ 登记表漏登记时这道门禁**照样能看见**。
+
+    ⚠️ **口径澄清**（这里最容易搞反）：**每个嵌套模块都住在它自己父仓的目录里**
+    ⇒ 扫「仓 X 里的嵌套模块」拿到的 module 路径，其父仓名**必然是 X**。
+    而本判据要管的是**消费方** require **别仓**的嵌套模块（nns require
+    registry/nacosimpl）⇒ 因此这里要建的是**全矩阵嵌套模块的 module 路径表**
+    （供消费方那侧匹配），**不是**「本仓的嵌套模块」。
+    """
+    prefixes: dict[str, str] = {}
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for gomod in sorted(root.glob("**/go.mod")):
+            if gomod.parent == root:
+                continue          # 仓根本身不是嵌套模块
+            if ".git" in gomod.parts or "vendor" in gomod.parts:
+                continue
+            first = gomod.read_text().splitlines()[0].strip()
+            m = re.match(r"module\s+(github\.com/oekit/(\S+))", first)
+            if not m:
+                continue
+            module_path = m.group(1)
+            parts = module_path.split("/")
+            if len(parts) < 4:
+                continue          # github.com/oekit/<repo> ⇒ 根模块，不是嵌套模块
+            # 前缀 = 父仓名之后的**完整子路径**
+            prefixes[module_path] = "/".join(parts[3:])
+    return prefixes
+
+
+def check_nested_floors_of_other_repo():
+    """各仓 require **别仓嵌套模块**时，地板不得落后该嵌套模块的远端最新 tag。
+
+    为什么要有这道门禁（oekit/oekit#104，2026-11-02）：
+    三道既有门禁都**看不见**这一类——
+      ① check_nested_module_floors 只管「子→父」（嵌套模块 require 父仓）；
+      ② align_floors.py 的正则只匹配根模块形态（那是整改工具，本轮才扩）；
+      ③ 阶段 6 只核对 BOM 快照的新鲜度。
+    ⇒ 2026-11-02 实测出 **13 处**这类漂移（nacosimpl v0.1.0→v0.1.1、
+    hlog v0.1.4→v0.1.6 …，跨 6 仓）**全靠人翻出来**——与 #102 的 18 处同族。
+
+    口径：比的是**该嵌套模块**的远端最新 tag（形如 `hlog/v0.1.6`），
+    **不是**父仓的根 tag——两者的版本号空间不同（logx 根是 v0.8.0，
+    logx/hlog 是 v0.1.6）。
+
+    ⚠️ **判据独立于 align_floors.py**：这里自己解析 require 行、自己按前缀
+    过滤远端 tag、自己按数字比版本 ⇒ 三处逻辑都不与被检对象共享。
+    """
+    prefixes = _nested_tag_prefixes()
+    if not prefixes:
+        check(False, "读不到任何嵌套模块的 module 路径（嵌套地板判据形同虚设）")
+        return
+
+    def latest_nested_of(module_path: str) -> str | None:
+        prefix = prefixes.get(module_path)
+        if prefix is None:
+            return None
+        repo = module_path.split("/")[2]
+        try:
+            tags = remote_tags(repo)
+        except RemoteReadError:
+            return None          # 读不到由 remote_latest 口径记为漂移
+        pat = re.compile(rf"^{re.escape(prefix)}/v(\d+)\.(\d+)\.(\d+)$")
+        best = None
+        for t in tags:
+            m = pat.match(t)
+            if not m:
+                continue
+            ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+            if best is None or ver > best:   # **按数字**比，非字符串排序
+                best = ver
+        return f"v{best[0]}.{best[1]}.{best[2]}" if best else None
+
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for msg in scan_repo_nested_floors(repo, root, latest_nested_of):
+            check(False, f"{msg}（跑 align_floors.py --plan 抬升）")
+
+check_nested_floors_of_other_repo()
 
 # ---------- dependabot 目录存在性门禁（matrix-tools#68，承接 data#39） ----------
 # 背景与判据的完整说明在 scripts/dependabot_dirs.py（单一事实源，附自测）。

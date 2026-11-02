@@ -30,7 +30,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from matrix import (MODULES, OEKIT_REQ_RE, RemoteReadError, enable_tag_cache,  # noqa: E402
-                    git_branch, is_dirty, latest_tag, repo_dir, sh)
+                    git_branch, is_dirty, latest_nested_tag, latest_tag, repo_dir, sh)
 from prkit import land_pr  # noqa: E402
 
 # 地板扫描用的 require 行正则：**容忍行尾的 `// indirect` 标记**。
@@ -47,8 +47,25 @@ from prkit import land_pr  # noqa: E402
 #
 # 独立定义而不改 matrix.OEKIT_REQ_RE：后者的语义是「这个仓**直接**依赖哪些
 # 矩阵模块」（dep_matrix 的依赖矩阵用），改动会影响那张表的语义。
+#
+# ---- 2026-11-02 扩：能匹配**嵌套模块**形态（oekit/oekit#104）----
+#
+# 原正则只匹配 `github.com/oekit/<短名>`（**根模块**）⇒ 看不见
+# `github.com/oekit/<仓>/<嵌套路径>`（**别仓的嵌套模块**）这类地板。
+# 实测（#104）：nns 的 `registry/nacosimpl v0.1.0`（远端最新 v0.1.1）、
+# hertz 的 `logx/hlog v0.1.4`（远端最新 v0.1.6）等 13 处漂移，工具**全看不见**
+# ⇒ 「✓ 全矩阵地板零漂移」的假绿又复现了一次。
+#
+# 现在匹配两种形态（**贪心的路径段**）：
+#   `github.com/oekit/<短名>`                 → 根模块
+#   `github.com/oekit/<短名>/<路径…>`          → 嵌套模块（可能是别的仓的）
+#
+# ⚠️ 路径段的字符集必须**排除 `.` 之外的所有路径分隔与空白**，且允许 `-`（仓名
+# 带连字符，如 kitex-examples）⇒ 用 `[a-z0-9._/-]+` 但**禁止以 `/` 开头/结尾**、
+# 禁止 `//`。
 FLOOR_REQ_RE = re.compile(
-    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)( // indirect)?$", re.M)
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)(/[a-z0-9._-]+(?:/[a-z0-9._-]+)*)?)"
+    r" (v\d+\.\d+\.\d+)( // indirect)?$", re.M)
 
 def parse_semver(v: str) -> tuple[int, int, int]:
     a, b, c = v[1:].split(".")
@@ -92,8 +109,11 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
         text = gm.read_text()
         ups = []
         for m in FLOOR_REQ_RE.finditer(text):
-            full, dep, ver = m.group(1), m.group(2), m.group(3)
-            if dep not in latest_cache:
+            full, dep, sub, ver = m.group(1), m.group(2), m.group(3), m.group(4)
+            # `dep` = 根模块仓名；`sub` = 嵌套子路径（None ⇒ 这是根模块形态）。
+            # 完整模块路径 = full（github.com/oekit/<仓>[/<子路径>]）。
+            key = full
+            if key not in latest_cache:
                 # **必须读远端 tag，不能读本地 tag**（2026-11-02 修）。
                 #
                 # 形态：本地 clone 的 tag 陈旧（`git fetch` 没跑 / 没带 --tags）⇒
@@ -112,8 +132,17 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
                 # remote=True 时 matrix.latest_tag 走 matrix.remote_tags：
                 # 读不到就抛 RemoteReadError（**fail-closed**，绝不静默降级本地 tag）——
                 # main() 捕获它并以退出码 2 报「判不了」，不与「没有漂移」混为一谈。
-                latest_cache[dep] = latest_tag(dep, base, remote=True)
-            target = latest_cache[dep]
+                #
+                # ---- 2026-11-02 扩：嵌套模块走 latest_nested_tag ----
+                # 嵌套模块的 tag 形如 `hlog/v0.1.6`，**带前缀**⇒ 根模块的
+                # latest_tag（只认 `vX.Y.Z` 形态）会把它整条丢掉 ⇒ 必须
+                # 按前缀过滤后再比（且**按数字**比，字符串排序会把 v0.3.0
+                # 排到 v0.31.0 之后）。
+                if sub is None:
+                    latest_cache[key] = latest_tag(dep, base, remote=True)
+                else:
+                    latest_cache[key] = latest_nested_tag(full, base)
+            target = latest_cache[key]
             if not target:
                 continue
             if parse_semver(ver) < parse_semver(target):

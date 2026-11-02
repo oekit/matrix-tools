@@ -408,6 +408,69 @@ def latest_tag(repo: str, base: str | None = None, remote: bool = False) -> str 
     return semver[0] if semver else None
 
 
+def nested_tag_prefix(module_path: str) -> str | None:
+    """模块 import 路径 → 其嵌套 tag 前缀。
+
+    Go 的子目录模块规则：嵌套模块 `github.com/oekit/logx/hlog` 的 tag 形如
+    `hlog/v0.1.6`——前缀是**该模块在父仓里的子目录路径**。
+
+    ⚠️ **前缀是完整子路径，不是最后一段**（实测 2026-11-02）：
+      logx/hlog          → `hlog/v0.1.6`
+      registry/nacosimpl → `nacosimpl/v0.1.1`
+      kitex 的 kitexotel（子路径 4 层）→
+        `observability/tracing/instrumentation/kitexotel/v0.7.4`
+    ⇒ 用「最后一段」当前缀会在 kitexotel 上**读不到 tag**（返回 None）
+    ⇒ 地板判据会把「读不到」当成「没漂移」⇒ 又是假绿。
+
+    登记表（NESTED_MODULES）是唯一出处——**不手写前缀表**，否则登记表改了
+    这里就漂移（与「版本号从 git tag 推导、不手写」同一条纪律）。
+
+    返回 None ⇒ 该 import 路径不是已登记的嵌套模块（⇒ 不是嵌套模块，
+    不该按嵌套 tag 口径去比）。
+    """
+    for nm in NESTED_MODULES:
+        if nm["module"] == module_path:
+            return nm["path"]
+    return None
+
+
+def latest_nested_tag(module_path: str, base: str | None = None) -> str | None:
+    """某嵌套模块的**远端最新 tag 的版本号**（不带前缀，形如 `v0.1.6`）。
+
+    嵌套模块的 tag 与父仓根模块 tag **同仓同前缀空间**（`hlog/v0.1.6` 与
+    `v0.8.0` 都在 logx 仓里）⇒ 必须**按前缀过滤后再按数字比**。
+
+    ⚠️ **按数字比，不能按字符串排序**：字符串排序会把 `v0.3.0` 排在
+    `v0.31.0` 之后（实测踩过，oekit#102 的核对口径里也写明了）。
+    ⇒ 这里显式按 (major, minor, patch) 拆元组比。
+
+    ⚠️ **只取最后一段版本号**：tag 形如 `kitexotel/v0.7.4`，前缀本身可能
+    含斜杠（子路径深），但版本号永远是最后一段。
+
+    远端读不到 ⇒ 抛 :class:`RemoteReadError`（与 latest_tag 同口径：
+    「读不到」≠「没有」，绝不静默返回 None 让调用方跳过）。
+    """
+    prefix = nested_tag_prefix(module_path)
+    if prefix is None:
+        return None
+    # 模块路径 → 父仓名（github.com/oekit/<repo>/... ⇒ repo 是第 3 段）
+    parts = module_path.split("/")
+    if len(parts) < 3 or parts[0] != "github.com":
+        return None
+    repo = parts[2]
+    tags = remote_tags(repo, base)
+    pat = re.compile(rf"^{re.escape(prefix)}/v(\d+)\.(\d+)\.(\d+)$")
+    best: tuple[int, int, int] | None = None
+    for t in tags:
+        m = pat.match(t)
+        if not m:
+            continue
+        ver = (int(m.group(1)), int(m.group(2)), int(m.group(3)))
+        if best is None or ver > best:
+            best = ver
+    return f"v{best[0]}.{best[1]}.{best[2]}" if best else None
+
+
 def bump_patch(v: str) -> str:
     a, b, c = v[1:].split(".")
     return f"v{a}.{b}.{int(c) + 1}"
