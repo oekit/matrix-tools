@@ -11,7 +11,7 @@
 **离线是硬要求**
 --------------
 护栏要能挂进 PR 的 CI ⇒ 自测**不许**依赖工作区里那些仓的 clone / tag / Release
-（CI 只 checkout 本仓，且 `fetch-tags: false`）⇒ 核验层用**自造的 fixture git 仓**
+（CI 只 checkout 本仓 ⇒ 默认浅克隆拿不到别仓 tag）⇒ 核验层用**自造的 fixture git 仓**
 （`git init` + commit + tag，与 `gen_matrix_go_selftest.py` 同一套路）⇒
 **不联网、不读工作区、结果确定**。
 

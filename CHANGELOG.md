@@ -76,10 +76,17 @@ CI 里靠 audit job 已有的 `GH_TOKEN`。
 **③ ★ 我那句 CI 约束是假断言 —— 已就地更正**
 
 v0.1.40 版本节写「CI 只 checkout 本仓且 `fetch-tags: false` ⇒ 全 org 扫描不进 PR 门禁」。
-**独立复核实测推翻**：`fetch-tags: false` 在本仓 workflow 里 **grep 全 0**（`actions/checkout@v7`
-默认即带 tag）；且 audit job **逐仓 plain `git clone` 全矩阵**（实测新克隆 core 带 **14 个 tag**，
-含 v0.6.0 / v0.9.2 / v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在** ⇒ 真障碍不是「读不到 tag」，
+**独立复核实测推翻**：`fetch-tags: false` 在本仓 workflow 里 **grep 全 0**（**它根本不是
+`actions/checkout` 的开关** —— checkout 没有这个参数名）；且 audit job **逐仓 plain
+`git clone` 全矩阵**（实测新克隆 core 带 **14 个 tag**，含 v0.6.0 / v0.9.2 / v0.12.1）
+⇒ **核验层要的 tag 树在 CI 里就在** ⇒ 真障碍不是「读不到 tag」，
 而是「读不到 Release 正文」（见 ②）。
+> ⚠️ **本段机制措辞再订正（2026-11-03 二次复核）**：上一版此处写「`actions/checkout@v7`
+> **默认即带 tag**」——**这句本身不准确**：`actions/checkout` 的 `fetch-depth` **默认为 1
+> = 浅克隆 ⇒ 不带 tag**（实测：`git clone --depth 1` ⇒ core **0 个 tag**；plain
+> `git clone` ⇒ 14 个 tag）⇒ **checkout 本身确实拿不到别仓 tag**。⇒ 真正让 tag 树在 CI 里
+> 存在的是 **audit job 逐仓 plain `git clone`**（绕开 checkout），**不是** checkout 的默认行为。
+> ⇒ **结论方向不变**（全 org 扫描**能**进 PR 门禁，已真挂上，见 ④），**变的是机制归因**。
 ⇒ **已发布内容里的假话要就地更正**：`main` 上 v0.1.40 节的该段已改写为如实表述（并注明「本段
 初版为假，已就地更正」），v0.1.40 的 **Release 正文**同步更正；**tag 快照不动**（本仓红线）。
 ⇒ 讽刺点：这正是本护栏要抓的那类错误（可证伪的断言没按当前事实取证）—— **自己先被抓到了**。
@@ -124,12 +131,16 @@ audit job 新增一步跑扫描（`MATRIX_BASE=$PWD/repos`）：**发现「为�
 
   CI 约束（**本段初版为假，已就地更正**）：初版写「CI 只 checkout 本仓且 `fetch-tags: false`
   ⇒ 全 org 扫描不进 PR 门禁」——**复核班实测推翻**：`fetch-tags: false` 在本仓 workflow 里
-  **grep 全 0**（`actions/checkout@v7` 默认即带 tag），且 `audit.yml` 的 audit job
+  **grep 全 0**（**它不是 `actions/checkout` 的开关名**）；且 `audit.yml` 的 audit job
   **逐仓 plain `git clone` 全矩阵**（实测新克隆 core 带 **14 个 tag**，含 v0.6.0 / v0.9.2 /
   v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在** ⇒ 真障碍不是「读不到 tag」，而是「读不到
   **Release 正文**」（旧实现硬编码本地脚本路径）⇒ 已改走仓内标准读取层 `ghsafe.gh_json`
   ⇒ 全 org 扫描**已挂进 PR 门禁**（见 v0.1.41）。门禁里仍保留**离线自测**（自造 fixture
   git 仓，不联网、不依赖工作区）⇒ 它的作用是证明**判据本身有牙齿**，与真实语料扫描是两件事。
+  > ⚠️ **机制措辞订正（2026-11-03 二次复核）**：初版更正写「`actions/checkout@v7` 默认即带
+  > tag」——**不准确**：`fetch-depth` 默认 1（浅克隆）⇒ checkout **本身不带 tag**（实测
+  > `--depth 1` ⇒ core 0 个 tag）⇒ 让 tag 树进 CI 的是 audit job 的 **plain `git clone`**。
+  > **结论方向不变**（全 org 扫描能进 PR 门禁），**变的是机制归因**。
 
   验收：离线自测 **14 条用例全绿**、变异自证精确转红；`--live` 加跑 ⇒ 嵌套模块 CHANGELOG
   枚举 **7 份**（全 org 真实值，嵌套侧不是假干净）、已更正那版的 Release 正文 ⇒ 提取
