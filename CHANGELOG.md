@@ -32,9 +32,14 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 
   **③ 「0 告警」不是证据，「变异能转红」才是** ⇒ 自测每条用例写死期望判定。
 
-  CI 约束：核验要读依赖仓的 **tag 树**，而 CI 只 checkout 本仓且 `fetch-tags: false`
-  ⇒ 全 org 扫描**不进 PR 门禁**（否则会全部 UNVERIFIABLE）⇒ 门禁里只跑**离线自测**
-  （自造 fixture git 仓，不联网、不依赖工作区），全 org 扫描属**维护轮**动作。
+  CI 约束（**本段初版为假，已就地更正**）：初版写「CI 只 checkout 本仓且 `fetch-tags: false`
+  ⇒ 全 org 扫描不进 PR 门禁」——**复核班实测推翻**：`fetch-tags: false` 在本仓 workflow 里
+  **grep 全 0**（`actions/checkout@v7` 默认即带 tag），且 `audit.yml` 的 audit job
+  **逐仓 plain `git clone` 全矩阵**（实测新克隆 core 带 **14 个 tag**，含 v0.6.0 / v0.9.2 /
+  v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在** ⇒ 真障碍不是「读不到 tag」，而是「读不到
+  **Release 正文**」（旧实现硬编码本地脚本路径）⇒ 已改走仓内标准读取层 `ghsafe.gh_json`
+  ⇒ 全 org 扫描**已挂进 PR 门禁**（见 v0.1.41）。门禁里仍保留**离线自测**（自造 fixture
+  git 仓，不联网、不依赖工作区）⇒ 它的作用是证明**判据本身有牙齿**，与真实语料扫描是两件事。
 
   验收：离线自测 **14 条用例全绿**、变异自证精确转红；`--live` 加跑 ⇒ 嵌套模块 CHANGELOG
   枚举 **7 份**（全 org 真实值，嵌套侧不是假干净）、已更正那版的 Release 正文 ⇒ 提取
