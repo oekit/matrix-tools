@@ -231,6 +231,41 @@ def main() -> int:
     if "跟随" not in got0:
         failures.append(f"用例3d：无 bullet 时应为跟随文案：{got0!r}")
 
+    # 3e：★ main_tag 为空（只发嵌套模块）⇒ **不得产出双空格文案**
+    #   实测旧形态：f"跟随 {repo} {main_tag} 发版" 在 main_tag="" 时 ⇒
+    #   "跟随 registry  发版" ⇒ 一句没人看得懂的文案进了版本节。
+    got_empty = release_train.format_bullets([], True, "demo", "")
+    if "  " in got_empty:
+        failures.append(f"用例3e：main_tag 为空时产出双空格文案：{got_empty!r}")
+    if "跟随 demo  发版" in got_empty:
+        failures.append(f"用例3e：main_tag 为空时仍在写父仓版本号：{got_empty!r}")
+    if "父模块" not in got_empty:
+        failures.append(f"用例3e：main_tag 为空时应说明随父模块发布：{got_empty!r}")
+
+    # 3f：★ 只发嵌套模块（无 main=）⇒ **必须被守卫拦下**并给出正确用法
+    #   旧形态会一路漏下去：分支名变成 `chore/rel-`（无版本号）、
+    #   嵌套模块脱离父仓单独发版 ⇒ 下游解析失败（matrix-tools#148）。
+    import subprocess
+    import sys as _sys
+    with tempfile.TemporaryDirectory() as _td:
+        _ws = Path(_td) / "registry"
+        _ws.mkdir(parents=True)
+        # repo_dir() 的布局要求：仓根有 go.mod（或 README.md）；嵌套模块在自己的子目录
+        (_ws / "go.mod").write_text("module github.com/oekit/registry\n")
+        (_ws / "nacos").mkdir()
+        (_ws / "nacos" / "go.mod").write_text("module github.com/oekit/registry/nacos\n")
+        _env = dict(os.environ, MATRIX_BASE=str(Path(_td)))
+        _p = subprocess.run(
+            [_sys.executable, str(Path(__file__).resolve().parent / "release_train.py"),
+             "registry", "nacos=v0.1.2"],
+            capture_output=True, text=True, env=_env, cwd=str(Path(__file__).resolve().parent),
+        )
+        _out = (_p.stdout or "") + (_p.stderr or "")
+    if _p.returncode == 0:
+        failures.append(f"用例3f：只发嵌套模块应当被拦下（returncode=0）：{_out[:200]!r}")
+    if "main=" not in _out:
+        failures.append(f"用例3f：报错里应给出正确用法（提到 main=）：{_out[:200]!r}")
+
     failures.extend(issue_binding_assertions())
 
     if failures:
