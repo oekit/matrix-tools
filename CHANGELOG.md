@@ -4,6 +4,47 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.39] — 2026-11-03
+
+### fix(tools)：写回门禁的 --all 必须覆盖嵌套模块的 CHANGELOG（PR #185）
+
+`scripts/check_writeback.py` 的 `--all`（全库 dry-run）报「✓ 全库 dry-run 干净（0 处告警）」
+时，**嵌套模块的版本节根本没进扫描** ⇒ 这是**假干净**（违反工具自己的「读不到 ≠ 没有」原则）。
+
+嵌套模块的版本节住在**自己的** `CHANGELOG.md` 里，全 org 共 **7 份**：`bootstrap/nacos`、
+`bootstrap/obs`、`kitex/istio`、`kitex/observability/tracing/instrumentation/kitexotel`、
+`registry/nacos`、`registry/nacosimpl`、`timertask/redis`。
+⇒ 而 `--all` 原先**只扫根 `CHANGELOG.md`** ⇒ 嵌套侧的写回（那才是真落笔的地方）从未被检查。
+
+三处改动：
+
+1. **`--all` 自动枚举嵌套模块的 CHANGELOG**
+   判据 = 子目录里有 `CHANGELOG.md`，**不要求**有 `go.mod` —— 门禁输入可能是只装了
+   CHANGELOG 的快照布局（`MATRIX_BASE`：根放占位 go.mod、嵌套目录只放 CHANGELOG.md）
+   ⇒ 若把 `go.mod` 当必要条件，嵌套模块在快照布局下**一个都发现不了**
+   ⇒ 门禁又变回「假干净」（实现时实测踩过：注入的违规新代码也没抓到）。
+   已排除 `vendor` / `testdata` / `node_modules` / `.git` / `.github` 等目录。
+2. **嵌套模块的版本号限定成 `<sub>/<ver>`**
+   allowlist 的约束键含 `version` ⇒ 不限定的话 `registry/nacos` 的 `v0.1.0` 与
+   `registry/nacosimpl` 的 `v0.1.0` **撞键** ⇒ 一个模块的告警会被另一个模块的豁免
+   条目放过去（fail-open）。单条模式（`--num`）同步限定 ⇒ 两种模式**同一个键**
+   ⇒ 用 `--all` 归档一次即可，单条复核不会再出现「归档完了还是红的」。
+3. **按约束键去重**
+   根里的镜像节与嵌套文件里的节**真镜像**时会被扫两遍 ⇒ 同一条告警出现两次 ⇒
+   输出虚胖、归档表也虚胖 ⇒ 按 allowlist 入库用的**同一套约束键**去重。
+   ⚠️ 根镜像与嵌套节**内容可以完全不同**（实测 `bootstrap/nacos` v0.3.7：根 = 父模块
+   地板变更、嵌套 = `#33` 补记）⇒ 不能靠「跳过镜像」去重。
+
+自测：新增 C18–C21 四个用例 + 变异 M6 ⇒ 变异自证 **6/6 全部精确转红**（红得精确：
+不该红的用例必须还绿着）。
+
+验收（合入后 main 上重跑）：全 org **25 仓** `--all` **0 条未豁免告警**
+（findings 合计 50 条**全部**命中 allowlist）、**7 个嵌套模块**全部进扫描、
+allowlist **二次归档逐字不变**（**76 条**、约束键集合一致、**已有条目的 reason 零改写**）
+⇒ 幂等。
+
+关联：PR #185（实现）、matrix-tools#180（门禁本体）、v0.1.38（allowlist 归档全视角）。
+
 ## [v0.1.38] — 2026-11-02
 
 ### fix(tools)：写回门禁的 allowlist 归档只取单侧视角 + 只覆盖 matrix-tools 自己（PR #183）
