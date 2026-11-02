@@ -4,6 +4,52 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.43] — 2026-11-03
+- #202：修 release_train「只发嵌套模块 ⇒ 无条件拒绝」的一刀切守卫——改为条件守卫（复用仓里已有的依赖可解析性判据）
+
+  **缺陷本体**：#195 引入的守卫是**无条件**的——「本次 train 只有嵌套模块、没有父仓 `main=`」⇒ 直接拒绝，
+  且文案写「若父仓本次无需发版（地板已就位），**不要**单独发嵌套模块」⇒ **这句逻辑是反的**：
+  地板已就位恰恰是「可以单独发嵌套模块」的**前提**。
+
+  **为什么这是死结**：要修的那批问题是「**仓库树已抬地板，但已发布产物还带旧地板**」——
+  消费方 `go get <mod>@<tag>` 拿到的是**那个 tag 的 go.mod** ⇒ 抬了工作树**不会**改变消费方拿到的地板
+  ⇒ 凡是产物落后都必须发新 tag（tag 不可重推）⇒ 而「只发嵌套模块」正是这条修法的**唯一形态**
+  （工作树已抬 ⇒ 不需要发父仓新版本）⇒ 一刀切守卫把唯一修法堵死 ⇒ 只能带 `main=` ⇒
+  父仓每发一版，**已发的子 tag 就又落后一次** ⇒ 要发两轮。
+
+  **实测复现**（2026-11-03，main `606b300`）：`python3 scripts/release_train.py logx hlog=v0.1.7`
+  ⇒ 直接拒绝。逐条 `git ls-remote` 核各待发嵌套模块的 require 远端 tag ⇒ **require 全部已发布**
+  （logx v0.8.2 / registry v0.5.3 / core v0.12.1 / bootstrap v0.6.8 / nns v0.5.6 / metrics v0.1.10 /
+  tracing v0.3.2 / pkg v0.31.2 / concurrency v0.23.3 / kitex v0.7.5）⇒ 只发嵌套**安全**；
+  **真正需要同 train 的只有 `timertask/redis`**（require `timertask v0.2.7` 未发布）
+  ⇒ 一刀切会误杀其余全部安全用例。
+
+  **修法**：抽出 `nested_only_gate(repo, specs, tag_exists=None)`，**复用同脚本已有的精确判据**
+  `check_requires_resolvable`（matrix-tools#148：每条 oekit require 要么**已在远端发布**、
+  要么**本次 train 一起发**）⇒ 只有确有未发布 require 才拒绝；报错点名**哪个 require /
+  期望的 tag 形态 / 修法**；**远端读不到 ⇒ fail closed**（读不到 ≠ 已发布，#85 口径）。
+  ⇒ 纪律：「**精确判据 + 一刀切 = 误伤**」——守卫应复用仓里已有的精确判据，而不是另写一套更粗的。
+
+  **顺带修分支名退化**：`chore/rel-{main_tag}` 在 `main_tag` 为空时会变成 `chore/rel-`
+  ⇒ 无法区分批次 ⇒ 改用 `rel_slug`（多模块用 `+` 连接）。
+
+  **自测（守卫层此前零覆盖）**：补用例 11–14（require 已发布⇒放行 / 未发布⇒拒绝且报错点名 /
+  远端读不到⇒fail closed / train 带 `main=`⇒守卫不介入）；并给该自测新增 `--mutate` 变异自证模式
+  ——原 docstring 声称「必须能在下列变异下转红」，但脚本里**从无任何机制验证过**（属「声称 ≠ 事实」）
+  ⇒ **6 个变异体全部精确转红**（一刀切守卫 / 恒放行 / fail-open / 门禁恒绿 / tag 形态截断 /
+  replace 块当 require）⇒ 已挂进 `audit.yml` 的 selftest job。
+
+  **自证盲区一处（变异自证抓出用例自身的缺口）**：用例 5/5b 原用**单层**嵌套路径 `logx/hlog`
+  ⇒「只取最后一段」这个退化对它**完全无效**（最后一段 == 完整子路径）⇒ 补用例 5c/5d
+  （多层嵌套 `kitex/observability/tracing/instrumentation/kitexotel`）才抓得住
+  ⇒ 纪律：**测「路径形态」的用例，路径必须有多层**。
+
+  **端到端实测**：logx hlog / logx kitexlog / registry nacos / registry nacosimpl / bootstrap nacos
+  **放行**；`timertask redis=v0.2.7` **正确拒绝**并报错点名「远端无 timertask@v0.2.7」。
+
+  **影响面**：只改 `scripts/release_train.py` + 其自测 + CI 配置；不改发版流程语义、
+  不影响任何既有 train 用法（父仓 + 嵌套同 train、只发父仓一律照旧）。
+
 ## [v0.1.42] — 2026-11-03
 - #196：修工具自身的两处「输出/文档与事实对不上」——核验器注释读数过期 + release_train 只发嵌套模块漏出双空格文案与空分支名
 
