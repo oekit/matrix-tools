@@ -98,6 +98,7 @@ TOKEN_RE = re.compile(
     r"(?<![\w.#-])([A-Za-z0-9][A-Za-z0-9._-]*)#(\d+)\b"   # 强形态
     r"|(?<![\w#])#(\d+)\b")                                # 弱形态
 
+
 class Hit(NamedTuple):
     """文本里一处号引用。"""
     kind: str        # "strong" | "weak"
@@ -230,9 +231,9 @@ def find_section(lines: list[str], head: str) -> tuple[int, int] | None:
     return None
 
 
-def resolve_changelog(repo: str, version: str, nested: str | None,
-                      file_override: str | None
-                      ) -> tuple[Path | None, str | None, str | None, int]:
+def resolve_changelog(
+        repo: str, version: str, nested: str | None, file_override: str | None
+) -> tuple[Path | None, str | None, str | None, int]:
     """定位「要检查的版本节」⇒ (文件, 节体文本, 实际节头)。
 
     取舍与 `changelog_section()` 同款：嵌套优先 `<sub>/CHANGELOG.md` 的
