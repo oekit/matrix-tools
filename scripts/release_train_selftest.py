@@ -124,6 +124,96 @@ def issue_binding_assertions() -> list[str]:
     return failures
 
 
+def nested_binding_assertions() -> list[str]:
+    """#208：嵌套模块的回执必须**定位得到条目**，且「只发嵌套」时不得写假陈述。
+
+    三条判据（缺一条就是缺陷）：
+      ① 嵌套面的 bullet **含 issue 号** ⇒ 定位器 entries=1（回执能讲清本条改了什么）；
+      ② 只发嵌套时**不得**声称「父模块一并发布」（父仓本次并不发版 ⇒ 假陈述）；
+      ③ fail-closed 门禁**逐面**校验 ⇒ 嵌套面没绑上 ⇒ 中止发版。
+
+    ★ ③ 的构造方式：先用变异把嵌套面**退回旧行为**（issue 只写在「关联问题单」行），
+      再看门禁拦不拦 ⇒ 拦 ⇒ 逐面校验有牙齿；不拦 ⇒ 门禁只验了根面（假保证）。
+    """
+    failures: list[str] = []
+    bullets = ["build: 把父仓地板带进已发布产物（registry#44）"]
+    issues = ["registry#44"]
+
+    # 4g：嵌套面的 bullet 必须含 issue 号（回执按号在版本节里定位条目）
+    nested = release_train.format_bullets(bullets, True, "registry", "", issues)
+    first = nested.split("\n\n")[0]
+    if "registry#44" not in first:
+        failures.append(f"用例4g：嵌套版本的 bullet 里必须含 issue 号：{nested!r}")
+    if release_train.unbound_issues("- " + nested, issues):
+        failures.append(f"用例4g：嵌套版本节必须绑得上 issue（回执 entries=1）：{nested!r}")
+
+    # 4h：只发嵌套时不得写「父模块一并发布」（进已发布产物 ⇒ 假陈述）
+    if "父模块一并发布" in nested:
+        failures.append(f"用例4h：只发嵌套时不得声称父模块一并发布（假陈述）：{nested!r}")
+
+    # 4i：带 main= 时保持既有文案（跟随父仓发版）
+    nested_main = release_train.format_bullets(bullets, True, "registry", "v0.5.4", issues)
+    if "跟随 registry v0.5.4 发版" not in nested_main:
+        failures.append(f"用例4i：带 main= 时应保持「跟随父仓发版」文案：{nested_main!r}")
+
+    # 4j：★ 嵌套面没绑上 ⇒ 门禁必须 fail closed（逐面校验）
+    saved = release_train.format_bullets
+    release_train.format_bullets = _nested_face_old_behavior(saved)
+    try:
+        raised = False
+        try:
+            release_train.check_new_section_binding(bullets, "registry", "", issues)
+        except SystemExit:
+            raised = True
+    finally:
+        release_train.format_bullets = saved
+    if not raised:
+        failures.append("用例4j：嵌套面绑不上 issue 时必须中止发版（逐面校验，fail closed）")
+    return failures
+
+
+def _nested_face_old_behavior(saved):
+    """造一个「嵌套面退回旧行为」的 format_bullets（issue 只写在「关联问题单」行）。"""
+    def mutated(bullets, nested_self, repo, main_tag, issues=None):
+        if nested_self:
+            body = (f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+                    if main_tag else
+                    "随本次 train 的父模块一并发布（release_train 嵌套 train）")
+            if issues:
+                body += "\n\n关联问题单：" + "、".join(issues) + "。"
+            return body
+        return saved(bullets, nested_self, repo, main_tag, issues)
+    return mutated
+
+
+def run_nested_mutation(mutate) -> list[str]:
+    saved_fb = release_train.format_bullets
+    saved_cs = release_train.check_new_section_binding
+    try:
+        mutate()
+        return nested_binding_assertions()
+    finally:
+        release_train.format_bullets = saved_fb
+        release_train.check_new_section_binding = saved_cs
+
+
+def _mutate_nested_face_old():
+    """嵌套面退回旧行为（issue 只写在「关联问题单」行）⇒ 用例4g/4h 必须转红。"""
+    release_train.format_bullets = _nested_face_old_behavior(release_train.format_bullets)
+
+
+def _mutate_root_face_only():
+    """门禁只校验根面（不校验嵌套面）⇒ 用例4j 必须转红。"""
+    def mutated(bullets, repo, main_tag, issues):
+        body = "- " + release_train.format_bullets(bullets, False, repo, main_tag, issues)
+        bad = release_train.unbound_issues(body, issues)
+        if bad:
+            raise SystemExit(release_train.issue_binding_msg(
+                repo, main_tag or "（本次 train 的嵌套模块）", bad,
+                "新建的根面版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
+    release_train.check_new_section_binding = mutated
+
+
 def run_binding_mutation(mutate) -> list[str]:
     saved = release_train.unbound_issues
     try:
@@ -242,9 +332,15 @@ def main() -> int:
     if "父模块" not in got_empty:
         failures.append(f"用例3e：main_tag 为空时应说明随父模块发布：{got_empty!r}")
 
-    # 3f：★ 只发嵌套模块（无 main=）⇒ **必须被守卫拦下**并给出正确用法
-    #   旧形态会一路漏下去：分支名变成 `chore/rel-`（无版本号）、
-    #   嵌套模块脱离父仓单独发版 ⇒ 下游解析失败（matrix-tools#148）。
+    # 3f：★ 只发嵌套模块（无 main=）⇒ **不得**被一刀切拦下
+    #   ⚠️ **旧断言是陈旧的**（#203 起守卫改成**条件**守卫）：只有「存在未发布的
+    #   require」才拦；require 全已发布 ⇒ **必须放行**。旧断言「应当被拦下」是
+    #   #203 之前的旧行为，而且**靠无关失败蒙对**（fixture 不是 git 仓 ⇒ 命令因
+    #   「须在 main 上」退出 1）⇒ **假绿**。
+    #   ⇒ 现在只断言「不得出现一刀切的拦截文案」；放行/拒绝两分档由
+    #   release_train_requires_selftest.py 的用例 11-14 覆盖（那层有牙齿）。
+    #   ⚠️ 判据只认**拦截标识**「不许发」——放行提示里也有「没有父模块 main=」字样
+    #   （那是说明文字，不是拦截）⇒ 拿它当拦截特征会把放行误判成拦截。
     import subprocess
     import sys as _sys
     with tempfile.TemporaryDirectory() as _td:
@@ -261,10 +357,10 @@ def main() -> int:
             capture_output=True, text=True, env=_env, cwd=str(Path(__file__).resolve().parent),
         )
         _out = (_p.stdout or "") + (_p.stderr or "")
-    if _p.returncode == 0:
-        failures.append(f"用例3f：只发嵌套模块应当被拦下（returncode=0）：{_out[:200]!r}")
-    if "main=" not in _out:
-        failures.append(f"用例3f：报错里应给出正确用法（提到 main=）：{_out[:200]!r}")
+    if "不许发" in _out:
+        failures.append(f"用例3f：require 全已发布时**不得**被一刀切拦下：{_out[:200]!r}")
+    if "都已发布" not in _out:
+        failures.append(f"用例3f：放行时应说明已核「require 都已发布」：{_out[:200]!r}")
 
     # 3g：★ 嵌套模块**没有**独立 CHANGELOG（logx 仓形态）⇒ 版本节只写根，
     #   且**不得**为它新建空文件（新建会造出「嵌套模块有独立 CHANGELOG」的假形态）。
@@ -282,6 +378,7 @@ def main() -> int:
             failures.append(f"用例3g：**不得**为不存在的嵌套路径新建 CHANGELOG.md：{_missing}")
 
     failures.extend(issue_binding_assertions())
+    failures.extend(nested_binding_assertions())
 
     if failures:
         print("✗ release_train CHANGELOG 环节自测未过：")
@@ -289,7 +386,7 @@ def main() -> int:
             print("  -", f)
         raise SystemExit(1)
     print("✓ release_train CHANGELOG 环节自测通过：共享脚本定位得到（找不到会告警）、多条 bullet 不丢条目、"
-          "--issue 绑不到条目不放行")
+          "--issue 绑不到条目不放行、嵌套面也绑号且只发嵌套不写假陈述")
 
     # 变异自证：绑定判据必须有牙齿（#162）
     missed: list[str] = []
@@ -304,6 +401,21 @@ def main() -> int:
     if missed:
         raise SystemExit(1)
     print("✓ 绑定判据变异自证 2/2 全部转红")
+
+    # 变异自证（#208）：嵌套面的两处修复**必须各有牙齿**
+    missed2: list[str] = []
+    for name, mutate in (("嵌套面退回旧行为（issue 只写在「关联问题单」行）",
+                          _mutate_nested_face_old),
+                         ("门禁只校验根面（不校验嵌套面）", _mutate_root_face_only)):
+        f = run_nested_mutation(mutate)
+        if not f:
+            missed2.append(name)
+            print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
+        else:
+            print(f"✓ 变异「{name}」被抓住（{len(f)} 条断言转红）")
+    if missed2:
+        raise SystemExit(1)
+    print("✓ 嵌套面绑定变异自证 2/2 全部转红")
 
 
 if __name__ == "__main__":

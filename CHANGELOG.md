@@ -4,6 +4,39 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.45] — 2026-11-03
+- #208：只发嵌套模块时，嵌套 CHANGELOG 写进**假陈述**（父模块一并发布）+ 嵌套回执定位不到条目（fail-closed 门禁验错了那一份）
+
+  **① 假陈述**：只发嵌套模块（父仓本次**不发**新版）时，`format_bullets()` 的嵌套分支写
+  「随本次 train 的父模块一并发布（release_train 嵌套 train）」⇒ 这句话进了**已发布产物**
+  （Release 正文 + CHANGELOG）⇒ 读者以为父仓也一起发了。⇒ 改为如实说明
+  「随本次 train 一并发布（只发嵌套模块，父模块本次不发版）」。
+
+  **② 嵌套回执定位不到条目**：回执（`close_issue.py`）读版本节走
+  `gen_releases.changelog_section()` ⇒ **嵌套 tag 优先读 `<sub>/CHANGELOG.md`**
+  （文件不存在才回退根面）；而嵌套分支**丢弃 `--changelog` 的 bullet** ⇒ 嵌套版本节里
+  没有 issue 号 ⇒ 定位器 `entries=0` ⇒ 回执降级成「提到本 issue 但没绑到具体条目」
+  ⇒ 读者读不到「这条到底改了什么」。⇒ 现在把 issue 引用写进嵌套面的 **bullet**。
+
+  **③ fail-closed 门禁验错了那一份**：`check_new_section_binding()`（#162）**只验根面**
+  ⇒ 嵌套面（真正被回执读取的那一份）从没被验过 ⇒ 门禁给出的是**假保证**。
+  ⇒ 改为**逐面校验**（根面 + 嵌套面），任一面绑不上就中止发版。
+
+  **④ 顺带修一处假绿**：`release_train_selftest.py` 的用例3f 断言「只发嵌套 ⇒ 应当被
+  拦下」——那是 **#203 把守卫改成条件守卫之前**的旧行为；它之所以还绿，是因为 fixture
+  不是 git 仓、命令因**别的原因**退出 1 ⇒ **蒙对的**。⇒ 改为断言「require 全已发布时
+  **不得**被一刀切拦下」（放行/拒绝两分档由 `release_train_requires_selftest.py` 的
+  用例 11-14 覆盖，那层有牙齿）。
+
+  **影响面**：只改 `scripts/release_train.py`（`format_bullets` /
+  `check_new_section_binding` / `ensure_changelog` 的「版本节已存在」分支）与
+  `scripts/release_train_selftest.py`；不改判据（check f 依赖可解析）、不改
+  tag/检查/Release 流程、不改退出码语义。
+
+  **验证**：自测新增用例 4f/4g/4g2/4h 全绿；变异自证 2/2 全部转红（嵌套面退回旧行为
+  ⇒ 3 条转红；门禁只校验根面 ⇒ 1 条转红）；`release_train_requires_selftest.py`、
+  `close_issue_selftest.py`、`rerender_receipt_selftest.py` 仍全绿；`py_compile` 通过。
+
 ## [v0.1.44] — 2026-11-03
 - #205：`floor_claim_check_selftest --mutate` 的输出会让人误读成「自测挂了」（退出码其实是 0）
 

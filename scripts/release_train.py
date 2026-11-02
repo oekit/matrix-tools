@@ -478,7 +478,16 @@ def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: s
             body = f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
         else:
             # ★ 父模块本次不在 train 里 ⇒ 不写一个空版本号（否则出双空格文案）
-            body = "随本次 train 的父模块一并发布（release_train 嵌套 train）"
+            # ★★ 且**不得声称「父模块一并发布」**（#208）：只发嵌套时父仓本次
+            #    并不发版 ⇒ 这句话进了**已发布产物**（Release 正文 + CHANGELOG）
+            #    就是一条**假陈述** ⇒ 改为如实说明「父模块本次不发版」。
+            body = "随本次 train 一并发布（只发嵌套模块，父模块本次不发版）"
+        if issues:
+            # ★ issue 号必须落在这条 **bullet** 里（#208）：回执（close_issue）读的是
+            #   **嵌套 CHANGELOG** 的版本节（嵌套 tag 优先读 <sub>/CHANGELOG.md）⇒
+            #   issue 号只写在下面的「关联问题单」行 ⇒ 定位器 entries=0
+            #   ⇒ 回执降级成「提到本 issue 但没绑到具体条目」。
+            body += "（" + "、".join(issues) + "）"
     else:
         body = "\n- ".join(bullets)
     if issues:
@@ -544,12 +553,19 @@ def check_new_section_binding(bullets: list[str], repo: str, main_tag: str,
     ⚠️ 送检的正文要带上 "- " 前缀（insert_top 写进文件时就是 `- {bullet}`）——
     少了前缀，第一条就不是 bullet ⇒ 定位器看不到条目 ⇒ 误判成「没绑到」。
     """
-    root_body = "- " + format_bullets(bullets, False, repo, main_tag, issues)
-    bad = unbound_issues(root_body, issues)
-    if bad:
-        raise SystemExit(issue_binding_msg(
-            repo, main_tag, bad,
-            "新建的版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
+    if not issues:
+        return
+    # ★ **逐面校验**（#208）：只发嵌套模块时，回执（close_issue）读的是
+    #   **嵌套 CHANGELOG** 的版本节（`gen_releases.changelog_section`：嵌套 tag
+    #   优先读 `<sub>/CHANGELOG.md`，文件不存在才回退根面）⇒ **只验根面** = 给
+    #   「嵌套面没绑上」开了口子 ⇒ fail-closed 门禁给出的是**假保证**。
+    for face, nested_self in (("根面", False), ("嵌套面", True)):
+        body = "- " + format_bullets(bullets, nested_self, repo, main_tag, issues)
+        bad = unbound_issues(body, issues)
+        if bad:
+            raise SystemExit(issue_binding_msg(
+                repo, main_tag or "（本次 train 的嵌套模块）", bad,
+                f"新建的{face}版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
 
 
 def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
@@ -570,15 +586,27 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
             todo.append((path, heading))
     if not todo:
         if issues:
-            main_tag = next((t for n, _d, t in specs if n == "main"), "")
             from gen_releases import changelog_section
-            sec = changelog_section(str(root), main_tag, None) or ""
-            bad = unbound_issues(sec, issues)
-            if bad:
+            # ★ 逐个 spec 查（#208）：嵌套 tag 的回执读的是**嵌套 CHANGELOG** 的
+            #   版本节（`gen_releases.changelog_section`：先 <sub>/CHANGELOG.md，
+            #   文件不存在才回退根面）⇒ 必须按**回执同款**读法逐面查。
+            #   旧实现只查 `main_tag` 那一份 ⇒ 「只发嵌套」时 main_tag 为空 ⇒
+            #   查的是**空面** ⇒ 永远判成「没绑上」⇒ 误杀重跑。
+            bad_specs = []
+            for name, _d, tag in specs:
+                nested = None if name == "main" else name
+                version = tag.rsplit("/", 1)[-1]
+                sec = changelog_section(str(root), version, nested) or ""
+                bad = unbound_issues(sec, issues)
+                if bad:
+                    bad_specs.append((tag, bad))
+            if bad_specs:
+                tag0, bad0 = bad_specs[0]
                 raise SystemExit(issue_binding_msg(
-                    repo, main_tag, bad,
+                    repo, tag0, bad0,
                     "版本节已存在 ⇒ --issue 的关联问题单写不进去"))
-            print(f"[changelog] {repo} {main_tag} 的版本节已存在，且 "
+            print(f"[changelog] {repo} 的版本节已存在（"
+                  f"{'、'.join(t for _n, _d, t in specs)}），且 "
                   f"{'、'.join(issues)} 都能定位到条目 ⇒ 放行")
         return
     main_tag = next((t for n, _d, t in specs if n == "main"), "")
