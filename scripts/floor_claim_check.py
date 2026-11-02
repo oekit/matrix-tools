@@ -38,12 +38,20 @@
 
   初版此处写「CI 只 checkout 本仓且 `fetch-tags: false` ⇒ 全 org 扫描会全部
   UNVERIFIABLE ⇒ 不进 PR 门禁」——**复核班实测推翻**：matrix-tools 的 workflow 里
-  `fetch-tags: false` **grep 全 0**（`actions/checkout@v7` 默认即带 tag），且
-  `audit.yml` 的 audit job **逐仓 plain `git clone` 全矩阵**（实测新克隆 core 带
-  14 个 tag，含 v0.6.0 / v0.9.2 / v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在**
+  `fetch-tags: false` **grep 全 0**（**它根本不是 `actions/checkout` 的开关名** —— checkout
+  没有这个参数），且 `audit.yml` 的 audit job **逐仓 plain `git clone` 全矩阵**（实测新克隆
+  core 带 14 个 tag，含 v0.6.0 / v0.9.2 / v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在**
   ⇒ 全 org 扫描**可以**进 PR 门禁（现已真挂上，见 audit.yml 的 audit job）。
   ⇒ 真障碍不是「读不到 tag」，而是「读不到 **Release 正文**」——旧实现硬编码本地
   脚本路径 ⇒ 已改走仓内标准读取层 `ghsafe.gh_json`（CI 里靠 GH_TOKEN）。
+
+  ⚠️ **机制措辞订正（2026-11-03 二次复核）**：本段初版更正写「`actions/checkout@v7`
+  **默认即带 tag**」——**这句本身不准确**：`actions/checkout` 的 `fetch-depth` **默认为 1
+  = 浅克隆 ⇒ 不带 tag**（实测：`git clone --depth 1` ⇒ core **0 个 tag**；plain
+  `git clone` ⇒ 14 个 tag）⇒ **checkout 本身确实拿不到别仓 tag**。真正让 tag 树在 CI 里
+  存在的是 **audit job 逐仓 plain `git clone`**（绕开 checkout），**不是** checkout 的默认行为。
+  ⇒ **结论方向不变**（全 org 扫描能进 PR 门禁），**变的是机制归因**。
+  ⇒ 挂载形态的纪律：**要 tag 树 ⇒ 用 plain clone（或 checkout 加 `fetch-depth: 0`）**。
 
   ⇒ 门禁里仍保留**离线自测**（自造 fixture git 仓，不联网、不依赖工作区）：
   它的作用是证明**判据本身有牙齿**，与真实语料扫描是两件事。
@@ -526,7 +534,8 @@ def self_test(live: bool = False) -> int:
       * 「已被否定的引用」**不是**待核断言（见 `_disclaimed_spans`）⇒ 否则护栏
         会把「刚更正对的那条」判成假。
       * `--live` 才跑依赖工作区的用例（嵌套覆盖 / Release 正文）⇒ CI 不跑它
-        （CI 只 checkout 本仓，且 fetch-tags: false）。
+        （CI 只 checkout 本仓 ⇒ 默认浅克隆拿不到别仓 tag；真实语料扫描另由 audit
+        job 逐仓 plain `git clone` 承担）。
     """
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import floor_claim_check_selftest as st  # noqa: PLC0415 - 避免与 selftest 循环导入
