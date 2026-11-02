@@ -95,7 +95,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 
 | 脚本 | 作用 |
 |---|---|
-| `scripts/release_train.py` | **单仓发版一条命令**：`--changelog "描述"` 自动补版本节（置顶+预校验）→ PR → 等合并 → 检查（tag 查重/tidy/build/CHANGELOG/gofmt/golangci-lint）→ 按序 tag → Release；train 前自动拉齐 main，要求无在途登记 |
+| `scripts/release_train.py` | **单仓发版一条命令**：`--changelog "描述"` 自动补版本节（置顶+预校验）→ PR → 等合并 → 检查（tag 查重/tidy/build/CHANGELOG/gofmt/golangci-lint/**依赖可解析**）→ 按序 tag → Release；train 前自动拉齐 main，要求无在途登记。**依赖可解析**：被 tag 模块的每条 `github.com/oekit/*` require 必须**已发布**或**本 train 一起发版**——嵌套模块的 `replace ... => ../` 只对本仓自身构建有效，Go 忽略依赖里的 replace ⇒ 父仓版本没发布就发嵌套模块，下游消费方会直接解析失败（#148） |
 | `scripts/release_post.py` | **发版后一条命令**：目标仓版本行 PR → versions.json → oekit BOM 推荐组合 → audit → 手工待办（`release_train` 之后跑；`--bom-release` 自动打 BOM tag） |
 | `scripts/gen_releases.py` | GitHub Release 对账/回填：notes = CHANGELOG 同版本小节 + 该 tag go.mod 的矩阵依赖地板，`releases/latest` 全矩阵可解析 |
 | `scripts/gen_matrix_go.py` | 生成 `oekit` 仓 BOM 模块（`go get github.com/oekit/oekit@latest` 一次拉齐兼容组合）；`--check` 为 audit 门禁 |
@@ -132,6 +132,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 `align_floors_selftest.py` / `close_issue_selftest.py` / `dependabot_dirs_selftest.py` /
 `desc_count_selftest.py` / `gen_matrix_go_selftest.py` / `ghsafe_selftest.py` /
 `ledger_write_selftest.py` / `maintenance_check_selftest.py` / `release_train_selftest.py` /
+`release_train_requires_selftest.py` /
 `remote_reads_selftest.py` / `tag_cache_selftest.py` /
 `verify_release_units_selftest.py` / `verify_version_line_selftest.py`
 
