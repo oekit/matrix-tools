@@ -91,14 +91,12 @@ PR_REF_RE = re.compile(
 # ⚠️ 强形态与弱形态**用同一个正则的两支**（而不是分两趟扫）：分两趟扫会
 # 把「强形态」排在「弱形态」前面 ⇒ 一行里同时有 `#180` 与 `matrix-tools#181` 时，
 # 「这条 bullet 自己的号」会被判成 181（**位置序**才是对的：自己的号在前面）。
+# 弱形态那支带**左边界**（#172）：`#` 前面不能是词字符或 `#`
+# ⇒ `pkg#46` / `concurrency#56` 里那个号**不是**裸号（它们走强形态分支），
+# `##1620` 也不是（那是另一个号的一部分）。
 TOKEN_RE = re.compile(
     r"(?<![\w.#-])([A-Za-z0-9][A-Za-z0-9._-]*)#(\d+)\b"   # 强形态
     r"|(?<![\w#])#(\d+)\b")                                # 弱形态
-
-# **弱形态**：裸 `#N`。⚠️ 必须带**左边界**（#172）：`#` 前面不能是词字符或 `#`
-# ⇒ `pkg#46` / `concurrency#56` 里那个号**不是**裸号（它们走强形态分支），
-# `##1620` 也不是（那是另一个号的一部分）。
-WEAK_RE = re.compile(r"(?<![\w#])#(\d+)\b")
 
 class Hit(NamedTuple):
     """文本里一处号引用。"""
@@ -379,6 +377,10 @@ def load_allowlist(path: Path | None) -> list[dict]:
         if not any(e.get(k) for k in ("repo", "version", "num", "category", "bullet")):
             raise SystemExit(f"✗ allowlist 条目没有任何约束字段（{path}）：{e!r}"
                              "——无约束的条目会豁免一切告警")
+        if e.get("category") and e["category"] not in CATEGORIES:
+            # 类别名写错 ⇒ 这条豁免**永远匹配不上**（静默失效）⇒ 宁可报错。
+            raise SystemExit(f"✗ allowlist 条目的 category 不认识（{path}）："
+                             f"{e['category']!r}（合法值：{list(CATEGORIES)}）")
     return entries
 
 

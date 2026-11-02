@@ -22,7 +22,8 @@
 13. C11 `--json` 输出形状（机器可读）；
 14. C12 CLI 端到端（干净 ⇒ 0；有告警 ⇒ 非 0）；
 15. C13 版本节不存在 ⇒ **退出码 2**（读不到 ≠ 没有干净）；
-16. C14 `--nested` 嵌套节（子目录 CHANGELOG + 根 CHANGELOG 回退）。
+16. C14 `--nested` 嵌套节（子目录 CHANGELOG + 根 CHANGELOG 回退）；
+17. C15 allowlist 读不懂 / 类别名写错 ⇒ 报错退出（豁免**静默失效**比误报更糟）。
 
 变异自证（每条必须**精确转红**，否则这份断言没有牙齿）：
 
@@ -441,6 +442,31 @@ def run_all(root: Path, rid: str) -> list[tuple[str, str]]:
     if code2 == 0 or len(fs2) != 1:
         fail("C14", f"--nested 找不到子目录文件时应回退根 CHANGELOG 的 [sub/vX.Y.Z] 节，"
                     f"实得退出码 {code2}、{len(fs2)} 条告警")
+
+    # ── C15：allowlist 读不懂 / 类别名写错 ⇒ 报错退出（豁免**静默失效**比误报更糟）──
+    base = root / "c15"
+    write_repo(base, CL_CROSS)
+    bad_al = base / "bad.json"
+    bad_al.write_text(json.dumps({"version": 1, "entries": [
+        {"repo": REPO, "version": VERSION, "num": "36", "category": "cross_repoo",
+         "bullet": "#180"}]}, ensure_ascii=False), encoding="utf-8")
+    try:
+        code, out = run_main(["--repo", REPO, "--version", VERSION, "--num", NUM,
+                              "--allowlist", str(bad_al), "--json"], base)
+        fail("C15", f"allowlist 的类别名写错 ⇒ 这条豁免永远匹配不上（静默失效）"
+                    f"⇒ 必须报错退出，实得退出码 {code}")
+    except SystemExit as e:
+        if "category" not in str(e):
+            fail("C15", f"报错要说清是类别名不对：{e}")
+    broken = base / "broken.json"
+    broken.write_text("{不是 JSON", encoding="utf-8")
+    try:
+        run_main(["--repo", REPO, "--version", VERSION, "--num", NUM,
+                  "--allowlist", str(broken), "--json"], base)
+        fail("C15", "allowlist 不是合法 JSON ⇒ 必须报错退出（读不懂的豁免表 = 没有豁免）")
+    except SystemExit as e:
+        if "JSON" not in str(e):
+            fail("C15", f"报错要说清是 JSON 不合法：{e}")
 
     return fails
 
