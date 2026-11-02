@@ -167,8 +167,8 @@ require 的是 `v0.2.6`（已发布）⇒ **今天没有存量破坏**；但 mai
 v0.2.7（timertask PR #62，配套 #55 / #58 同型）⇒ **下一次发 timertask/redis 就会踩中**。
 其余 23 模块的全部 oekit require 都能解析到已发布的 tag ⇒ 本门禁不拦任何现有合法发版。
 
-**修法**：新增发版检查面 f——被 tag 模块的每条 `github.com/oekit/*` require，要么
-**已发布**，要么**本 train 一起发版**，两者都不是就不打这个 tag。四个实现要点：
+- #148：**修法**：新增发版检查面 f——被 tag 模块的每条 `github.com/oekit/*` require，要么
+  **已发布**，要么**本 train 一起发版**，两者都不是就不打这个 tag。四个实现要点：
 
 1. **只认 require，不认 replace**（replace 块里也是「路径 版本」的形状，混进来读到的
    就不是事实）；
@@ -612,8 +612,8 @@ hlog/v0.1.6 等嵌套 tag ⇒ logx/hlog、logx/kitexlog 的 hostVersion 消失 �
 
 两处修：
 
-1. 生成前 `_ensure_tags()`：缺的 tag 先 `git fetch --tags`（读不到就让调用方报）；
-2. `host_version()` 取不到 sha 时**明确告警**（打印本地缺哪个 tag），不再静默丢字段。
+- 生成前 `_ensure_tags()`：缺的 tag 先 `git fetch --tags`（读不到就让调用方报）；
+- #125：`host_version()` 取不到 sha 时**明确告警**（打印本地缺哪个 tag），不再静默丢字段。
 
 ### fix(tools)：release_post 的站点 versions.json PR 不排 auto-merge——半截链没人收
 
@@ -622,7 +622,7 @@ versions.json 那步没有 ⇒ 站点 PR CI 全绿后**静默悬着**，半截�
 
 实测 2026-10-28：站点 PR #104 全绿却一直 OPEN，只能手工合。
 
-修法：`land_pr(..., auto_merge=True)` ⇒ 与另两条路径一致。
+- #115：修法：`land_pr(..., auto_merge=True)` ⇒ 与另两条路径一致。
 
 ### fix(tools)：dependabot 目录门禁漏了反向检查——嵌套模块存在却没登记
 
@@ -726,7 +726,7 @@ go.mod 里 require 的是**模块路径** `github.com/cloudwego/kitex`。
 
 #### 改动
 
-- 新增 `_imports_module(imports, mod)`：按**模块前缀**判（`ip == mod or ip.startswith(mod + "/")`）；
+- #109：新增 `_imports_module(imports, mod)`：按**模块前缀**判（`ip == mod or ip.startswith(mod + "/")`）；
 - 新增 `_under_nested_module(repo_dir, rel)`：逐级向上找 `go.mod`，覆盖**任意深度**；
 - 顺带修 stdout 行缓冲：重定向/管道时 Python 默认块缓冲 ⇒ 34 个单元逐个
   `go list -m all` 的那几分钟里日志全是 0 字节 ⇒ 进程被杀/超时时一个字都留不下。
@@ -763,7 +763,7 @@ fatal: could not read Username for 'https://github.com'
 
 #### 改动
 
-- token 取 `secrets.MATRIX_AUDIT_TOKEN || secrets.OEKIT_PROJECT_TOKEN || secrets.GITHUB_TOKEN`；
+- #110：token 取 `secrets.MATRIX_AUDIT_TOKEN || secrets.OEKIT_PROJECT_TOKEN || secrets.GITHUB_TOKEN`；
 - push 显式塞 `http.extraheader`：
 
   ```bash
@@ -989,7 +989,7 @@ v0.8.5 的 `go.mod` 都是 `go 1.26.0`（触发条件：生成时本地 hertz cl
 
 改动：
 
-- `scripts/gen_matrix_go.py`：`go_floor()` **fail-loud**——取不到 `go.mod`、或 `go.mod`
+- #100：`scripts/gen_matrix_go.py`：`go_floor()` **fail-loud**——取不到 `go.mod`、或 `go.mod`
   里没有 `go` 指令 ⇒ 抛 SystemExit，错误消息里带可执行的修复步骤（`git fetch --tags`）
   与 issue 编号；**不再有任何默认地板**。这与 `matrix.remote_tags` 已有的口径一致
   （「读到空」≠「事实为空」，#79）。
@@ -1036,7 +1036,7 @@ v0.8.5 的 `go.mod` 都是 `go 1.26.0`（触发条件：生成时本地 hertz cl
 
 改动：
 
-- `scripts/maintenance_check.py`：base 解析认 `MATRIX_BASE`（与 `audit.py` 同口径），
+- #96：`scripts/maintenance_check.py`：base 解析认 `MATRIX_BASE`（与 `audit.py` 同口径），
   `--base` 可显式覆盖，新增 `--repos` 单仓盘点；**「读不到」与「真的没漂移」分开**——
   读不到的仓计入 `MAINTENANCE_UNDETERMINED`，且**不再打印「✓ 全矩阵地板零漂移」**
   （与 audit 在 #79 对 remote tag 的处理同口径：读不到 ≠ 事实为空）。
@@ -1143,7 +1143,7 @@ PR #94 把嵌套模块 9 → 11、发版单元 34 → 36，但 `BOM_RELEASE_UNIT
 
 #### 新增
 
-- `scripts/verify_version_line.py`——独立 oracle：自己解析 semver、自己读 git
+- #88：`scripts/verify_version_line.py`——独立 oracle：自己解析 semver、自己读 git
   原始输出（`git for-each-ref --sort=creatordate`），刻意不复用任何现有解析
   逻辑（共享逻辑就有共同盲区，matrix-tools#31 复审原则）；**版本线 =
   (路径前缀, module 路径)**——module 路径变更是「新模块」，新旧两条线各自单调
@@ -1216,7 +1216,7 @@ selftest job 加入新自测。
 
 #### 改法
 
-- `matrix.remote_tag_exists`：这条事实的**唯一**读法（走 `matrix.remote_tags`：
+- #85：`matrix.remote_tag_exists`：这条事实的**唯一**读法（走 `matrix.remote_tags`：
   canonical HTTPS 优先 → origin 兜底 → 失败抛 `RemoteReadError`）；
   `matrix.tag_exists` 收口到它，不再自带语义。
 - `release_train.tag_exists_remote` 改走它；`check_module` 接住 `RemoteReadError`
@@ -1263,7 +1263,7 @@ GitHub Release，下游 `go get github.com/oekit/oekit@latest` 是一次独立�
 
 #### 改法
 
-- `check_llms_units` 增加**伞仓 oracle**：llms.txt 必须含
+- #82：`check_llms_units` 增加**伞仓 oracle**：llms.txt 必须含
   `go get github.com/oekit/oekit@latest` 安装行，与嵌套模块同等要求。该函数已被
   `audit.py` 导入（`scripts/audit.py:23`）⇒ 改动自动进 CI 覆盖面（audit.yml 的
   audit job：PR 门禁 + 周巡检），无需新增 CI 接线。
@@ -1306,7 +1306,7 @@ GitHub Release，下游 `go get github.com/oekit/oekit@latest` 是一次独立�
 
 #### 改法
 
-- 新增 `matrix.remote_tags`：canonical HTTPS **优先**、clone origin URL 兜底
+- #79：新增 `matrix.remote_tags`：canonical HTTPS **优先**、clone origin URL 兜底
   ——两条路协议独立（SSH 抽风不影响结论；实测 SSH ≈6.5s/仓、HTTPS ≈1.2s/仓，
   优先 HTTPS 顺带把审计跑快约 5 倍）；两条都失败 ⇒ 抛 `RemoteReadError`。
 - `matrix.latest_tag(remote=True)`：读不到 ⇒ 抛错，不再返回 `None`。
@@ -1490,7 +1490,7 @@ audit 照样报绿**。本轮实测未触发降级（25/25 仓 `ls-remote` 全�
   ⇒ 回执静默丢失
 - 本轮实测：pkg#46 / pkg#48 / concurrency#56 三条回执全部没落地（三条 issue 上
   评论数均为 0）——**判据红得对，投递是坏的**
-- 修法：`issue_state` 读取时归一化成小写（`.lower()`），比较口径不变
+- #65：修法：`issue_state` 读取时归一化成小写（`.lower()`），比较口径不变
 
 ### test(close_issue)：自测 fixture 改用真实 gh 的取值形态
 
@@ -1600,7 +1600,7 @@ audit 照样报绿**。本轮实测未触发降级（25/25 仓 `ls-remote` 全�
   关键词在**段标题**里，条目行内没有（典型如 registry v0.4.0 的
   `- **SPI 包提升至模块根**`）。实测 24 模块中 5 模块 15 条 Breaking 未收录，
   registry/nns/tracing 的 breakingIndex 曾是**空数组**，而这正是下游必断的变更
-- 解析口径改为五路**确定性信号**并用：
+- #31：解析口径改为五路**确定性信号**并用：
   - A) 段标题即语义信号（`### Breaking` / `### BREAKING` / `### 不兼容` / `### 破坏性`），
      段内条目一律收录；conventional 破坏性标记段（标题以 `!` 结尾）同理
   - B) 条目正文含 breaking/不兼容/破坏性（覆盖无 Breaking 段的模块）
