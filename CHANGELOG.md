@@ -4,6 +4,51 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.27] — 2026-11-02
+
+### docs(changelog)：补记 v0.1.26 版本节漏掉的两处 fix（PR #144）
+
+⚠️ **这两处 fix 随 PR #144 已合入，实际随 v0.1.26 一起发布**；v0.1.26 的版本节
+当时只记了 #145/#146 的内容，把 PR #144 漏在版本记录之外 ⇒ 回执无法从 CHANGELOG
+指向「哪版落地了它」⇒ 此处补记（本版除本节外无其它变更）。
+
+### fix(tools)：align_floors 判地板读的是**本地** tag ⇒ 远端已发新版也判「零漂移」
+
+**现象**：2026-11-02 巡检（oekit/oekit#102 地板对齐维护轮）发现——middleware v0.13.6
+已发远端，但本地 clone 没有该 tag ⇒ `align_floors.py --plan` 按**本地** tag 判 ⇒
+**漏掉** hertz 的 `middleware v0.13.5 → v0.13.6`（以及 BOM 那处）⇒ 清单少 1 处，
+而工具自报「✓ 全矩阵地板零漂移」。
+
+**为什么危险**：本仓已有两处同类教训——bootstrap#50 的 `// indirect` 行漏抬、
+kitex#65 的嵌套 go.sum 滞后——两次都是「工具说对齐了，实际没对齐」。
+**假绿比报错更危险**：巡检会据此判「本轮无漂移」⇒ 地板漂移永久留在矩阵里。
+
+**修法**：`plan_repo` 改用 `latest_tag(dep, base, remote=True)`（走
+`matrix.remote_tags`，与 `gen_versions._remote_tags` 同源）；读不到远端就抛
+`RemoteReadError`，`main()` 捕获后以**退出码 2** 报「判不了」——
+**读不到 ≠ 没有漂移**，绝不静默降级成本地 tag（matrix-tools#79 的口径）。
+配套开远端 tag 缓存（`enable_tag_cache`）：全矩阵 24 仓 × 多个依赖，
+同一依赖只读一次远端，否则每次 ls-remote 都走 HTTPS，慢一个量级。
+
+### fix(tools)：remote_tags 一律先试 canonical ⇒ 读到的可能是**别的仓**的 tag
+
+**形态**：`remote_tags` 一律先试 `https://github.com/<org>/<repo>.git`
+（canonical = 按 org + 仓名**猜**出来的 URL），失败才回退 clone 自己的 origin。
+可这两者**不是一回事**的情形很常见：本地镜像 / 离线夹具、fork、改名后的仓。
+
+⇒ 这两种情形下 canonical 优先会**读到另一个仓的 tag**。实测：selftest 的假 `pkg` 仓
+读到的是**真 oekit/pkg** 的 tag（v0.5.0 → v0.31.1）⇒ 夹具既依赖网络
+（违背「不联网」的设计）又判错了对象。
+
+**读到的 tag 是「存在但不是事实」，比读不到更糟**——读不到会抛 `RemoteReadError`
+（fail-closed），读错会静默给出一个看起来正常的答案。
+
+**修法**：origin 是**本地路径**（`file://` 或绝对路径）时 **origin 优先**；其余情形
+（HTTP(S)/SSH origin）仍是 canonical 优先（走 gh 的 token、实测 HTTPS ≈1.2s/仓 ⇒
+审计快约 5 倍）。**真实矩阵仓行为零变化**（origin 就是 org 的 HTTPS 地址）。
+配套：`maintenance_check_selftest.py` 的假仓补一个**本地 bare origin** ⇒ 夹具读的
+是「这个假仓自己的」tag，且全程不联网。
+
 ## [v0.1.26] — 2026-11-02
 
 ### feat(tools)：审计新增阶段——「各仓自身 go.mod 地板 vs 远端最新 tag」
