@@ -13,6 +13,10 @@
   c. go build（GOWORK=off，外部用户视角）
   d. CHANGELOG 含本 tag（版本号必须来自即将发布的内容）
   e. gofmt + golangci-lint（本地可用时；与 org CI 同面——发完才发现红的事不再有）
+  f. **依赖可解析**：被 tag 模块的每条 github.com/oekit/* require 必须**已发布**
+     或**本 train 一起发版**——嵌套模块的 `replace ... => ../` 只对本仓自身构建
+     有效（Go 忽略依赖里的 replace）⇒ 父仓版本没发布就发嵌套模块，下游消费方
+     直接解析失败（matrix-tools#148）
   0. train 前自动 fetch + ff 拉齐 main（tag 永远打在远端 main 最新基线上，
      不再依赖"记得先 pull"——并行会话推过 main 也不落空）
 """
@@ -135,6 +139,132 @@ def check_module(repo: str, name: str, module_dir, tag: str, failures: list[str]
         cl = _repo_root(module_dir) / "CHANGELOG.md"
     if not cl.exists() or tag not in cl.read_text():
         failures.append(f"{name}: CHANGELOG.md 未包含 {tag}（版本号必须来自即将发布的内容）")
+
+
+# ---------- 被 tag 模块的 oekit 依赖必须「下游可解析」（#148）----------
+
+def parse_go_mod_requires(text: str) -> list[tuple[str, str]]:
+    """从 go.mod 文本解析 require 列表（**只认 require**，不认 replace）。
+
+    认两种写法：
+      · 单行：`require github.com/oekit/pkg v0.31.1`
+      · 块状：`require (` … `\tgithub.com/oekit/pkg v0.31.1 // indirect` … `)`
+
+    ⚠️ **必须排除 replace 块**：Go 的 replace 块里也是「路径 版本/目标」的形状，
+    混进来会把「被替换掉的依赖」当成真依赖 ⇒ 门禁读到的不是事实。
+    """
+    out: list[tuple[str, str]] = []
+    in_block = False
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("//"):
+            continue
+        # 去掉行尾注释（`// indirect` 等）——版本号在注释之前，不受影响
+        line = line.split("//", 1)[0].strip()
+        if not line:
+            continue
+        if in_block:
+            if line.startswith(")"):
+                in_block = False
+                continue
+            parts = line.split()
+            if len(parts) >= 2:
+                out.append((parts[0], parts[1]))
+            continue
+        if not line.startswith("require"):
+            continue
+        rest = line[len("require"):].strip()
+        if rest == "(":
+            in_block = True
+            continue
+        if rest:
+            parts = rest.split()
+            if len(parts) >= 2:
+                out.append((parts[0], parts[1]))
+    return out
+
+
+def required_tag_form(module_path: str, version: str) -> tuple[str, str]:
+    """require 的 module path → (目标仓, 目标 tag)。
+
+    Go 的子目录模块规则：
+      · 根模块     `github.com/oekit/<repo>`             ⇒ tag `<version>`
+      · 子目录模块 `github.com/oekit/<repo>/<sub...>`     ⇒ tag `<sub...>/<version>`
+
+    ⚠️ 子路径是**完整子路径**，不是最后一段：`logx/hlog` 的 tag 是 `hlog/v0.1.6`，
+    `kitex/observability/tracing/instrumentation/kitexotel` 的 tag 是
+    `observability/tracing/instrumentation/kitexotel/v0.7.4`。
+    用「最后一段」当前缀 ⇒ 读不到 tag ⇒ 门禁把「读不到」当成「没发布」。
+
+    ⚠️ 主版本后缀（`/v2`）不算子路径：根模块的主版本 tag 仍是 `v2.x.y`。
+    """
+    parts = module_path.split("/")
+    if len(parts) < 3 or parts[0] != "github.com" or parts[1] != "oekit":
+        raise ValueError(f"不是 oekit 模块路径：{module_path}")
+    target_repo = parts[2]
+    subs = parts[3:]
+    if subs and re.fullmatch(r"v[2-9]\d*", subs[-1]):
+        # 主版本模块：tag 就是版本本身（版本号自身已带 v2 前缀）
+        return target_repo, version
+    if not subs:
+        return target_repo, version
+    return target_repo, "/".join(subs) + "/" + version
+
+
+def check_requires_resolvable(repo: str, name: str, module_dir, planned_tags, failures,
+                               tag_exists=None) -> None:
+    """被 tag 的模块，其 go.mod 里每条 `github.com/oekit/*` require 必须**下游可解析**。
+
+    **为什么这条门禁是必需的（matrix-tools#148）**：
+
+    嵌套模块对父仓有 `replace github.com/oekit/<父仓> => ../`（指向本地源码）
+    ⇒ 本仓构建时 `go mod tidy -diff` / `go build` **全绿** ⇒ **看起来**没问题。
+    但 Go **忽略依赖里的 replace 指令**（replace 只在主模块的 go.mod 生效）
+    ⇒ 下游消费方解析这个嵌套模块时，会照着它的 go.mod 去模块代理取父仓的
+    require 版本 ⇒ 该版本若尚未发布 ⇒ 消费方直接「unknown revision」解析失败。
+
+    实测（2026-11-02，file:// 代理模拟，见 issue 正文）：嵌套模块 require 父仓
+    v1.9.9（未发布）⇒ 消费方 `go mod tidy` 失败；把父仓 v1.0.0 发布进同一代理
+    ⇒ 同样形态解析成功（对照组证明模拟本身有牙齿）。
+
+    ⇒ 判据：每条 oekit require 的版本，要么**已在远端发布**，要么**在本次 train 内
+    一起发版**；两者都不是 ⇒ 不许打这个 tag。
+
+    ⚠️ 远端读不到 ⇒ **fail closed**（读不到 ≠ 没发布，#85 口径）。
+    """
+    if tag_exists is None:
+        tag_exists = tag_exists_remote
+    gomod = module_dir / "go.mod"
+    if not gomod.exists():
+        return
+    try:
+        text = gomod.read_text(encoding="utf-8")
+    except OSError as e:  # noqa: BLE001 —— 读不到就报「判不了」，不猜
+        failures.append(f"{name}: 读不到 go.mod（{e}）⇒ 依赖可解析性判不了")
+        return
+    for path, ver in parse_go_mod_requires(text):
+        if not path.startswith("github.com/oekit/"):
+            continue
+        try:
+            target_repo, tag = required_tag_form(path, ver)
+        except ValueError as e:
+            failures.append(f"{name}: {e}")
+            continue
+        if (target_repo, tag) in planned_tags:
+            continue  # 本次 train 一起发 ⇒ 发完就有了
+        try:
+            ok = tag_exists(target_repo, tag)
+        except RemoteReadError as e:
+            failures.append(f"{name}: 远端 tag 读不到（{e}）⇒ 无法判定 "
+                            f"{target_repo}@{tag} 是否已发布 ⇒ 判不了，不许放行")
+            continue
+        if not ok:
+            failures.append(
+                f"{name}: 依赖 {path} {ver} 未发布（远端无 {target_repo}@{tag}）"
+                f" ⇒ 下游消费方解析本模块时会去代理取 {target_repo}@{tag} 而取不到"
+                f"（嵌套模块的 `replace ... => ../` 只对本仓自身构建有效，"
+                f"Go 忽略依赖里的 replace）⇒ 请先发 {target_repo} {ver}，"
+                f"或把它一起放进本次 train")
 
 
 # ---------- --changelog：版本节自动生成 + PR + 等合并 ----------
@@ -355,9 +485,12 @@ def main():
     failures: list[str] = []
     print("[check] gofmt + golangci-lint（仓级）")
     check_repo(root, failures)
+    # 本次 train 会发布的 tag（**带仓名**）：同名的 vX.Y.Z 在别的仓可能是另一个版本
+    planned_tags = {(repo, tag) for _n, _d, tag in specs}
     for name, d, tag in specs:
         print(f"[check] {tag}")
         check_module(repo, name, d, tag, failures)
+        check_requires_resolvable(repo, name, d, planned_tags, failures)
     if failures:
         print(f"\n❌ {len(failures)} 项检查失败，未打任何 tag：")
         for f in failures:
