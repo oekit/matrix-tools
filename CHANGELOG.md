@@ -4,6 +4,59 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.28] — 2026-11-02
+
+### fix(tools)：发版门禁补「依赖可解析」——父仓地板未发布不许发嵌套模块
+
+**现象**：`release_train.py` 的文档自己写着「嵌套同 train（嵌套小节自动写入根与子
+CHANGELOG，**父模块地板须已就位**）」，但**没有任何代码检查这一条** ⇒ 只发嵌套模块、
+不发父仓这件事会被静默放行。
+
+**为什么危险：本地全绿 ≠ 消费方能用**。嵌套模块对父仓有
+`replace github.com/oekit/<父仓> => ../`（指向本地源码），于是：
+
+- 本仓 `go mod tidy -diff` → **绿**
+- 本仓 `go build ./...` → **绿**
+- `release_train.py` 既有检查面（tag 查重 / tidy / build / CHANGELOG / gofmt / lint）→ **全绿**
+
+但 Go **忽略依赖里的 replace 指令**（replace 只在主模块的 go.mod 生效）⇒ 下游消费方
+解析该嵌套模块时，会照着它的 go.mod 去**模块代理**取父仓的 require 版本 ⇒ 该版本若
+尚未发布 ⇒ 消费方直接 `unknown revision`，根本装不上。破坏只在消费方显形，本仓这一侧
+全程无任何症状。
+
+**实测证据**（file:// 模块代理模拟）：
+
+| 场景 | 嵌套模块 require 父仓 | 父仓该版本已发布 | 消费方 `go mod tidy` |
+|---|---|---|---|
+| A | `v1.9.9` | 否 | **失败**：no such file or directory |
+| B（对照组） | `v1.0.0` | 是 | **成功**（exit 0） |
+
+对照组 B 证明这套模拟本身有牙齿（不是「怎么跑都失败」）；A 证明嵌套模块的
+`replace ... => ../` 没有保护住下游。
+
+**影响面**（全矩阵 24 模块逐条扫）：**只有一处**——`timertask/redis` require
+`timertask v0.2.7` 未发布（timertask 远端最新仍是 v0.2.6）。已发布的 `redis/v0.2.6`
+require 的是 `v0.2.6`（已发布）⇒ **今天没有存量破坏**；但 main 上的地板已前向引用到
+v0.2.7（timertask PR #62，配套 #55 / #58 同型）⇒ **下一次发 timertask/redis 就会踩中**。
+其余 23 模块的全部 oekit require 都能解析到已发布的 tag ⇒ 本门禁不拦任何现有合法发版。
+
+**修法**：新增发版检查面 f——被 tag 模块的每条 `github.com/oekit/*` require，要么
+**已发布**，要么**本 train 一起发版**，两者都不是就不打这个 tag。四个实现要点：
+
+1. **只认 require，不认 replace**（replace 块里也是「路径 版本」的形状，混进来读到的
+   就不是事实）；
+2. **tag 形态按 Go 的子目录模块规则算**：根模块 `github.com/oekit/<repo>` ⇒ tag
+   `<version>`；子目录模块 `github.com/oekit/<repo>/<sub...>` ⇒ tag `<sub...>/<version>`，
+   且子路径是**完整子路径**（`logx/hlog` 的 tag 是 `hlog/v0.1.6`，不是 `v0.1.6`）；
+3. **planned_tags 按 (仓, tag) 配对**——同名 `v0.2.6` 在别的仓是另一个东西；
+4. **远端读不到 ⇒ fail closed**（读不到 ≠ 已发布，#85 口径）。
+
+**自证**：新增 `scripts/release_train_requires_selftest.py`（纯函数、不联网、临时目录
+造 fixture）覆盖 10 组用例；**变异自证 4/4 逐条转红**（门禁恒绿 / 嵌套 tag 形态退化 /
+fail-open / replace 块当 require）；另在真实 timertask 仓做活体证明（只发嵌套 ⇒ 判红，
+父仓同 train ⇒ 放行）。该自测已接进 CI 的 `selftest` job ⇒ 判据的证明由 CI 持续跑，
+不再只是一次性的人工结论。README 脚本表与自测清单已同步。
+
 ## [v0.1.27] — 2026-11-02
 
 ### docs(changelog)：补记 v0.1.26 版本节漏掉的两处 fix（PR #144）
