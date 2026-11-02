@@ -729,6 +729,75 @@ def check_nested_module_floors():
 
 check_nested_module_floors()
 
+# ---------- 各仓自身 go.mod 的 oekit 地板 vs 远端最新 tag（oekit/oekit#102） ----------
+# 只认**根模块**形态 `github.com/oekit/<短名>`：嵌套模块形态
+# `github.com/oekit/<仓>/<子路径>` 归 check_nested_module_floors 按
+# 「子→父」方向管（那是发版正确性要求，口径不同，刻意不合并）。
+_FLOOR_REQ_RE = re.compile(
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)( // indirect)?$",
+    re.M)
+
+
+def scan_repo_floors(repo: str, root, latest_of) -> list[str]:
+    """扫一个仓内**每个** go.mod 的根模块地板，返回「落后远端最新 tag」的清单。
+
+    **纯函数**（不碰网络、不读全局状态）：`latest_of(dep) -> str | None`
+    由调用方注入 ⇒ 自测能用假仓 + 假 tag 表驱动，不需要真网络。
+
+    为什么覆盖**仓内每个 go.mod**（根 + 嵌套模块）：嵌套模块对**别的**根模块的
+    地板（如 bootstrap/nacos → concurrency）同样是漂移，且嵌套模块自己发版
+    不会自动带起它对别仓的根模块地板。
+    """
+    known = set(MODULES)
+    out: list[str] = []
+    for gomod in sorted(root.glob("**/go.mod")):
+        if ".git" in gomod.parts or "vendor" in gomod.parts:
+            continue
+        rel = str(gomod.relative_to(root))
+        for m in _FLOOR_REQ_RE.finditer(gomod.read_text()):
+            dep, ver = m.group(2), m.group(3)
+            if dep == repo:
+                continue          # 自己的 tag：本仓不与自己比
+            if dep not in known:
+                continue          # 非矩阵模块（无 tag 可比）⇒ 不判
+            lt = latest_of(dep)
+            if not lt:
+                continue          # 读不到由调用方记为漂移，这里不重复记
+            floor, cur = parse_semver(ver), parse_semver(lt)
+            if not floor or not cur:
+                out.append(f"{repo}/{rel}: 地板 {dep} {ver} 或最新 {lt} 不可解析")
+                continue
+            if floor < cur:
+                out.append(f"{repo}/{rel}: 地板 {dep} {ver} 落后远端最新 {lt}")
+    return out
+
+
+def check_repo_go_mod_floors():
+    """各仓 go.mod 里 `github.com/oekit/*` 的地板，不得落后于该模块的远端最新 tag。
+
+    为什么要有这道门禁（oekit/oekit#102，2026-11-01 提出 / 2026-11-02 落地）：
+    此前**各仓自身的 go.mod 地板没有任何自动判据**——阶段 6 只核对 **BOM 快照**
+    的新鲜度 ⇒ 2026-11-01 pkg v0.31.1 发布后，**18 处地板漂移**（跨 13 个仓）
+    只能靠人翻出来，issue 提了才有人动。
+
+    口径与阶段 6 同源：**各仓远端 tag**（本地 clone 陈旧 ⇒ 误报一片红），
+    版本**按数字**比（字符串排序会把 `v0.3.0` 排在 `v0.31.0` 之后）。
+
+    ⚠️ **判据独立于 align_floors.py**（那是整改工具，不是判据）：两者若共享
+    同一套解析逻辑，解析漏收时两边一起漏 ⇒ 门禁全绿、而矩阵实际有漂移
+    （与「门禁不得与被检对象共享判断逻辑」同族）。这里自己解析。
+    """
+    def latest_of(dep: str) -> str | None:
+        return remote_latest(dep)
+
+    for repo in MODULES:
+        root = repo_dir(repo, BASE)
+        for msg in scan_repo_floors(repo, root, latest_of):
+            check(False, f"{msg}（跑 align_floors.py --plan 抬升）")
+
+
+check_repo_go_mod_floors()
+
 # ---------- dependabot 目录存在性门禁（matrix-tools#68，承接 data#39） ----------
 # 背景与判据的完整说明在 scripts/dependabot_dirs.py（单一事实源，附自测）。
 # 这里只做「取各仓 dependabot.yml → 交给判据 → 塞进 issues」。
