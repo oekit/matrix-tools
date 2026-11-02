@@ -25,7 +25,11 @@
 16. C14 `--nested` 嵌套节（子目录 CHANGELOG + 根 CHANGELOG 回退）；
 17. C15 allowlist 读不懂 / 类别名写错 ⇒ 报错退出（豁免**静默失效**比误报更糟）；
 18. C16 多号 bullet 的归档必须覆盖**两侧**（以 180 为目标与以 181 为目标都要绿）；
-19. C17 `--write-allowlist` 按**约束键**去重（只差 reason 不重复入库）。
+19. C17 `--write-allowlist` 按**约束键**去重（只差 reason 不重复入库）；
+20. C18 `--all` 必须覆盖**嵌套模块**的 CHANGELOG（否则「全库干净」是假干净）；
+21. C19 根镜像节与嵌套文件**真镜像**时不得重复计数；
+22. C20 根里的镜像节（嵌套文件**没有**这一节）仍要扫；
+23. C21 单条模式与全库模式对同一嵌套节必须给**同一个键**（否则归档完还是红的）。
 
 变异自证（每条必须**精确转红**，否则这份断言没有牙齿）：
 
@@ -34,7 +38,8 @@
 - M2「不做 bullet 块限定（扫全文）」（整节当一条 bullet）⇒ 用例 C5、C6 转红；
 - M3「门禁完全失效」（一条都不报）⇒ 所有「期望有告警」的用例转红；
 - M4「归档只取一侧视角」（回到 `--all` 的老行为）⇒ 用例 C16 转红；
-- M5「去重按整条（含 reason）」⇒ 用例 C17 转红。
+- M5「去重按整条（含 reason）」⇒ 用例 C17 转红；
+- M6「`--all` 只扫根 CHANGELOG（不扫嵌套模块）」⇒ 用例 C18、C21 转红。
 
 ⇒ 每条变异的**预期转红集合**都被写死并逐条核对（红得**精确**：
 不该红的用例必须还绿着）。
@@ -163,6 +168,10 @@ def write_repo(base: Path, changelog: str, nested: str | None = None,
         sub = rdir / nested
         sub.mkdir(parents=True, exist_ok=True)
         (sub / "CHANGELOG.md").write_text(nested_changelog, encoding="utf-8")
+        # ★ 嵌套模块的判据 = 子目录里**同时有 go.mod 与 CHANGELOG.md**
+        (sub / "go.mod").write_text(
+            f"module github.com/example/{nested.replace('/', '-')}\n\ngo 1.24.0\n",
+            encoding="utf-8")
     return rdir
 
 
@@ -441,8 +450,9 @@ def run_all(root: Path, rid: str) -> list[tuple[str, str]]:
                     f"{len(fs)} 条告警")
     elif "sub" not in str(data.get("file", "")):
         fail("C14", f"--nested 应读子目录下的 CHANGELOG，实得 {data.get('file')}")
-    elif fs[0]["version"] != VERSION:
-        fail("C14", f"嵌套节头的版本应是 {VERSION}，实得 {fs[0]['version']}")
+    elif fs[0]["version"] != f"sub/{VERSION}":
+        fail("C14", f"嵌套节头的版本应限定成 sub/{VERSION}（与 --all 的键一致），"
+                    f"实得 {fs[0]['version']}")
     # 根文件回退形态：根 CHANGELOG 里的 `## [sub/v0.2.0]` 节
     base2 = root / "c14b"
     write_repo(base2, "## [sub/v0.2.0] — 2026-11-02\n\n"
@@ -529,6 +539,70 @@ def run_all(root: Path, rid: str) -> list[tuple[str, str]]:
     if not [e for e in entries if e.get("reason") == "手写的"]:
         fail("C17", "已存在的条目不该被机器写的条目顶掉（手写 reason 丢失）")
 
+    # ── C18：`--all` 必须覆盖**嵌套模块**的 CHANGELOG（否则是假干净）──
+    # 嵌套模块的版本节住在**自己的** CHANGELOG.md 里 ⇒ 只扫根 CHANGELOG ⇒
+    # 「全库 dry-run 干净」是**假干净**（嵌套侧的写回根本没见过）。
+    base = root / "c18"
+    write_repo(base, "## [v0.2.0] — 2026-11-02\n\n- #180：根里的干净条目\n",
+               nested="sub", nested_changelog=CL_CROSS)
+    code, out = run_main(["--repo", REPO, "--all", "--json"], base)
+    fs = findings_of(out)
+    if code == 0 or not fs:
+        fail("C18", f"--all 必须扫到**嵌套模块** CHANGELOG 里的违规（否则「全库干净」"
+                    f"是假干净），实得退出码 {code}、{len(fs)} 条告警")
+    else:
+        vs = {f["version"] for f in fs}
+        if vs != {"sub/v0.2.0"}:
+            fail("C18", f"嵌套模块的版本号应限定成 sub/v0.2.0（否则与 registry/nacos "
+                        f"的 v0.1.0 撞键 ⇒ 一个模块的告警被另一个模块的豁免放过去），"
+                        f"实得 {sorted(vs)}")
+
+    # ── C19：根镜像节与嵌套文件**真镜像**时不得重复计数 ──
+    base = root / "c19"
+    write_repo(base, "## [sub/v0.2.0] — 2026-11-02\n\n"
+                      "- #180：chore(tracing): 测试依赖的 sqlite 驱动换成纯 Go 实现（关联 gormx#36）\n",
+               nested="sub", nested_changelog=CL_CROSS)
+    code, out = run_main(["--repo", REPO, "--all", "--json"], base)
+    fs = findings_of(out)
+    if len(fs) != 1:
+        fail("C19", f"根镜像与嵌套文件真镜像时同一条告警只该报一次，实得 {len(fs)} 条")
+    elif fs[0]["version"] != "sub/v0.2.0":
+        fail("C19", f"镜像对的版本键应是 sub/v0.2.0，实得 {fs[0]['version']}")
+
+    # ── C20：根里的镜像节（嵌套文件**没有**这一节）仍要扫 ──
+    base = root / "c20"
+    write_repo(base, "## [sub/v0.9.9] — 2026-11-02\n\n"
+                      "- #180：只有根镜像有这一节（关联 gormx#36）\n",
+               nested="sub", nested_changelog=CL_CLEAN)
+    code, out = run_main(["--repo", REPO, "--all", "--json"], base)
+    fs = findings_of(out)
+    if code == 0 or len(fs) != 1:
+        fail("C20", f"根里的镜像节（嵌套文件没有这一节）也必须被扫到，"
+                    f"实得退出码 {code}、{len(fs)} 条告警")
+    elif fs[0]["version"] != "sub/v0.9.9":
+        fail("C20", f"根镜像节的版本键应是 sub/v0.9.9，实得 {fs[0]['version']}")
+
+    # ── C21：单条模式与全库模式对同一嵌套节必须给**同一个键** ──
+    #   ⇒ 否则「用 --all 归档」之后单条复核**照样红**（#183 修的那类坑）。
+    base = root / "c21"
+    write_repo(base, CL_CLEAN, nested="sub", nested_changelog=CL_CROSS)
+    al = base / "allow.json"
+    if al.exists():
+        al.unlink()
+    code, out = run_main(["--repo", REPO, "--nested", "sub", "--version", VERSION,
+                          "--num", NUM, "--json"], base)
+    fs = findings_of(out)
+    if not fs or fs[0]["version"] != f"sub/{VERSION}":
+        fail("C21", f"单条模式对嵌套节的版本键应是 sub/{VERSION}，实得 "
+                    f"{[f['version'] for f in fs]}")
+    run_main(["--repo", REPO, "--all", "--write-allowlist", str(al),
+              "--reason", "归档"], base)
+    code, out = run_main(["--repo", REPO, "--nested", "sub", "--version", VERSION,
+                          "--num", NUM, "--allowlist", str(al), "--json"], base)
+    if code != 0:
+        fail("C21", f"用 --all 归档后，单条复核必须变绿（两种模式同一个键），"
+                    f"实得退出码 {code}：{out[:200]}")
+
     return fails
 
 
@@ -541,6 +615,7 @@ _ORIG_SPLIT_BLOCKS = check_writeback.split_blocks
 _ORIG_JUDGE_BLOCK = check_writeback.judge_block
 _ORIG_ALL_PERSPECTIVE = check_writeback.all_perspective_findings
 _ORIG_ALLOWLIST_KEY = check_writeback.allowlist_key
+_ORIG_NESTED_MODULES = check_writeback.nested_modules
 
 
 def _mutate_existence_criterion():
@@ -644,6 +719,16 @@ def _mutate_dedupe_by_whole_entry():
     check_writeback.allowlist_key = allowlist_key
 
 
+def _mutate_no_nested_scan():
+    """M6：`--all` 只扫根 CHANGELOG（**不扫嵌套模块**）⇒ 「全库干净」是假干净。
+
+    嵌套模块的版本节住在**自己的** CHANGELOG.md 里 ⇒ 只扫根 ⇒ 嵌套侧的写回
+    根本没见过 ⇒ C18（必须抓到嵌套违规）与 C21（归档后单条复核必须变绿）
+    必须转红；C19/C20（只涉及根里的镜像节）必须**还绿着**。
+    """
+    check_writeback.nested_modules = lambda rdir: []
+
+
 MUTATIONS = [
     ("判据退化成子串 in 判存在（不问位置）", _mutate_existence_criterion, {"C6"}),
     ("不做 bullet 块限定（整节当一条 bullet）", _mutate_no_block_scope, {"C5", "C6"}),
@@ -652,11 +737,14 @@ MUTATIONS = [
     # ⚠️ C16/C17 在集合里：它们断言的是「归档/去重**依据门禁的检出结果**」⇒
     # 门禁一条都不报 ⇒ 归档自然是空的 ⇒ 必须转红。
     ("门禁完全失效（一条都不报）", _mutate_gate_disabled,
-     {"C1", "C2", "C3", "C4b", "C7", "C9", "C10", "C11", "C14", "C16", "C17"}),
+     {"C1", "C2", "C3", "C4b", "C7", "C9", "C10", "C11", "C14", "C16", "C17",
+      "C18", "C19", "C20", "C21"}),
     ("归档只取一侧视角（多号 bullet 的另一侧仍红）", _mutate_single_perspective,
      {"C16"}),
     ("去重按整条（含 reason）⇒ 同键条目重复入库", _mutate_dedupe_by_whole_entry,
      {"C17"}),
+    ("`--all` 只扫根 CHANGELOG（嵌套模块没进扫描 ⇒ 假干净）", _mutate_no_nested_scan,
+     {"C18", "C21"}),
 ]
 
 
@@ -680,6 +768,7 @@ def main() -> None:
                 check_writeback.judge_block = _ORIG_JUDGE_BLOCK
                 check_writeback.all_perspective_findings = _ORIG_ALL_PERSPECTIVE
                 check_writeback.allowlist_key = _ORIG_ALLOWLIST_KEY
+                check_writeback.nested_modules = _ORIG_NESTED_MODULES
             got = {cid for cid, _ in fs}
             if not got:
                 print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
