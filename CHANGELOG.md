@@ -51,6 +51,31 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   边界：只改 `scripts/floor_claim_check.py`（**仅注释**）、`scripts/release_train.py` + 其自测；
   不改发版流程语义、不影响任何既有 train 用法。
 
+  **③ `release_train` 必须支持「嵌套模块没有独立 CHANGELOG」的仓形态（发版链真实阻塞）**
+
+  `insert_top()` 直接 `path.read_text()` ⇒ 对**不存在的** CHANGELOG 路径抛
+  `FileNotFoundError` ⇒ **logx 仓根本发不了版**（版本节 PR 落不下去）。
+
+  根因：`release_train` 假定每个嵌套模块都有自己的 `CHANGELOG.md`（仓根写 `## [<sub>/<ver>]`
+  + 子目录写 `## [<ver>]`）⇒ 但这**不是全 org 的统一形态**——logx 的四个嵌套模块
+  （hlog / kitexlog / sink / hertzlog）**全部没有**独立 CHANGELOG（版本节只记在根，形态
+  `## [hlog/v0.1.6]`）⇒ `wanted_sections()` 产出的子目录面全部指向不存在的文件 ⇒ 必炸。
+  （校验面 d 本身是对的：嵌套模块的 tag 核对读的是**仓根** CHANGELOG ⇒ logx 形态下根里写
+  `## [hlog/v0.1.7]` 就能满足 ⇒ 只差「不要去读那个不存在的子文件」。）
+
+  修法：`insert_top()` **文件不存在 ⇒ 返回 False（跳过该面），不新建空文件**。
+  ⚠️ **不新建**是有意的：新建会造出「嵌套模块有独立 CHANGELOG」的**假形态** ⇒ 与 logx 的
+  既有惯例不一致 ⇒ 反而制造新的漂移（audit 的嵌套 CHANGELOG 门禁口径会打架）。
+
+  **自测（新增 3g）**：对不存在的路径调 `insert_top()` ⇒ 不得抛异常、须返回 False、且不得创建
+  文件。**变异自证**：恢复旧的 `path.read_text()` ⇒ 3g **精确转红**（FileNotFoundError + 返回值
+  断言双红）⇒ 有牙齿。
+  ⚠️ 留档：3g 第一版只断言返回值，变异时**整个自测被异常中断**（而不是断言失败）⇒ 按「变异没
+  转红 ⇒ 先查用例有没有触发条件」的纪律，改成**捕获异常**再判定 ⇒ 变异才真正被抓住。
+
+  回归：`release_train_selftest.py` 全绿 + 既有绑定判据变异自证 2/2 仍转红；已有 CHANGELOG 的仓
+  （registry / bootstrap / kitex / timertask）行为**逐字不变**。
+
 ## [v0.1.41] — 2026-11-03
 
 ### fix(tools)：地板类断言核验器的复核修正 + 全 org 扫描挂进 PR 门禁（PR #191）
