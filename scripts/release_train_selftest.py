@@ -34,6 +34,113 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import release_train  # noqa: E402
 
 
+def issue_binding_assertions() -> list[str]:
+    """#162：--issue 的引用绑不到条目 ⇒ **不许发版**（fail closed）。
+
+    旧实现只打印一行提示就继续走 ⇒ 版本节已存在时（同一版里修了两条 issue、
+    或版本节被别的 PR 先建出来）引用被**静默丢弃** ⇒ 回执定位不到本条修复。
+    """
+    failures: list[str] = []
+    sec_bound = "- fix(tools): 修好了（#162）\n\n关联问题单：matrix-tools#162。\n"
+    sec_only_line = "- fix(tools): 修好了\n\n关联问题单：matrix-tools#162。\n"
+
+    if release_train.unbound_issues(sec_bound, ["matrix-tools#162"]):
+        failures.append("用例4a：号在 bullet 里 ⇒ 不该判成未绑定")
+    if not release_train.unbound_issues(sec_only_line, ["matrix-tools#162"]):
+        failures.append("用例4b：号只在「关联问题单」行 ⇒ 必须判成未绑定"
+                        "（回执定位不到本条修复）")
+    if release_train.unbound_issues(sec_bound, []):
+        failures.append("用例4c：没给 --issue ⇒ 不该有任何未绑定")
+    if release_train.unbound_issues(sec_bound, None):
+        failures.append("用例4c2：--issue 为 None ⇒ 不该有任何未绑定")
+    if not release_train.unbound_issues(sec_bound, ["不是这种形态"]):
+        failures.append("用例4d：形态不认识的引用必须判成未绑定（fail closed）")
+    # ⚠️ 定位器的**弱形态只认数字**（`#N`），不认仓名 ⇒ 别的仓的号在本节里
+    # **也会**被判成绑定。这是 #153 已发布的行为（回执就是按号定位）⇒ 本判据
+    # **必须与回执同口径** ⇒ 不能在这里另立一套更严的规则（否则两端口径分裂）。
+    if release_train.unbound_issues(sec_bound, ["other-repo#162"]):
+        failures.append("用例4e：定位器按**号**定位（弱形态只认数字）⇒ "
+                        "别的仓的号在本节里也算绑定 ⇒ 判据必须与回执同口径")
+
+    # 版本节**已存在**且号绑不到 ⇒ 中止（且**不落 PR**）
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.99] — 2026-11-02\n\n- fix(tools): 修好了\n\n"
+            "关联问题单：matrix-tools#162。\n", encoding="utf-8")
+        specs = [("main", root, "v0.1.99")]
+        try:
+            release_train.ensure_changelog("matrix-tools", root, specs, ["修好了"],
+                                          True, ["matrix-tools#162"])
+        except SystemExit as e:
+            msg = str(e)
+            if "没有把" not in msg or "修法" not in msg:
+                failures.append(f"用例4f：中止信息不 actionable：{msg[:200]}")
+        else:
+            failures.append("用例4f：版本节已存在且号绑不到条目时**仍放行**"
+                            "（#162 的静默丢弃没修掉）")
+
+    # 版本节**已存在**且号绑得到 ⇒ 放行（不许误伤正常发版）
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.99] — 2026-11-02\n\n"
+            "- fix(tools): 修好了（#162）\n\n关联问题单：matrix-tools#162。\n",
+            encoding="utf-8")
+        specs = [("main", root, "v0.1.99")]
+        try:
+            release_train.ensure_changelog("matrix-tools", root, specs, ["修好了"],
+                                          True, ["matrix-tools#162"])
+        except SystemExit as e:
+            failures.append(f"用例4g：号绑得到却被误拦（不许误伤正常发版）：{str(e)[:200]}")
+    # 建节路径：新建的版本节必须**绑得到**这些 issue（#162）
+    # ⚠️ 这一条同时覆盖「送检正文要带 `- ` 前缀」这个坑：少了前缀第一条就不是
+    #    bullet ⇒ 定位器看不到条目 ⇒ 会把**正常**的写法误判成没绑到（误伤发版）。
+    try:
+        release_train.check_new_section_binding(["修好了"], "matrix-tools", "v0.1.99",
+                                                ["matrix-tools#162"])
+    except SystemExit:
+        pass
+    else:
+        failures.append("用例4h：新建版本节里号绑不到条目却放行（建节路径没判）")
+    try:
+        release_train.check_new_section_binding(["修好了（#162）"], "matrix-tools",
+                                                "v0.1.99", ["matrix-tools#162"])
+    except SystemExit as e:
+        failures.append(f"用例4i：bullet 里带了号却被误拦（不许误伤正常发版）：{str(e)[:200]}")
+    # dry-run 也要判（预览时就该看见这个问题，不能「dry-run 绿、apply 才炸」）
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        (root / "CHANGELOG.md").write_text("# Changelog\n\n", encoding="utf-8")
+        specs = [("main", root, "v0.1.99")]
+        try:
+            release_train.ensure_changelog("matrix-tools", root, specs, ["修好了"],
+                                          False, ["matrix-tools#162"])
+        except SystemExit:
+            pass
+        else:
+            failures.append("用例4j：dry-run 时号绑不到条目却放行"
+                            "（预览就该看见这个问题）")
+    return failures
+
+
+def run_binding_mutation(mutate) -> list[str]:
+    saved = release_train.unbound_issues
+    try:
+        mutate()
+        return issue_binding_assertions()
+    finally:
+        release_train.unbound_issues = saved
+
+
+def _mutate_never_unbound():
+    release_train.unbound_issues = lambda section, issues: []
+
+
+def _mutate_always_unbound():
+    release_train.unbound_issues = lambda section, issues: list(issues or [])
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -124,12 +231,29 @@ def main() -> int:
     if "跟随" not in got0:
         failures.append(f"用例3d：无 bullet 时应为跟随文案：{got0!r}")
 
+    failures.extend(issue_binding_assertions())
+
     if failures:
         print("✗ release_train CHANGELOG 环节自测未过：")
         for f in failures:
             print("  -", f)
         raise SystemExit(1)
-    print("✓ release_train CHANGELOG 环节自测通过：共享脚本定位得到（找不到会告警）、多条 bullet 不丢条目")
+    print("✓ release_train CHANGELOG 环节自测通过：共享脚本定位得到（找不到会告警）、多条 bullet 不丢条目、"
+          "--issue 绑不到条目不放行")
+
+    # 变异自证：绑定判据必须有牙齿（#162）
+    missed: list[str] = []
+    for name, mutate in (("绑定判据恒不报（永远放行）", _mutate_never_unbound),
+                         ("绑定判据恒报（永远阻断）", _mutate_always_unbound)):
+        f = run_binding_mutation(mutate)
+        if not f:
+            missed.append(name)
+            print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
+        else:
+            print(f"✓ 变异「{name}」被抓住（{len(f)} 条断言转红）")
+    if missed:
+        raise SystemExit(1)
+    print("✓ 绑定判据变异自证 2/2 全部转红")
 
 
 if __name__ == "__main__":

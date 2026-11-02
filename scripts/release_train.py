@@ -396,11 +396,82 @@ def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: s
     return body
 
 
+def unbound_issues(section: str, issues: list[str] | None) -> list[str]:
+    """版本节里**没有被绑到具体条目**的 issue 引用（#162）。
+
+    回执的「变更内容」按 issue 号在**版本节**里定位本条修复
+    （`gen_releases.locate_issue_entries`）⇒ 只有**绑到条目**（某条 bullet 及其续行
+    里提到该号）才定位得到；只在叙述文字里提到（例如只出现在「关联问题单」行）
+    ⇒ 回执只能提示「未绑定到具体条目」⇒ 读者读不到「这条到底改了什么」。
+
+    ⇒ 发版时用它判「这条 issue 的回执会不会讲成别的修复」：**判不出 ⇒ 不许发版**
+    （fail closed），而不是照发照关单。
+
+    ⚠️ 判据用**回执同款**定位器（不另写一套）——两边的判定口径分裂过一次
+    （#153 / #154 / #158 这一族都是同一个根：issue 号写在哪、两边读哪里的分裂）。
+    """
+    if not issues:
+        return []
+    from gen_releases import locate_issue_entries
+    out: list[str] = []
+    for ref in issues:
+        m = re.fullmatch(r"([a-z0-9.-]+)#(\d+)", ref)
+        if not m:
+            out.append(ref)                # 形态不认识 ⇒ 判为未绑定（fail closed）
+            continue
+        r, n = m.group(1), m.group(2)
+        try:
+            loc = locate_issue_entries(section, r, n)
+        except Exception:
+            out.append(ref)                # 判不了 ⇒ 不许放行（fail closed）
+            continue
+        if not loc.entries:
+            out.append(ref)
+    return out
+
+
+def issue_binding_msg(repo: str, tag: str, unbound: list[str], reason: str) -> str:
+    """--issue 的引用在目标版本节里绑不到条目时的**可执行**提示（#162）。"""
+    nums = [r.split("#", 1)[1] for r in unbound if "#" in r]
+    sample = ("（#%s）" % nums[0]) if nums else "（#<N>）"
+    return (
+        f"[changelog] ❌ {repo} {tag} 的版本节**没有把 {'、'.join(unbound)} 绑到具体条目**"
+        f"（{reason}）\n"
+        f"    ⇒ 这些 issue 的回执会讲成「该版本的全部变更」或别的修复"
+        f"（读者读不到本条）。\n"
+        f"    ⇒ 修法：把 issue 号写进**对应的 bullet**（如「……{sample}」）——\n"
+        f"      回执按号在版本节里**逐条目**定位，只在「关联问题单」行里点名**不算**。\n"
+        f"    ⇒ 若该版本**已经发布**：按**发布事实**把条目补记进那个版本节\n"
+        f"      （`git tag --contains <commit>` 可证修复确实在那个 tag 内；\n"
+        f"      **已发布的 tag 快照本身不动**——本仓先例：PR #151 写回 v0.1.21）。"
+    )
+
+
+def check_new_section_binding(bullets: list[str], repo: str, main_tag: str,
+                              issues: list[str] | None) -> None:
+    """建节路径：--issue 绑不到条目 ⇒ 中止发版（#162）。
+
+    ⚠️ 送检的正文要带上 "- " 前缀（insert_top 写进文件时就是 `- {bullet}`）——
+    少了前缀，第一条就不是 bullet ⇒ 定位器看不到条目 ⇒ 误判成「没绑到」。
+    """
+    root_body = "- " + format_bullets(bullets, False, repo, main_tag, issues)
+    bad = unbound_issues(root_body, issues)
+    if bad:
+        raise SystemExit(issue_binding_msg(
+            repo, main_tag, bad,
+            "新建的版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
+
+
 def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
                      issues: list[str] | None = None) -> None:
     """缺版本节时：生成（置顶）→ 预校验 → PR → 排程合并 → 等合并 → 拉齐。
     dry-run 只报告不落 PR。bullets 来自 --changelog（可多次，**全部写入**）。
-    issues 来自 --issue（#153）：关联问题单写进版本节 ⇒ 回执定位得到本条修复。"""
+    issues 来自 --issue（#153）：关联问题单写进版本节 ⇒ 回执定位得到本条修复。
+
+    #162：**--issue 的引用绑不到条目 ⇒ 不许发版**（fail closed）。
+    旧实现只打印一行提示就继续走 ⇒ 版本节已存在时（同一版里修了两条 issue、
+    或版本节被别的 PR 先建出来）引用被**静默丢弃** ⇒ 回执定位不到本条修复。
+    """
     wanted = wanted_sections(root, specs)
     todo = []
     for path, heading in wanted:
@@ -409,14 +480,28 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
             todo.append((path, heading))
     if not todo:
         if issues:
-            print("[changelog] 版本节已存在 ⇒ --issue 的关联问题单**没有**写进去"
-                  "（回执将只能提示「该版本节未提到本 issue」）")
+            main_tag = next((t for n, _d, t in specs if n == "main"), "")
+            from gen_releases import changelog_section
+            sec = changelog_section(str(root), main_tag, None) or ""
+            bad = unbound_issues(sec, issues)
+            if bad:
+                raise SystemExit(issue_binding_msg(
+                    repo, main_tag, bad,
+                    "版本节已存在 ⇒ --issue 的关联问题单写不进去"))
+            print(f"[changelog] {repo} {main_tag} 的版本节已存在，且 "
+                  f"{'、'.join(issues)} 都能定位到条目 ⇒ 放行")
         return
+    main_tag = next((t for n, _d, t in specs if n == "main"), "")
+
+    # 建节路径也要判：**新写的版本节**必须能定位到这些 issue，否则回执讲成别的修复。
+    # ⚠️ **dry-run 也要判**：预览时就该看见这个问题（否则「dry-run 绿、apply 才炸」
+    # ⇒ 又变成一种静默）。只影响显式带 --issue 的发版（不带 --issue ⇒ issues 为空
+    # ⇒ 本检查不触发 ⇒ 既有批量发版脚本不受影响）。
+    check_new_section_binding(bullets, repo, main_tag, issues)
     if not apply:
         for path, heading in todo:
             print(f"[changelog] dry-run：{path.name} 缺 {heading}（--apply 时自动生成并落 PR）")
         return
-    main_tag = next((t for n, _d, t in specs if n == "main"), "")
 
     # 写入必须发生在 land_pr 的分支上（edit 回调）——先写后落 PR 会被干净树守卫拒绝
     def edit():
