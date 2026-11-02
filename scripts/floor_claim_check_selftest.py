@@ -23,6 +23,9 @@
   M2  断言搬家：新区间（v0.9.2→v0.12.1）的 lifecycle ⇒ 期望 DIFFERS
   M3  读不到当成立：目标 tag 不存在 ⇒ 期望 UNVERIFIABLE（**不是** IDENTICAL）
   M4  包路径不存在 ⇒ 期望 UNVERIFIABLE
+  M13 ★ **同一串字、在两个版本节 ⇒ 真伪必须不同**（真伪绑「文本自己声明的区间」）
+  M13b ★ 同一串字 ⇒ 抽出的区间必须各自不同
+  M13c ★ **端到端** scan()：同一串字两节 ⇒ 提取 2 条、一成立一为假
 提取层（纯函数）：
   M5  断言词缺失 ⇒ 提取 0 条（不得静默判绿）
   M6  措辞变体（「字节级未变」）⇒ 提取 1 条
@@ -38,9 +41,13 @@
 用法：
     python3 scripts/floor_claim_check_selftest.py            # 离线（CI 跑这个）
     python3 scripts/floor_claim_check_selftest.py --live     # 加跑工作区依赖的用例
+    python3 scripts/floor_claim_check_selftest.py --mutate   # 变异自证（注入变异体
+                                                              #   ⇒ 比对「精确转红集合」：
+                                                              #   该红的红、不该红的还绿）
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -95,6 +102,16 @@ def build_fixture(root: Path) -> Path:
     return d
 
 
+# ── 用例级结果收集（供 --mutate 变异自证比对「精确转红集合」）──────────
+#   每个用例把自己的 ID 记在这里 ⇒ 变异体注入后跑一遍 ⇒ 比对哪些用例转红。
+_RESULTS: dict[str, bool] = {}
+
+
+def _record(cid: str, good: bool) -> bool:
+    _RESULTS[cid] = good
+    return good
+
+
 def run(live: bool = False) -> int:
     ok = True
     print("== 核验层变体（fixture 仓，离线）==")
@@ -110,29 +127,59 @@ def run(live: bool = False) -> int:
         for name, old, new, pkg, want, why in cases:
             verdict, detail = fcc.verify_claim(dep, old, new, pkg)
             good = verdict == want
-            ok &= good
+            ok &= _record(name, good)
             print(f"  {name} {'✅' if good else '❌'} want={want:13s} got={verdict:13s} | {why}")
             if not good:
                 print(f"       {detail[:160]}")
+
+        # M13 ★ **同一串字、在两个版本节 ⇒ 真伪必须不同**（真伪绑「文本自己声明的区间」）
+        #   真实语料原型：logx 的「logx 唯一使用的 core/lifecycle 逐字节未变，零行为风险」
+        #   —— 同一串字，在 v0.7.1 节（区间 core v0.6.0→v0.9.2）**成立**，
+        #     被照搬到 v0.8.1 节（区间 core v0.9.2→v0.12.1）⇒ **为假**。
+        #   ⇒ 若核验器只认「字符串」不认「区间」，同一句会被当成同一条断言 ⇒ 误判
+        #     （真话被当成假话，或假话被当成真话）。
+        #   区间取自 fixture：lifecycle 在 v0.6.0→v0.9.2 **相同**、
+        #   在 v0.9.2→v0.12.1 **不同** ⇒ 同一串字 ⇒ 一成立一为假。
+        _same_text = "logx 唯一使用的 core/lifecycle 逐字节未变，零行为风险"
+        v_hold, d_hold = fcc.verify_claim(dep, "v0.6.0", "v0.9.2", "lifecycle")
+        v_fake, d_fake = fcc.verify_claim(dep, "v0.9.2", "v0.12.1", "lifecycle")
+        good = (v_hold == "IDENTICAL" and v_fake == "DIFFERS")
+        ok &= _record("M13", good)
+        print(f"  M13 {'✅' if good else '❌'} ★同一串字两节 ⇒ 旧区间={v_hold}"
+              f"（期望 IDENTICAL） / 新区间={v_fake}（期望 DIFFERS）")
+        if not good:
+            print(f"       hold: {d_hold[:150]}")
+            print(f"       fake: {d_fake[:150]}")
+        # 同一串字 ⇒ **提取**出来的区间必须各自不同（否则核验层拿到的区间是错的）
+        _c_old = fcc.extract_claims(f"- build: core v0.6.0 → v0.9.2——{_same_text}")
+        _c_new = fcc.extract_claims(f"- build: core v0.9.2 → v0.12.1——{_same_text}")
+        good2 = (len(_c_old) == 1 and len(_c_new) == 1
+                 and _c_old[0]["old"] == "v0.6.0" and _c_new[0]["old"] == "v0.9.2")
+        ok &= _record("M13b", good2)
+        print(f"  M13b{'✅' if good2 else '❌'} 同一串字抽出**各自**的区间"
+              f"⇒ old={_c_old[0]['old'] if _c_old else None}"
+              f" / new={_c_new[0]['old'] if _c_new else None}")
+        if not good2:
+            print(f"       extracted old={_c_old} new={_c_new}")
 
     print("== 提取层变体（纯函数）==")
     # M5 断言词缺失 ⇒ 提取不出
     c = fcc.extract_claims("- build: core v0.9.2 → v0.12.1——抬地板带动修复传递")
     good = len(c) == 0
-    ok &= good
+    ok &= _record("M5", good)
     print(f"  M5  {'✅' if good else '❌'} 断言词缺失 ⇒ 提取 {len(c)} 条（期望 0，不得静默判绿）")
 
     # M6 措辞变体
     c = fcc.extract_claims("- build: core v0.9.2 → v0.12.1——core/lifecycle 字节级未变")
     good = len(c) == 1
-    ok &= good
+    ok &= _record("M6", good)
     print(f"  M6  {'✅' if good else '❌'} 措辞变体「字节级未变」⇒ 提取 {len(c)} 条（期望 1）")
 
     # M7 中文隔断形态
     c = fcc.extract_claims("- build: core 地板 v0.6.0 → v0.9.2——logx 唯一使用的 "
                            "core/lifecycle 逐字节未变，零行为风险")
     good = (len(c) == 1 and c[0]["old"] == "v0.6.0" and c[0]["new"] == "v0.9.2")
-    ok &= good
+    ok &= _record("M7", good)
     print(f"  M7  {'✅' if good else '❌'} 中文隔断形态「core 地板 v0.6.0 → v0.9.2」"
           f"⇒ 提取 {len(c)} 条")
 
@@ -140,7 +187,7 @@ def run(live: bool = False) -> int:
     c = fcc.extract_claims("- build: core v0.9.2 → v0.12.1——logx 唯一用到的 "
                            "core/lifecycle 逐字节未变")
     good = len(c) == 0 or c[0]["old"] == "v0.9.2"
-    ok &= good
+    ok &= _record("M8", good)
     print(f"  M8  {'✅' if good else '❌'} 版本号带 v 前缀（否则扫描路径会全判 UNVERIFIABLE）")
 
     # M9 ★ 否定语境：引用旧假句并声明其不成立 ⇒ 不是待核断言
@@ -151,7 +198,7 @@ def run(live: bool = False) -> int:
                   "**不成立**——该断言在 core v0.6.0 → v0.9.2 区间成立，被照搬到新区间却未复核")
     c = fcc.extract_claims(disclaimed)
     good = len(c) == 0
-    ok &= good
+    ok &= _record("M9", good)
     print(f"  M9  {'✅' if good else '❌'} ★否定语境（引用旧假句并声明其不成立）"
           f"⇒ 提取 {len(c)} 条（期望 0；否则护栏会把「刚更正对的那条」判成假）")
 
@@ -161,7 +208,7 @@ def run(live: bool = False) -> int:
              "；另：初版此处写「core/config 零行为风险」**不成立**")
     c = fcc.extract_claims(mixed)
     good = len(c) == 1
-    ok &= good
+    ok &= _record("M9b", good)
     print(f"  M9b {'✅' if good else '❌'} 同一 bullet 内**未被否定**的断言仍要提取"
           f"⇒ {len(c)} 条（期望 1）")
 
@@ -170,7 +217,7 @@ def run(live: bool = False) -> int:
             "  core/lifecycle 逐字节未变，抬地板只带动修复传递")
     c = fcc.extract_claims(cont)
     good = len(c) == 1 and c[0]["pkg"] == "lifecycle"
-    ok &= good
+    ok &= _record("M10", good)
     print(f"  M10 {'✅' if good else '❌'} 断言词只在**续行** ⇒ 提取 {len(c)} 条（期望 1）")
 
     # M11 别的断言类
@@ -178,24 +225,29 @@ def run(live: bool = False) -> int:
                    "——import 机械替换，Bind*/Fail 400 错误映射行为不变；"
                    "deps: pkg v0.9.3 → v0.10.0、新增 kitx v0.1.0")
     good = fcc.broad_candidates(other_class)
-    ok &= good
+    ok &= _record("M11", good)
     print(f"  M11 {'✅' if good else '❌'} 别的断言类（「行为不变」+ 两个版本号）"
           f"应被宽口径抓到（单列人工判读）⇒ {fcc.broad_candidates(other_class)}")
     c = fcc.extract_claims(other_class)
     good = len(c) == 0
-    ok &= good
+    ok &= _record("M11b", good)
     print(f"  M11b{'✅' if good else '❌'} 但**不得**被工具口径误判为同类断言（提取 0 条）⇒ {len(c)} 条")
 
     # M12 scan() 的仓级聚合：必须按**仓**算（有断言的仓不能因为最后一个来源面没断言
     #     而被算成「无断言」）—— 复核班实测发现的假干净（旧实现读文件级计数）
     ok &= run_scan_aggregate()
+    ok &= run_end_to_end_same_string()
 
     if live:
         ok &= run_live()
     else:
         print("（--live：跳过工作区依赖的用例：嵌套覆盖 / 节边界 / Release 正文）")
 
-    print(f"\n变异自证：{'✅ 全部精确转红' if ok else '❌ 有变体未按预期转红'}")
+    # ⚠️ 这里判的是「**所有用例是否通过**」，**不是**变异自证。
+    #   变异自证（注入变异体 ⇒ 哪些用例精确转红）走 `--mutate` 模式。
+    #   （措辞曾写成「变异自证：全部精确转红」⇒ 在 --mutate 运行时，
+    #     被变异体故意打红的用例会把这行打成 ❌ ⇒ 误读成「框架失败」⇒ 已改。）
+    print(f"\n自测结果：{'✅ 全部用例通过' if ok else '❌ 有用例未通过'}")
     return 0 if ok else 1
 
 
@@ -230,11 +282,60 @@ def run_scan_aggregate() -> bool:
         good = (res["scanned_repos"] == 2
                 and res["repos_without_claims"] == 1
                 and res["total_claims"] == 1)
-        ok &= good
+        ok &= _record("M12", good)
         print(f"  M12 {'✅' if good else '❌'} 仓级聚合：2 个仓里**1 个**无此类断言"
               f"（实得 scanned_repos={res['scanned_repos']}、"
               f"repos_without_claims={res['repos_without_claims']}、"
               f"total_claims={res['total_claims']}）")
+    return ok
+
+
+def run_end_to_end_same_string() -> bool:
+    """M13c：**端到端**跑 `scan()` —— 同一串字在两个版本节 ⇒ 一成立一为假。
+
+    M13 只直接调 `verify_claim`（核验层两态）；M13c 走**真实扫描路径**：
+    造一个含「同一串字两个版本节」的仓 ⇒ `scan()` 提取 2 条断言 ⇒
+    判定必须是 **一成立一为假**（不是两条一样）。
+    ⇒ 若 scan 路径上丢了「文本声明的区间」（只认字符串），这里会红。
+
+    依赖仓名必须是 `core`（与 bullet 里的 dep 一致）⇒ fixture 造好后改名。
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        dep = build_fixture(ws)
+        (ws / "core").mkdir()
+        for item in dep.iterdir():          # fixture-dep → core
+            shutil.move(str(item), str(ws / "core" / item.name))
+        repo = ws / "logx"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n"
+            "## [v0.7.1] — 2026-10-19\n\n"
+            "- build: core 地板 v0.6.0 → v0.9.2——logx 唯一使用的 "
+            "core/lifecycle 逐字节未变，零行为风险\n\n"
+            "## [v0.8.1] — 2026-11-03\n\n"
+            "- build: 矩阵内依赖地板对齐：core v0.9.2 → v0.12.1——logx 唯一使用的 "
+            "core/lifecycle 逐字节未变，零行为风险\n",
+            encoding="utf-8")
+        old_ws = fcc.WORKSPACE
+        fcc.WORKSPACE = ws
+        try:
+            res = fcc.scan(include_releases=False)
+        finally:
+            fcc.WORKSPACE = old_ws
+        verdicts = sorted(f["verdict"] for f in res["findings"])
+        good = (len(res["findings"]) == 2
+                and verdicts == ["DIFFERS", "IDENTICAL"]
+                and res["repos_without_claims"] == 0
+                and res["total_claims"] == 2)
+        ok &= _record("M13c", good)
+        print(f"  M13c{'✅' if good else '❌'} ★端到端 scan()：同一串字两节 ⇒ "
+              f"判定={verdicts} 提取={res['total_claims']} 条、"
+              f"无断言仓={res['repos_without_claims']}（期望 2 条 / [DIFFERS, IDENTICAL] / 0）")
+        for f in res["findings"]:
+            print(f"        · {f['section']:<12} {f['old']} → {f['new']}  "
+                  f"{f['pkg']:<12} {f['verdict']}")
     return ok
 
 
@@ -247,7 +348,7 @@ def run_live() -> bool:
         for rel, _ in fcc.nested_changelogs(rd):
             nested_all.append((rd.name, rel))
     good = len(nested_all) == 7
-    ok &= good
+    ok &= _record("L1", good)
     print(f"  L1 {'✅' if good else '❌'} 嵌套模块 CHANGELOG 应被枚举到 7 份，"
           f"实得 {len(nested_all)} 份：{[f'{r}/{p}' for r, p in nested_all]}")
 
@@ -257,7 +358,7 @@ def run_live() -> bool:
         v081 = dict(rels).get("v0.8.1", "")
         c = fcc.extract_claims(v081)
         good = len(c) == 0
-        ok &= good
+        ok &= _record("L2", good)
         print(f"  L2 {'✅' if good else '❌'} logx v0.8.1 的 **Release 正文**（已更正）"
               f"⇒ 提取 {len(c)} 条断言（期望 0：它声明旧句不成立，不再是待核断言）")
     except Exception as e:  # noqa: BLE001 - 网络不可用时只提示，不掩盖其它用例
@@ -265,7 +366,96 @@ def run_live() -> bool:
     return ok
 
 
+
+# ── 变异自证（--mutate）─────────────────────────────────────────────────
+#   纪律：「0 告警」不是证据，「变异能转红」才是。
+#   每个变异体**真的改掉被检行为**，并写死它**应该**让哪些用例转红
+#   ⇒ 跑完逐条核对（转红必须**精确**：不该红的用例必须还绿着）。
+_ORIG_EXTRACT = fcc.extract_claims
+
+
+def _mutate_extract_ignores_old_range():
+    """M13 靶子：提取层**丢掉文本声明的 old 区间** ⇒ 同一串字两节抽出同一个区间
+    ⇒ 「真伪绑区间」这条判据就废了（真话会被当成假话，或反过来）。"""
+    def patched(bullet_text: str):
+        out = _ORIG_EXTRACT(bullet_text)
+        for c in out:
+            c["old"] = "v9.9.9"   # ★ 无论文本声明什么区间，一律当成这个区间起比
+        return out
+    return patched
+
+
+def _mutate_verify_ignores_range():
+    """核验层**忽略文本声明的区间** ⇒ 永远拿同一个 tag 比 ⇒ 同一串字两节判成一样。"""
+    orig = fcc.verify_claim
+
+    def patched(dep_dir, old, new, pkgpath):
+        return orig(dep_dir, "v0.6.0", "v0.6.0", pkgpath)
+    return patched
+
+
+def _mutate_verify_always_identical():
+    """核验层**永远判成立** ⇒ 同一串字两节都判 IDENTICAL ⇒ 端到端路径必须转红。"""
+    def patched(dep_dir, old, new, pkgpath):
+        return "IDENTICAL", "变异：假装永远成立"
+    return patched
+
+
+MUTATIONS = [
+    # ⚠️ **预期转红集合必须按「该变异真的破坏了谁」写死**，不能只写自己那条：
+    #   多红是**正确行为**（变异确实同时破坏了那些用例）⇒ 漏写反而会被框架判成
+    #   「转红不精确」⇒ 逼人把集合写对。
+    # ① 提取层丢掉 old 区间 ⇒ M7 / M8（断言 old 区间）+ M13b（抽各自区间）
+    #    + M13c（端到端 scan() 也走提取层）⇒ 全红。
+    ("提取层丢掉文本声明的 old 区间（同一串字两节变成同一条）",
+     _mutate_extract_ignores_old_range, {"M7", "M8", "M13b", "M13c"}),
+    # ② 核验层忽略区间（永远拿同一个 tag 比）⇒ 所有**走 verify_claim** 的用例都受影响：
+    #    C0 仍绿（它本就要 IDENTICAL）⇒ M1 / M2 / M3（判定翻转）+ M13 / M13c。
+    ("核验层忽略文本声明的区间（永远拿同一个 tag 比）",
+     _mutate_verify_ignores_range, {"M1", "M2", "M3", "M13", "M13c"}),
+    # ③ 核验层永远判成立 ⇒ 凡期望非 IDENTICAL 的都翻转 ⇒ M1 / M2 / M3 / M4
+    #    （M4 期望 UNVERIFIABLE）+ M13 / M13c；C0 仍绿（本就期望 IDENTICAL）。
+    ("核验层永远判成立（同一串字两节都判真）",
+     _mutate_verify_always_identical, {"M1", "M2", "M3", "M4", "M13", "M13c"}),
+]
+
+
+def run_mutations() -> int:
+    """跑变异自证：注入每个变异体 ⇒ 比对「精确转红集合」。"""
+    ok = True
+    for i, (name, mutate, expect) in enumerate(MUTATIONS):
+        _RESULTS.clear()
+        saved_extract = fcc.extract_claims
+        saved_verify = fcc.verify_claim
+        try:
+            if mutate is _mutate_extract_ignores_old_range:
+                fcc.extract_claims = mutate()
+            else:
+                fcc.verify_claim = mutate()
+            run(live=False)
+        finally:
+            fcc.extract_claims = saved_extract
+            fcc.verify_claim = saved_verify
+        got = {cid for cid, good in _RESULTS.items() if not good}
+        if not got:
+            print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
+            ok = False
+            continue
+        if got != expect:
+            print(f"✗ 变异「{name}」转红得**不精确**：")
+            print(f"    预期转红：{sorted(expect)}")
+            print(f"    实得转红：{sorted(got)}")
+            print(f"    多红：{sorted(got - expect)}／漏红：{sorted(expect - got)}")
+            ok = False
+            continue
+        print(f"✓ 变异「{name}」被抓住（精确转红 {sorted(got)}）")
+    if ok:
+        print(f"✓ 变异自证 {len(MUTATIONS)}/{len(MUTATIONS)} 全部**精确**转红")
+    return 0 if ok else 1
+
 def main() -> int:
+    if "--mutate" in sys.argv:
+        return run_mutations()
     live = "--live" in sys.argv
     return run(live=live)
 
