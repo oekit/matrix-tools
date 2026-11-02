@@ -139,6 +139,11 @@ CHANGELOG_TWO = """## [v0.19.0] — 2026-10-21
 """
 
 
+# **动作痕迹标记**（与内容形态无关）：幂等判据只认它。
+# ⚠️ 这里写**字面量**（不引用被测模块的常量）⇒ 契约由测试自己钉住。
+RENDER_MARK = "<!-- rerendered-by matrix-tools -->"
+
+
 def old_receipt(tag: str = "v0.19.0") -> str:
     """一条 **pre-#153 形态**的历史回执（「变更内容」= 整段版本节）。"""
     return (
@@ -157,9 +162,14 @@ def old_receipt(tag: str = "v0.19.0") -> str:
     )
 
 
-def new_receipt(tag: str = "v0.19.0") -> str:
-    """一条 **#153 形态**的回执（已按 issue 号定位过）。"""
-    return (
+def new_receipt(tag: str = "v0.19.0", marked: bool = True) -> str:
+    """一条 **#153 形态**的回执（已按 issue 号定位过）。
+
+    - `marked=True`  = **已被本工具重渲染过**（带动作痕迹标记 ⇒ 应幂等跳过）；
+    - `marked=False` = 旧工具（v0.1.33）的产物：**只有内容形态、没有标记**
+      ⇒ 内容形态**不能**当幂等判据（定位不到时压根没有「**本条修复**」）。
+    """
+    body = (
         f"已在 `{tag}` 修复并发布 ✅\n"
         "\n"
         "## 变更内容\n"
@@ -170,6 +180,9 @@ def new_receipt(tag: str = "v0.19.0") -> str:
         "\n"
         f"Release: https://github.com/oekit/pkg/releases/tag/{tag}\n"
     )
+    if marked:
+        body += "\n" + RENDER_MARK + "\n"
+    return body
 
 
 def make_env(tmp: Path, suffix: str, comments: list[dict], release_body: str,
@@ -275,7 +288,7 @@ def run_all(tmp: Path, rid: str) -> list[str]:
         failures.append("用例2 回执写了「不含本条修复」——那是关于版本内容的"
                         "**事实断言**，与事实可能相反（#158）")
 
-    # ── 用例 3：已是 #153 形态 ⇒ 幂等跳过 ──
+    # ── 用例 3：已带**动作痕迹标记** ⇒ 幂等跳过（判据与「能否定位」无关）──
     env, cfile, prec, _ = make_env(
         tmp, f"{rid}-c3",
         [{"id": 902, "body": new_receipt(), "html_url": "https://example.invalid/c/902"}],
@@ -284,9 +297,32 @@ def run_all(tmp: Path, rid: str) -> list[str]:
     if not ok:
         failures.append(f"用例3 期望成功返回，实得失败：{msg[:200]}")
     if prec.exists() and prec.read_text(encoding="utf-8").strip():
-        failures.append("用例3 已是 #153 形态的回执必须幂等跳过（不该再改写）")
+        failures.append("用例3 已重渲染过（带标记）的回执必须幂等跳过（不该再改写）")
     if "跳过" not in msg:
         failures.append(f"用例3 期望报「跳过」，实得：{msg[:200]}")
+
+    # ── 用例 3b：旧工具的产物（**只有内容形态、没有标记**）⇒ 允许重渲一次并补上标记，
+    #    之后必须幂等（内容形态不能当幂等判据：定位不到时压根没有「**本条修复**」）──
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c3b",
+        [{"id": 912, "body": new_receipt(marked=False),
+          "html_url": "https://example.invalid/c/912"}],
+        rel_body, CHANGELOG_BOUND)
+    ok, msg = call(env, "pkg", "45")
+    if not ok:
+        failures.append(f"用例3b 重渲染失败：{msg[:200]}")
+    if "跳过" in msg:
+        failures.append("用例3b 旧产物没有动作痕迹标记 ⇒ 不该被当成「已重渲染」而跳过"
+                        "（那是**内容形态**判据的错：定位不到时压根没有「**本条修复**」）")
+    body3b = patched_body(cfile, 912)
+    if body3b.count(RENDER_MARK) != 1:
+        failures.append(f"用例3b 重渲染后应有且仅有 1 处动作痕迹标记，实得 {body3b.count(RENDER_MARK)}")
+    ok2, msg2 = call(env, "pkg", "45")
+    if "跳过" not in msg2:
+        failures.append(f"用例3b 补上标记后必须幂等跳过，实得：{msg2[:160]}")
+    patches3b = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches3b) != 1:
+        failures.append(f"用例3b 两次跑下来 PATCH 应恰好 1 次，实得 {len(patches3b)}")
 
     # ── 用例 4：没有回执 ⇒ 明确失败（不许当没事） ──
     env, _cfile, prec, _ = make_env(
@@ -351,6 +387,84 @@ def run_all(tmp: Path, rid: str) -> list[str]:
     if "预览" not in msg:
         failures.append(f"用例7 期望报「预览」，实得：{msg[:200]}")
 
+    # ── 用例 8：warn 形态（定位不到）⇒ 重渲染后必须**幂等**（第二次跳过，不再 PATCH）──
+    # 旧判据是「正文含 `**本条修复**`」⇒ warn 形态产物**不含**它 ⇒ 重跑不跳过
+    # ⇒ 同一评论被**重复 PATCH**（内容相同、但重复写；批量场景下还会连带覆盖备份）。
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c8",
+        [{"id": 908, "body": old_receipt(), "html_url": "https://example.invalid/c/908"}],
+        rel_body, CHANGELOG_NARRATIVE)
+    ok, msg = call(env, "pkg", "45")
+    if not ok:
+        failures.append(f"用例8 第一次重渲染失败：{msg[:200]}")
+    body8 = patched_body(cfile, 908)
+    if "未绑定到具体条目" not in body8:
+        failures.append(f"用例8 期望走 warn 分支（只在叙述文字里提到），实得：{body8[:200]}")
+    if body8.count(RENDER_MARK) != 1:
+        failures.append(f"用例8 warn 形态也必须写动作痕迹标记（幂等判据与能否定位无关），"
+                        f"实得 {body8.count(RENDER_MARK)} 处")
+    ok2, msg2 = call(env, "pkg", "45")
+    if "跳过" not in msg2:
+        failures.append(f"用例8 warn 形态必须**幂等跳过**（旧判据在这里失效 ⇒ 重复 PATCH），"
+                        f"实得：{msg2[:160]}")
+    patches8 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches8) != 1:
+        failures.append(f"用例8 两次跑下来 PATCH 应恰好 1 次，实得 {len(patches8)}：{patches8}")
+
+    # ── 用例 9：旧回执**引用的版本节正文里**出现「**本条修复**」⇒ 不许被误判成「已重渲染」──
+    # 旧判据是**子串**匹配 ⇒ 旧回执正文里**引用**到这四个字 ⇒ 被当成「已重渲染」
+    # ⇒ **静默跳过** ⇒ 该改的没改（方向与用例 8 相反：不是重复写，是**漏改**）。
+    QUOTED = (
+        "已在 `v0.19.0` 修复并发布 ✅\n"
+        "\n"
+        "## 变更内容\n"
+        "\n"
+        "### 修好了某件事\n"
+        "\n"
+        "**本条修复**（在 `v0.19.0` 的版本节里定位到）：\n"
+        "\n"
+        "- #45：被引用的版本节正文里的另一条内容\n"
+        "\n"
+        "Release: https://github.com/oekit/pkg/releases/tag/v0.19.0\n"
+    )
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c9",
+        [{"id": 909, "body": QUOTED, "html_url": "https://example.invalid/c/909"}],
+        rel_body, CHANGELOG_BOUND)
+    ok, msg = call(env, "pkg", "45")
+    if not ok:
+        failures.append(f"用例9 重渲染失败：{msg[:200]}")
+    if "跳过" in msg:
+        failures.append("用例9 引用的版本节正文里出现「**本条修复**」⇒ **不许**被当成"
+                         "「已重渲染」而跳过（子串判据 ⇒ 该改的没改）")
+    patches9 = prec.read_text(encoding="utf-8").split() if prec.exists() else []
+    if len(patches9) != 1:
+        failures.append(f"用例9 期望恰好 PATCH 1 次，实得 {len(patches9)}：{patches9}")
+    body9 = patched_body(cfile, 909)
+    if body9.count(RENDER_MARK) != 1:
+        failures.append(f"用例9 重渲染后应有且仅有 1 处动作痕迹标记，实得 {body9.count(RENDER_MARK)}")
+
+    # ── 用例 10：动作痕迹标记必须**恰好一份**（--force 重渲不许叠成两份）──
+    env, cfile, prec, _ = make_env(
+        tmp, f"{rid}-c10",
+        [{"id": 910, "body": old_receipt(), "html_url": "https://example.invalid/c/910"}],
+        rel_body, CHANGELOG_BOUND)
+    ok, msg = call(env, "pkg", "45")
+    if not ok:
+        failures.append(f"用例10 重渲染失败：{msg[:200]}")
+    body10 = patched_body(cfile, 910)
+    if body10.count(RENDER_MARK) != 1:
+        failures.append(f"用例10 重渲染产物里应有且仅有 1 处动作痕迹标记，实得 {body10.count(RENDER_MARK)}")
+    ok, msg = call(env, "pkg", "45", force=True)
+    if not ok:
+        failures.append(f"用例10 --force 重渲失败：{msg[:200]}")
+    body10b = patched_body(cfile, 910)
+    if body10b.count(RENDER_MARK) != 1:
+        failures.append(f"用例10 --force 重渲后标记仍应恰好 1 处（不许叠加），实得 {body10b.count(RENDER_MARK)}")
+    ok, msg = call(env, "pkg", "45")
+    if "跳过" not in msg:
+        failures.append(f"用例10 带标记的回执再次跑必须幂等跳过，实得：{msg[:160]}")
+
     return failures
 
 
@@ -361,7 +475,6 @@ def run_all(tmp: Path, rid: str) -> list[str]:
 _ORIG = {
     "rebuild_body": rerender_receipt.rebuild_body,
     "build_change_content": rerender_receipt.build_change_content,
-    "NEW_SHAPE_MARK": rerender_receipt.NEW_SHAPE_MARK,
     "split_receipt": rerender_receipt.split_receipt,
 }
 
@@ -378,9 +491,39 @@ def _mutate_pre153_rendering():
         lambda sec, repo, num, tag, evidence: sec or "")
 
 
-def _mutate_no_idempotency():
-    """M3：幂等检查失效（已是 #153 形态也照样改写）。"""
-    rerender_receipt.NEW_SHAPE_MARK = "«永远不会出现的标记»"
+def _mutate_never_skip():
+    """M3：幂等检查**完全失效**（任何回执都重渲 ⇒ 重复 PATCH 同一评论）。"""
+    rerender_receipt.already_rendered = lambda body: False
+
+
+def _mutate_substring_criterion():
+    """M5：幂等判据退回**子串**匹配（旧缺陷：与「定位结果」耦合 + 误跳过）。"""
+    rerender_receipt.already_rendered = lambda body: ("**本条修复**" in body)
+
+
+def _mutate_no_marker():
+    """M6：渲染产物**不写**动作痕迹标记 ⇒ 幂等判据失去依据。"""
+    orig = _ORIG["rebuild_body"]
+
+    def rebuild(body, sec, repo, num, tag, evidence):
+        out = orig(body, sec, repo, num, tag, evidence)
+        return "\n".join(l for l in out.split("\n") if "rerendered-by" not in l)
+
+    rerender_receipt.rebuild_body = rebuild
+
+
+def _mutate_marker_duplicated():
+    """M7：动作痕迹标记**重复写入**（不剥离旧标记 ⇒ --force 后叠成两份）。"""
+    def rebuild(body, sec, repo, num, tag, evidence):
+        head, _mid, tail = _ORIG["split_receipt"](body, repo, tag)
+        new_mid = (rerender_receipt.CHANGE_HEADING + "\n\n"
+                   + rerender_receipt.build_change_content(sec, repo, num, tag, evidence))
+        parts = [head, new_mid]
+        if tail:
+            parts.append(tail)
+        return "\n\n".join(parts) + "\n\n" + rerender_receipt.RERENDER_MARK + "\n"
+
+    rerender_receipt.rebuild_body = rebuild
 
 
 def _mutate_drop_tail():
@@ -396,8 +539,11 @@ def _mutate_drop_tail():
 MUTATIONS = [
     ("变更内容段原样保留", _mutate_keep_change_section),
     ("渲染退回 pre-#153 形态", _mutate_pre153_rendering),
-    ("幂等检查失效", _mutate_no_idempotency),
+    ("幂等检查完全失效", _mutate_never_skip),
     ("尾部被丢掉", _mutate_drop_tail),
+    ("幂等判据退回子串匹配", _mutate_substring_criterion),
+    ("渲染产物不写动作痕迹标记", _mutate_no_marker),
+    ("动作痕迹标记重复写入", _mutate_marker_duplicated),
 ]
 
 
@@ -413,22 +559,28 @@ def main() -> None:
             raise SystemExit(1)
 
         saved = (rerender_receipt.rebuild_body, rerender_receipt.build_change_content,
-                 rerender_receipt.NEW_SHAPE_MARK, rerender_receipt.split_receipt)
+                 rerender_receipt.split_receipt,
+                 getattr(rerender_receipt, "already_rendered", None))
         for i, (name, mutate) in enumerate(MUTATIONS):
             try:
                 mutate()
                 fs = run_all(tmp, f"mut{i}")
             finally:
                 (rerender_receipt.rebuild_body, rerender_receipt.build_change_content,
-                 rerender_receipt.NEW_SHAPE_MARK,
-                 rerender_receipt.split_receipt) = saved
+                 rerender_receipt.split_receipt) = saved[:3]
+                if saved[3] is not None:
+                    rerender_receipt.already_rendered = saved[3]
+                elif hasattr(rerender_receipt, "already_rendered"):
+                    # 被测实现里本来就没这个函数（还没修）⇒ 把变异留下的残渣抹掉
+                    delattr(rerender_receipt, "already_rendered")
             if not fs:
                 print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
                 raise SystemExit(1)
             print(f"✓ 变异「{name}」被抓住（{len(fs)} 条断言转红）")
 
     print(f"✓ rerender_receipt 自测通过：历史回执可按 issue 号重渲染且只编辑原评论；"
-          f"已是 #153 形态幂等跳过；无回执/多条回执明确报错；"
+          f"已重渲染过（含动作痕迹标记）幂等跳过（与能否定位到无关）；"
+          f"无回执/多条回执明确报错；"
           f"变异自证 {len(MUTATIONS)}/{len(MUTATIONS)} 全部转红")
 
 

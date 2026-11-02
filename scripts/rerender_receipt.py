@@ -19,7 +19,7 @@
 - 默认**只预览**（不动任何东西）；要真改加 `--apply`
   （改的是**已发布**的评论 ⇒ 先看清预览再动手）。
 - `--tag`：一条 issue 上可能有多条回执 ⇒ 用它指明要重渲染哪一条。
-- `--force`：已是 #153 形态（含「**本条修复**」）也重渲。
+- `--force`：已重渲染过（含动作痕迹标记）也重渲。
 - 可一次给多个 `<repo>#<N>`（批量重渲染）。
 
 为什么默认只预览
@@ -29,9 +29,19 @@
 
 幂等
 ----
-已是 #153 形态的回执 ⇒ 直接跳过（不重复改写）。⇒ 重跑安全。
-⚠️ 幂等判据用**回执的结构特征**（首行整串 + 「**本条修复**」标记），
-不用「有没有人提过这个版本号」这种弱特征（#154 的教训）。
+**已重渲染过**的回执 ⇒ 直接跳过（不重复改写）⇒ **重跑安全（两个分支都安全）**。
+
+⚠️ 判据是**动作痕迹**（正文末尾的 `<!-- rerendered-by matrix-tools -->` 标记，
+GitHub 不渲染、读者看不见），**不是内容形态**：
+
+- 旧判据是「正文含 `**本条修复**`」⇒ 它**与「定位结果」耦合**：
+  **定位不到**时产物压根不含这四个字 ⇒ 重跑不跳过 ⇒ 同一评论被**重复 PATCH**
+  （内容相同，但批量重跑会重复写、还会连带覆盖备份）；
+- 且旧判据是**子串**匹配 ⇒ 旧回执**引用的版本节正文里**出现这四个字时
+  ⇒ 被误判成「已重渲染」⇒ **静默跳过** ⇒ **该改的没改**。
+
+⇒ 两个方向的坑在同一处判据上 ⇒ 换成与「定位结果」无关的动作痕迹（#170）。
+⚠️ 也不许拿「有没有人提过这个版本号」这种弱特征当判据（#154 的教训）。
 """
 from __future__ import annotations
 
@@ -53,8 +63,32 @@ from gen_releases import changelog_section  # noqa: E402
 # 回执首行：`已在 \`<tag>\` 修复并发布 ✅`（与 close_issue.py 写的形态一致）
 RECEIPT_HEAD_RE = re.compile(r"^\s*已在\s*`([^`]+)`\s*修复并发布\s*✅")
 CHANGE_HEADING = "## 变更内容"
-# #153 之后的新形态标记（回执里带它 ⇒ 已按 issue 号定位过）
-NEW_SHAPE_MARK = "**本条修复**"
+
+# **动作痕迹标记**（幂等判据的唯一依据）：重渲染成功后写在正文末尾。
+# GitHub 不渲染 HTML 注释 ⇒ 读者看不见；判据**不依赖内容形态** ⇒
+# 「定位得到」与「定位不到」两个分支**都幂等**（#170）。
+RERENDER_MARK = "<!-- rerendered-by matrix-tools -->"
+MARK_LINE_RE = re.compile(r"(?m)^[ \t]*<!--\s*rerendered-by matrix-tools\s*-->[ \t]*$")
+
+
+def already_rendered(body: str) -> bool:
+    """这条回执**是否已被本工具重渲染过**。
+
+    判据只认**动作痕迹**（独立的「已重渲染」标记），**不认内容形态**：
+
+    - 旧判据是「正文含 `**本条修复**`」⇒ 它**与「定位结果」耦合**：
+      **定位不到**时产物压根不含这四个字 ⇒ 重跑不跳过 ⇒ 同一评论被**重复 PATCH**
+      （内容相同，但批量重跑会重复写、还会连带覆盖备份）；
+    - 而且旧判据是**子串**匹配 ⇒ 旧回执**引用的版本节正文里**出现这四个字时
+      ⇒ 被误判成「已重渲染」⇒ **静默跳过** ⇒ **该改的没改**（方向相反的坑）。
+    ⇒ 两个方向的坑都在同一处判据上 ⇒ 换成动作痕迹。
+    """
+    return bool(MARK_LINE_RE.search(body))
+
+
+def _strip_marks(text: str) -> str:
+    """剥掉已有的动作痕迹标记行（重渲时先剥 ⇒ 标记永远恰好一份）。"""
+    return MARK_LINE_RE.sub("", text)
 
 
 def receipt_tag(body: str) -> str | None:
@@ -105,13 +139,17 @@ def rebuild_body(body: str, sec: str | None, repo: str, num: str, tag: str,
     """用 #153 的渲染器重写「变更内容」段，**其余部分原样保留**。
 
     其余部分 = 首行 / Release 行 / 合入与 CI 证据行 / 附注 —— 一律不动。
+
+    末尾追加**动作痕迹标记**（幂等判据的唯一依据，#170）⇒ 标记恰好一份
+    （重渲时先剥掉旧的）。
     """
     head, _mid, tail = split_receipt(body, repo, tag)
     new_mid = CHANGE_HEADING + "\n\n" + build_change_content(sec, repo, num, tag, evidence)
     parts = [head, new_mid]
     if tail:
         parts.append(tail)
-    return "\n\n".join(parts) + "\n"
+    out = _strip_marks("\n\n".join(parts)).rstrip("\n")
+    return out + "\n\n" + RERENDER_MARK + "\n"
 
 
 def list_comments(repo: str, num: str) -> list[dict]:
@@ -170,8 +208,8 @@ def rerender(repo: str, num: str, tag: str | None = None, *, apply: bool = False
     cid = int(comment["id"])
     body = comment.get("body") or ""
 
-    if NEW_SHAPE_MARK in body and not force:
-        return True, (f"{repo}#{num}: 回执已是 #153 形态（含「{NEW_SHAPE_MARK}」）"
+    if already_rendered(body) and not force:
+        return True, (f"{repo}#{num}: 回执已重渲染过（含动作痕迹标记）"
                       f" ⇒ 跳过（--force 可重渲）")
 
     nested = rtag.rsplit("/", 1)[0] if "/" in rtag else None
