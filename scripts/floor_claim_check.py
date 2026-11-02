@@ -34,12 +34,19 @@
      **不并入绿**。
   3. **「0 告警」不是证据，「变异能转红」才是** ⇒ 自测每条用例都写死期望判定。
 
-★ CI 约束（为什么全 org 扫描不在 PR 门禁里）
+★ CI 约束（**这一段原是假断言，已就地更正**）
 
-  本工具核验时读**依赖仓的 tag 树** ⇒ CI 只 checkout 本仓且 `fetch-tags: false`
-  ⇒ 全 org 扫描在 PR 门禁里会**全部 UNVERIFIABLE**（假绿/假红都无意义）。
-  ⇒ 门禁里只跑**离线自测**（自造 fixture git 仓，不联网、不依赖工作区）；
-     全 org 扫描属**维护轮**动作（本地有各仓 clone 与 tag 时跑）。
+  初版此处写「CI 只 checkout 本仓且 `fetch-tags: false` ⇒ 全 org 扫描会全部
+  UNVERIFIABLE ⇒ 不进 PR 门禁」——**复核班实测推翻**：matrix-tools 的 workflow 里
+  `fetch-tags: false` **grep 全 0**（`actions/checkout@v7` 默认即带 tag），且
+  `audit.yml` 的 audit job **逐仓 plain `git clone` 全矩阵**（实测新克隆 core 带
+  14 个 tag，含 v0.6.0 / v0.9.2 / v0.12.1）⇒ **核验层要的 tag 树在 CI 里就在**
+  ⇒ 全 org 扫描**可以**进 PR 门禁（现已真挂上，见 audit.yml 的 audit job）。
+  ⇒ 真障碍不是「读不到 tag」，而是「读不到 **Release 正文**」——旧实现硬编码本地
+  脚本路径 ⇒ 已改走仓内标准读取层 `ghsafe.gh_json`（CI 里靠 GH_TOKEN）。
+
+  ⇒ 门禁里仍保留**离线自测**（自造 fixture git 仓，不联网、不依赖工作区）：
+  它的作用是证明**判据本身有牙齿**，与真实语料扫描是两件事。
 
 ★ 出处：初版由同伴会话写在共享状态目录（`.oekit-cron-state/`），本仓移植时补了
   ① `MATRIX_BASE` 口径 ② 否定语境过滤 ③ 离线 fixture 自测（CI 可跑）。
@@ -348,21 +355,17 @@ def release_bodies(repo: str) -> list[tuple[str, str]]:
 
     用 GitHub API（Release 正文不在 git 里）；取不到 ⇒ 记入 unreadable，不并入绿。
     """
-    ghp = WORKSPACE / ".oekit-cron-state" / "ghp.sh"
-    if not ghp.exists():
-        return []
+    # ★ 必须走仓内标准读取层 `ghsafe.gh_json`（自带重试 + 「读到空 ≠ 事实为空」+ 错误语义）
+    #   —— 旧实现硬编码本地脚本 `WORKSPACE/.oekit-cron-state/ghp.sh`，那个文件只存在于
+    #   共享克隆 ⇒ CI 里 WORKSPACE=repos/ ⇒ **25 个仓的 Release 正文全部读不到**
+    #   ⇒ 第二个发布面在 CI 里覆盖率为 0（虽不静默：会进 releases_unreadable 并打印 ⚠️）。
     try:
-        p = subprocess.run(
-            [str(ghp), "api", f"repos/oekit/{repo}/releases?per_page=100"],
-            capture_output=True, text=True, timeout=180,
-        )
-    except Exception:  # noqa: BLE001
+        sys.path.insert(0, str(Path(__file__).resolve().parent))
+        import ghsafe  # noqa: PLC0415 - 运行时导入，避免与仓内其它模块的导入顺序耦合
+        data = ghsafe.gh_json(["api", f"repos/oekit/{repo}/releases?per_page=100"])
+    except Exception:  # noqa: BLE001 - 读不到 ⇒ 由调用方记入 unreadable，不并入绿
         return []
-    if p.returncode != 0 or not p.stdout.strip():
-        return []
-    try:
-        data = json.loads(p.stdout)
-    except Exception:  # noqa: BLE001
+    if not isinstance(data, list):
         return []
     return [(r.get("tag_name", "?"), r.get("body") or "") for r in data if isinstance(r, dict)]
 
@@ -372,12 +375,17 @@ def read_changelog(repo_dir: Path) -> tuple[str, str]:
     return read_changelog_at(repo_dir, "CHANGELOG.md")
 
 
-def scan(repo_filter: str | None = None) -> dict:
+def scan(repo_filter: str | None = None, include_releases: bool = True) -> dict:
     repos = repo_dirs()
     if repo_filter:
         repos = [r for r in repos if r.name == repo_filter]
     findings = []
     scanned_repos, repos_without_claims = 0, 0
+    # ★ 仓级累加器：**一个仓只要有任一来源面含断言，就算「有此类断言」**
+    #   （旧实现把文件级的 in_claims 在仓级读 ⇒ 读的是**最后一个来源面**留下的值
+    #    ⇒ 一个仓只要最后一个来源面没断言就被算成「无断言」⇒ 全 org 报「25 个仓无断言」
+    #    却同屏显示「提取断言 2 条」= **自相矛盾**的假干净。复核班实测发现。）
+    repo_has_claims = False
     total_claims = 0
     scanned_files = 0
     root_files = 0
@@ -389,6 +397,9 @@ def scan(repo_filter: str | None = None) -> dict:
     broad_unmatched = []
 
     for repo_dir in repos:
+        # ★ 每个仓**重置**仓级累加器（否则上一个仓的 True 会漏给下一个仓 ⇒
+        #   「无断言的仓」一个都数不出来 —— M12 专盯这条）
+        repo_has_claims = False
         # ── 根 CHANGELOG ──
         files = [("CHANGELOG.md", read_changelog(repo_dir))]
         # ── 嵌套 CHANGELOG（**必须扫**，否则是假干净）──
@@ -399,7 +410,7 @@ def scan(repo_filter: str | None = None) -> dict:
                 continue
             files.append((rel, (text, src)))
         # ── 已发布 Release 正文（**第二个发布面**，必须一起扫）──
-        rel_bodies = release_bodies(repo_dir.name)
+        rel_bodies = release_bodies(repo_dir.name) if include_releases else []
         if not rel_bodies:
             releases_unreadable.append(repo_dir.name)
         for tag, body in rel_bodies:
@@ -428,7 +439,7 @@ def scan(repo_filter: str | None = None) -> dict:
 
             def flush_bullet() -> None:
                 """把累积的 bullet（首行 + 续行）判一次。"""
-                nonlocal in_claims, total_claims, broad_total
+                nonlocal in_claims, total_claims, broad_total, repo_has_claims
                 if not bullet_parts:
                     return
                 blk = "\n".join(bullet_parts)
@@ -443,6 +454,7 @@ def scan(repo_filter: str | None = None) -> dict:
                     bullet_parts.clear()
                     return
                 in_claims += 1
+                repo_has_claims = True
                 total_claims += len(claims)
                 for c in claims:
                     dep_dir = WORKSPACE / c["dep"]
@@ -479,7 +491,7 @@ def scan(repo_filter: str | None = None) -> dict:
                 if bullet_parts and raw.strip():
                     bullet_parts.append(raw.strip())
             flush_bullet()
-        if not in_claims:
+        if not repo_has_claims:
             repos_without_claims += 1
 
     scanned_repos = len(repos)
@@ -522,6 +534,8 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--no-releases", action="store_true",
+                    help="只扫 CHANGELOG（不读 Release 正文）⇒ 离线档，不联网")
     ap.add_argument("--self-test", action="store_true",
                     help="离线自测（fixture 仓，不联网、不依赖工作区）")
     ap.add_argument("--self-test-live", action="store_true",
@@ -531,7 +545,7 @@ def main() -> int:
     if args.self_test or args.self_test_live:
         return self_test(live=args.self_test_live)
 
-    res = scan(args.repo)
+    res = scan(args.repo, include_releases=not args.no_releases)
     if args.json:
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:

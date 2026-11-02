@@ -186,6 +186,10 @@ def run(live: bool = False) -> int:
     ok &= good
     print(f"  M11b{'✅' if good else '❌'} 但**不得**被工具口径误判为同类断言（提取 0 条）⇒ {len(c)} 条")
 
+    # M12 scan() 的仓级聚合：必须按**仓**算（有断言的仓不能因为最后一个来源面没断言
+    #     而被算成「无断言」）—— 复核班实测发现的假干净（旧实现读文件级计数）
+    ok &= run_scan_aggregate()
+
     if live:
         ok &= run_live()
     else:
@@ -193,6 +197,45 @@ def run(live: bool = False) -> int:
 
     print(f"\n变异自证：{'✅ 全部精确转红' if ok else '❌ 有变体未按预期转红'}")
     return 0 if ok else 1
+
+
+def run_scan_aggregate() -> bool:
+    """scan() 的「N 个仓无此类断言」必须按**仓**算，不是按最后一个来源面算。
+
+    复核班实测（旧实现按文件级计数、在仓级读最后一个来源面的值）：
+    全 org 扫描会输出「**25 个仓无此类断言；提取断言 2 条**」——同屏自相矛盾，
+    且与「为假 0」叠读成「所有仓都没这类断言」= **假干净**。
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        # 一个**有**断言的仓 + 一个**没有**断言的仓
+        a = ws / "repo-a"
+        (a / ".git").mkdir(parents=True)
+        (a / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.0]\n\n"
+            "- build: 矩阵内依赖地板对齐：core v0.6.0 → v0.9.2——core/lifecycle 逐字节未变\n",
+            encoding="utf-8")
+        b = ws / "repo-b"
+        (b / ".git").mkdir(parents=True)
+        (b / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.0]\n\n- fix: 别的改动，与地板断言无关\n",
+            encoding="utf-8")
+        old_ws = fcc.WORKSPACE
+        fcc.WORKSPACE = ws
+        try:
+            res = fcc.scan(include_releases=False)
+        finally:
+            fcc.WORKSPACE = old_ws
+        good = (res["scanned_repos"] == 2
+                and res["repos_without_claims"] == 1
+                and res["total_claims"] == 1)
+        ok &= good
+        print(f"  M12 {'✅' if good else '❌'} 仓级聚合：2 个仓里**1 个**无此类断言"
+              f"（实得 scanned_repos={res['scanned_repos']}、"
+              f"repos_without_claims={res['repos_without_claims']}、"
+              f"total_claims={res['total_claims']}）")
+    return ok
 
 
 def run_live() -> bool:

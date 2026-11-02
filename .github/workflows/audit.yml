@@ -115,6 +115,14 @@ jobs:
           MATRIX_BASE="$PWD/repos" python3 scripts/audit.py --remote-tags > audit-report.txt || true
           cat audit-report.txt
           echo "drift=$(grep -c '❌' audit-report.txt || true)" >> "$GITHUB_OUTPUT"
+      - name: 地板类断言扫描（CHANGELOG + 已发布 Release 正文里的「逐字节未变/零行为风险」必须落到 git 对象层核）
+        env:
+          # Release 正文要走 GitHub API（GITHUB_TOKEN 是本仓 installation token，读不到别的仓）
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: |
+          # 退出码契约：发现**为假**的断言 ⇒ 1（PR 门禁直接红）；读不到的面只 ⚠️ 不阻断
+          MATRIX_BASE="$PWD/repos" python3 scripts/floor_claim_check.py
       - name: Close previous drift issue
         if: github.event_name != 'pull_request' && steps.audit.outputs.drift == '0'
         uses: actions/github-script@v9
