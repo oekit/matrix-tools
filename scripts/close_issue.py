@@ -221,6 +221,52 @@ def pr_lines(meta: dict) -> list[str]:
     return lines
 
 
+def build_change_content(sec: str | None, repo: str, num: str, tag: str) -> str:
+    """回执的「变更内容」段。
+
+    #153：旧实现把**整个版本节**当成本 issue 的「变更内容」⇒ 版本节里没记这条
+    修复时，回执引的是**别的修复**（读者照着回执找不到「这条到底改了什么」）。
+    根因是「issue 号写在哪」两边分裂：回执读 CHANGELOG，而有些版本的 issue 号
+    只写在 Release 正文的「合入记录」里。
+
+    现在的口径：
+    - 版本节里能定位到本 issue 的**条目** ⇒ 该条目单独列出（其余变更折叠在
+      `<details>` 里）——读者第一眼看到的就是本条；
+    - 定位不到 ⇒ **明说**：版本节压根没提到本 issue，还是只在叙述文字里提到、
+      没绑到具体条目，还是这个号**只以 PR 形态出现过**（PR 与 issue 共用编号
+      空间）；并声明下方是**该版本的全部变更**、不含本条。
+    - **只提示不阻断**：定位不到也照发回执、照关单——存量已发回执里有 21%
+      （32/154）命中「版本节未提到」，硬阻断会把它们全挡住。
+
+    三种「定位不到」的说法必须分开：一个是「没提到」，一个是「提到了但定位不到
+    具体条目」，一个是「只以 PR 形态出现过」——混成一句就是在替版本节编话。
+    """
+    from gen_releases import locate_issue_entries
+    if not sec:
+        return f"见 [CHANGELOG.md](https://github.com/{ORG}/{repo}/blob/main/CHANGELOG.md)。"
+    loc = locate_issue_entries(sec, repo, num)
+    if loc.entries:
+        head = (f"**本条修复**（在 `{tag}` 的版本节里定位到）：\n\n"
+                + "\n\n".join(loc.entries))
+        if loc.rest:
+            head += (f"\n\n<details>\n<summary>该版本 `{tag}` 的其余变更</summary>\n\n"
+                     f"{loc.rest}\n\n</details>")
+        return head
+    if loc.mentioned:
+        warn = (f"⚠️ **该版本节只在叙述文字里提到本 issue，未绑定到具体条目** ⇒ "
+                f"下方是 `{tag}` 的**全部**变更，**无法据此定位到本条修复**。")
+    elif loc.pr_only:
+        warn = (f"⚠️ **该版本节里这个号只以 PR 形态出现过**（PR 与 issue 共用编号"
+                f"空间）⇒ 本 issue 的修复**不在这一节**；下方是 `{tag}` 的**全部**变更。")
+    else:
+        warn = (f"⚠️ **该版本节未提到本 issue** ⇒ 下方是 `{tag}` 的**全部**变更，"
+                f"**不含本条修复**。")
+    return (f"{warn}\n\n"
+            f"> 版本节漏记本条时就会这样：回执只能指向「这一版的全部变更」，"
+            f"读不到「这条到底改了什么」。\n\n"
+            f"{sec}")
+
+
 def main() -> None:
     args = sys.argv[1:]
     dry = "--dry-run" in args
@@ -295,7 +341,7 @@ def main() -> None:
         sec = changelog_section(str(repo_dir(repo)), version, nested)
 
         parts = [f"已在 `{tag}` 修复并发布 ✅",
-                 "## 变更内容\n\n" + (sec or f"见 [CHANGELOG.md](https://github.com/{ORG}/{repo}/blob/main/CHANGELOG.md)。"),
+                 "## 变更内容\n\n" + build_change_content(sec, repo, num, tag),
                  f"Release: https://github.com/{ORG}/{repo}/releases/tag/{tag}"]
         parts += pr_lines(meta)
         if note:

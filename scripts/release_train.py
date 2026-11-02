@@ -7,6 +7,14 @@
   python3 scripts/release_train.py bootstrap main=v0.6.4 nacos=v0.3.4 obs=v0.2.9 --apply --changelog "..."
 缺省 dry-run 只跑检查；--changelog 缺小节时 dry-run 只提示不落 PR。
 
+--issue（可多次，#153）：把关联问题单写进版本节（「关联问题单：<repo>#<N>。」）。
+**为什么要它**：回执的「变更内容」按 issue 号在**版本节**里定位本条修复；
+版本节不点名 issue ⇒ 回执只能提示「该版本节未提到本 issue ⇒ 下方是该版本的
+全部变更」。issue 号写在哪必须统一（回执读 CHANGELOG，Release 正文的
+「合入记录」行它读不到）：
+  python3 scripts/release_train.py matrix-tools main=v0.1.30 --apply \
+      --changelog "修 xxx" --issue 153
+
 检查面（全过才打 tag，任一失败原子中止）：
   a. ls-remote 同名 tag 查重（重推 = 代理/sumdb 集体中毒，.github#5）
   b. go mod tidy -diff 干净（地板指向已删 tag 时直接红）
@@ -361,7 +369,8 @@ def wait_pr_merged(repo: str, number: int, timeout: int = 900) -> None:
     raise SystemExit(f"{repo}: 等待 CHANGELOG PR #{number} 合并超时（CI 可能仍在跑）——稍后重跑 train")
 
 
-def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: str) -> str:
+def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: str,
+                   issues: list[str] | None = None) -> str:
     """把 --changelog 的多条 bullet 拼成版本节正文（**不丢条目**，#114）。
 
     ``--changelog`` 可多次给出，每多一条就是一条 bullet ⇒ 版本节应当把它们
@@ -373,15 +382,25 @@ def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: s
 
         - 第一条
         - 第二条
+
+    ``issues``（#153）：关联问题单。版本节里**点名 issue** 是回执能定位到
+    「本条修复」的**前提**——回执读的是 CHANGELOG 版本节（Release 正文的
+    「合入记录」行它读不到）。不点名 ⇒ 回执只能提示「该版本节未提到本 issue」。
     """
     if nested_self or not bullets:
-        return f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
-    return "\n- ".join(bullets)
+        body = f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+    else:
+        body = "\n- ".join(bullets)
+    if issues:
+        body += "\n\n关联问题单：" + "、".join(issues) + "。"
+    return body
 
 
-def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) -> None:
+def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
+                     issues: list[str] | None = None) -> None:
     """缺版本节时：生成（置顶）→ 预校验 → PR → 排程合并 → 等合并 → 拉齐。
-    dry-run 只报告不落 PR。bullets 来自 --changelog（可多次，**全部写入**）。"""
+    dry-run 只报告不落 PR。bullets 来自 --changelog（可多次，**全部写入**）。
+    issues 来自 --issue（#153）：关联问题单写进版本节 ⇒ 回执定位得到本条修复。"""
     wanted = wanted_sections(root, specs)
     todo = []
     for path, heading in wanted:
@@ -389,6 +408,9 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) ->
         if not any(l.startswith(heading) for l in t.splitlines()):
             todo.append((path, heading))
     if not todo:
+        if issues:
+            print("[changelog] 版本节已存在 ⇒ --issue 的关联问题单**没有**写进去"
+                  "（回执将只能提示「该版本节未提到本 issue」）")
         return
     if not apply:
         for path, heading in todo:
@@ -401,7 +423,7 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool) ->
         changed: set[Path] = set()
         for path, heading in todo:
             nested_self = path != root / "CHANGELOG.md"
-            bullet = format_bullets(bullets, nested_self, repo, main_tag)
+            bullet = format_bullets(bullets, nested_self, repo, main_tag, issues)
             if insert_top(path, heading, bullet):
                 changed.add(path)
         for path in sorted(changed):
@@ -430,6 +452,7 @@ def main():
     argv = sys.argv[1:]
     apply = "--apply" in argv
     bullets: list[str] = []
+    issue_refs: list[tuple[str | None, str]] = []   # 关联问题单（#153）
     args: list[str] = []       # 位置参数（--changelog 的值不属于此处）
     i = 0
     while i < len(argv):
@@ -438,6 +461,17 @@ def main():
                 print("--changelog 需要跟描述文本")
                 sys.exit(2)
             bullets.append(argv[i + 1])
+            i += 2
+        elif argv[i] == "--issue":
+            if i + 1 >= len(argv):
+                print("--issue 需要跟 issue 号（如 153 或 matrix-tools#153）")
+                sys.exit(2)
+            val = argv[i + 1]
+            m = re.fullmatch(r"(?:([a-z0-9.-]+)#)?(\d+)", val)
+            if not m:
+                print(f"--issue 格式应为 <N> 或 <repo>#<N>：{val!r}")
+                sys.exit(2)
+            issue_refs.append((m.group(1), m.group(2)))
             i += 2
         else:
             if not argv[i].startswith("--"):
@@ -450,6 +484,9 @@ def main():
     if repo not in MODULES:
         print(f"未知模块仓 {repo}（MODULES 无此项）")
         sys.exit(2)
+    # 关联问题单统一写成 `<repo>#<N>`：回执按这个形态定位版本节里的条目
+    # （#153）。不带仓名前缀时按**本次发布的仓**补齐。
+    issues = [f"{r or repo}#{n}" for r, n in issue_refs]
 
     root = repo_dir(repo)
     preflight_gate(root, apply)
@@ -473,7 +510,7 @@ def main():
         print(f"  {tag}  <- {d}")
 
     if bullets:
-        ensure_changelog(repo, root, specs, bullets, apply)
+        ensure_changelog(repo, root, specs, bullets, apply, issues)
     elif apply:
         # apply 但没给 --changelog 且缺小节 → check d 会拦；提前提示
         missing = [(p, h) for p, h in wanted_sections(root, specs)
