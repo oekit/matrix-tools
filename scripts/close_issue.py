@@ -229,7 +229,37 @@ def pr_lines(meta: dict) -> list[str]:
     return lines
 
 
-def build_change_content(sec: str | None, repo: str, num: str, tag: str) -> str:
+def release_mentions_issue(repo: str, tag: str, num: str) -> bool | None:
+    """该 tag 的 **Release 正文**有没有点名本 issue（#158）。
+
+    返回 True / False / **None（读不到 ⇒ 不知道）**。
+
+    为什么需要第二个证据源：#153 的定位判据只读 **CHANGELOG 版本节**，但 Release
+    正文（「合入记录：…；问题单 matrix-tools#148。」/「Closes #82」/「issue #109 / #110」）
+    **也**可能点名 issue ⇒ 版本节没点名时，光看版本节**判不出**「这一版到底有没有
+    本条修复」——这正是 #158 说的**第四种**情形：**版本节漏记，但修复就在这一版里**
+    （实测 matrix-tools #148@v0.1.28、#110@v0.1.20、#109@v0.1.20、#85@v0.1.12、
+    #82@v0.1.11 —— 这 5 条的旧回执都含一句与事实相反的话）。
+
+    ⇒ **读不到 Release 正文时不许猜**：返回 None ⇒ 回执只陈述「无法判定」，
+    绝不写「不含本条修复」这种事实断言（#158 的核心诉求）。
+    """
+    try:
+        data = ghsafe.gh_json(["release", "view", tag, "--repo", f"{ORG}/{repo}",
+                               "--json", "body"])
+    except (ghsafe.GhCommandError, ghsafe.GhReadError):
+        return None                      # 读不到 ⇒ 不知道（不猜）
+    body = ""
+    if isinstance(data, dict):          # 形态不认识 ⇒ 当作读不到（不猜）
+        body = str(data.get("body") or "")
+    if not body.strip():
+        return None
+    from gen_releases import mentions_issue
+    return any(mentions_issue(line, repo, num) for line in body.splitlines())
+
+
+def build_change_content(sec: str | None, repo: str, num: str, tag: str,
+                          release_evidence: bool | None = None) -> str:
     """回执的「变更内容」段。
 
     #153：旧实现把**整个版本节**当成本 issue 的「变更内容」⇒ 版本节里没记这条
@@ -242,12 +272,23 @@ def build_change_content(sec: str | None, repo: str, num: str, tag: str) -> str:
       `<details>` 里）——读者第一眼看到的就是本条；
     - 定位不到 ⇒ **明说**：版本节压根没提到本 issue，还是只在叙述文字里提到、
       没绑到具体条目，还是这个号**只以 PR 形态出现过**（PR 与 issue 共用编号
-      空间）；并声明下方是**该版本的全部变更**、不含本条。
+      空间）；
     - **只提示不阻断**：定位不到也照发回执、照关单——存量已发回执里有 21%
       （32/154）命中「版本节未提到」，硬阻断会把它们全挡住。
 
-    三种「定位不到」的说法必须分开：一个是「没提到」，一个是「提到了但定位不到
-    具体条目」，一个是「只以 PR 形态出现过」——混成一句就是在替版本节编话。
+    #158：**四种**「定位不到」的说法必须分开——前三种来自版本节，**第四种来自
+    Release 正文**：
+
+    1. 版本节压根没提；
+    2. 只在叙述文字里提到、没绑到具体条目；
+    3. 这个号只以 PR 形态出现过；
+    4. **版本节没提，但 Release 正文点名了本 issue** ⇒ 本条修复**很可能就在这一版里**
+       （版本节漏记）——判据依据**不在版本节里**（`release_mentions_issue`）。
+
+    ⚠️ **不许写事实断言**：旧实现在情形 1 下写「下方是全部变更，**不含本条修复**」——
+    「不含本条修复」是关于**该版本内容**的断言，而「版本节没点名」**推不出**它
+    （一版可以捆绑多条修复、只点名其中一部分 ⇒ 修复就在这一版里）。
+    ⇒ 现在只陈述**能判定的部分**：「本条修复的位置无法从版本节判定」。
     """
     from gen_releases import locate_issue_entries
     if not sec:
@@ -265,10 +306,16 @@ def build_change_content(sec: str | None, repo: str, num: str, tag: str) -> str:
                 f"下方是 `{tag}` 的**全部**变更，**无法据此定位到本条修复**。")
     elif loc.pr_only:
         warn = (f"⚠️ **该版本节里这个号只以 PR 形态出现过**（PR 与 issue 共用编号"
-                f"空间）⇒ 本 issue 的修复**不在这一节**；下方是 `{tag}` 的**全部**变更。")
+                f"空间）⇒ 本 issue 的修复**没有被这一节点名**；下方是 `{tag}` 的"
+                f"**全部**变更。")
+    elif release_evidence is True:
+        warn = (f"⚠️ **该版本节未提到本 issue，但该版本的 Release 正文点名了本 issue**"
+                f" ⇒ 本条修复**很可能就在这一版里**（版本节漏记）；下方是 `{tag}` 的"
+                f"**全部**变更。")
     else:
-        warn = (f"⚠️ **该版本节未提到本 issue** ⇒ 下方是 `{tag}` 的**全部**变更，"
-                f"**不含本条修复**。")
+        warn = (f"⚠️ **该版本节未提到本 issue** ⇒ 下方是 `{tag}` 的**全部**变更；"
+                f"本条修复是否在这一版里**无法从版本节判定**（版本节没点名 ≠ 这一版"
+                f"不含它：一版可以捆绑多条修复而只点名一部分；以 PR / Release 正文为准）。")
     return (f"{warn}\n\n"
             f"> 版本节漏记本条时就会这样：回执只能指向「这一版的全部变更」，"
             f"读不到「这条到底改了什么」。\n\n"
@@ -347,9 +394,14 @@ def main() -> None:
         version = tag.rsplit("/", 1)[-1]
         from gen_releases import changelog_section
         sec = changelog_section(str(repo_dir(repo)), version, nested)
+        # #158：版本节判不出「这一版有没有本条修复」时，用 **Release 正文**做
+        # 第二证据源（#148@v0.1.28、#110@v0.1.20 等 5 条属于「版本节漏记、
+        # 修复就在这一版里」）。读不到 ⇒ None ⇒ 回执只说「无法判定」，
+        # **不写**「不含本条修复」这种可能与事实相反的话。
+        evidence = release_mentions_issue(repo, tag, num)
 
         parts = [f"已在 `{tag}` 修复并发布 ✅",
-                 "## 变更内容\n\n" + build_change_content(sec, repo, num, tag),
+                 "## 变更内容\n\n" + build_change_content(sec, repo, num, tag, evidence),
                  f"Release: https://github.com/{ORG}/{repo}/releases/tag/{tag}"]
         parts += pr_lines(meta)
         if note:
