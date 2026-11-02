@@ -126,6 +126,7 @@ CHECKS_JSON = '[{"bucket":"pass","name":"link","state":"SUCCESS"}]'
 def run_case(tmp: Path, state: str, comment_works: str,
              extra: list[str] | None = None,
              comments_body: str | None = None,
+             pre_record: str | None = None,
              kind: str = "issue",
              pr_state: str = "MERGED",
              eof_calls: int = 0,
@@ -170,6 +171,14 @@ def run_case(tmp: Path, state: str, comment_works: str,
     env["FAKE_GH_PR_JSON"] = PR_MERGED_JSON if pr_state == "MERGED" else PR_OPEN_JSON
     env["FAKE_GH_CHECKS_JSON"] = CHECKS_JSON
     env["MATRIX_BASE"] = str(base)
+
+    # **预置评论**（#154）：把「issue 上已有一条评论」写进记录文件。
+    # 为什么不用 `comments_body`：那个开关会让假 gh 的 `issue view --json comments`
+    # **只返回那一条**、把新投递的评论**遮蔽**掉 ⇒ 复核阶段永远看不到刚发的回执
+    # ⇒ 模拟的是「评论列表不更新」，而真实 GitHub 是**评论累积**。
+    # 预置记录文件才符合真实语义：读到的 = 已有评论 + 本次新投递的评论。
+    if pre_record:
+        rec.write_text(pre_record, encoding="utf-8")
 
     argv = [sys.executable, str(SCRIPTS / "close_issue.py"), "pkg#45"]
     argv += extra if extra else ["--tag", "v0.19.0", "--force"]
@@ -363,6 +372,39 @@ def main() -> None:
             failures.append("用例11 PR 未合入，回执应写「已提交修复（PR 尚未合入）」")
         if "CLOSE_CALLED" in closed11:
             failures.append("用例11 修复未落地却关了单——问题会提前从看板消失")
+
+        # ── #154：幂等判据不许用「版本号字符串」这种弱特征 ─────────────────
+        # 旧实现的发版路径 needle = [tag] ⇒ 判据问的是「有没有人**提过**这个版本号」，
+        # 而不是「有没有**回执**」⇒ 任何一条提到版本号的**非回执**评论（进度留言、
+        # 状态通报）都会让回执被**静默跳过**，而脚本仍打印「✓ 回执已在」。
+        #
+        # 用例 12：issue 上已有一条**提到版本号但不是回执**的评论
+        # ⇒ **必须投递回执**（不能幂等跳过）。
+        rc12, recorded12, _, out12 = run_case(
+            tmp, "CLOSED", "1",
+            extra=["--tag", "v0.19.0", "--force"],
+            pre_record="进度通报：v0.19.0 已打 tag，正在等 CI。\n", case="c12")
+        if rc12 != 0:
+            failures.append(f"用例12 期望退出码 0，实得 {rc12}：{out12.strip()[:200]}")
+        if "幂等" in out12:
+            failures.append(f"用例12 被错误地判成「回执已在」——提到版本号的进度留言"
+                            f"不是回执，必须照发：{out12.strip()[:200]}")
+        if "已在 `v0.19.0` 修复并发布 ✅" not in recorded12:
+            failures.append("用例12 回执未落地：提到版本号的非回执评论不应让回执被跳过")
+
+        # 用例 13（反证·幂等仍成立）：issue 上已有**真回执**（含回执首行）
+        # ⇒ 仍必须幂等跳过、不重复发。
+        # ⇒ 判据收紧到「回执结构特征」后，历史回执（首行格式一致）依旧被认出来。
+        rc13, recorded13, _, out13 = run_case(
+            tmp, "CLOSED", "1",
+            extra=["--tag", "v0.19.0", "--force"],
+            pre_record="已在 `v0.19.0` 修复并发布 ✅\n\n## 变更内容\n\n- 某条修复\n", case="c13")
+        if rc13 != 0:
+            failures.append(f"用例13 期望退出码 0，实得 {rc13}：{out13.strip()[:200]}")
+        if "幂等" not in out13:
+            failures.append(f"用例13 期望报「幂等跳过」（真回执必须被认出来），实得：{out13.strip()[:200]}")
+        if recorded13.count("已在 `v0.19.0` 修复并发布 ✅") != 1:
+            failures.append("用例13 真回执已在时不应再发评论（回执首行出现了多次）")
 
         # 用例 10（幂等）：回执已在 ⇒ 不重复发（重跑不能堆一串重复回执）
         rc10, recorded10, _, out10 = run_case(
