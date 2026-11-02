@@ -65,8 +65,12 @@ jobs:
         run: python3 scripts/tag_cache_selftest.py
       - name: 地板对齐自测（深层嵌套模块必须扫得到，vendor 必须排除）
         run: python3 scripts/align_floors_selftest.py
+      - name: 地板对齐「嵌套模块地板」自测（别仓嵌套模块必须看得见 / 嵌套 tag 前缀是完整子路径 / 变异自证）
+        run: python3 scripts/align_floors_nested_selftest.py
       - name: 审计「各仓 go.mod 地板 vs 远端 tag」门禁自测（落后必须判出、数字比、变异自证）
         run: python3 scripts/audit_floor_gate_selftest.py
+      - name: 审计「各仓对别仓嵌套模块的地板」门禁自测（落后必须判出 / 口径不与根模块重叠 / 变异自证）
+        run: python3 scripts/audit_nested_floor_gate_selftest.py
       - name: 工具链闸门自测（合并回退只在 CLEAN 放行 / CHANGELOG 覆写要 --apply / local_dir 只此一份）
         run: python3 scripts/toolchain_selftest.py
       - name: 台账写入器自测（事实与现实不符必须拒绝写入 / 收口必须报出漂移 / 坏账不许覆盖）
