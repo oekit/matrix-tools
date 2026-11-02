@@ -83,6 +83,8 @@ jobs:
         run: python3 scripts/rerender_receipt_selftest.py
       - name: 写回前置门禁自测（跨仓号/本仓其它号/裸号都抓得住 / PR 引用与顶格段落不误报 / 判据看位置不看存在性 / 变异自证）
         run: python3 scripts/check_writeback_selftest.py
+      - name: 地板类断言核验器自测（逐字节未变/零行为风险落到 git 对象层核 / 读不到≠成立 / 否定语境不误报 / 变异自证）
+        run: python3 scripts/floor_claim_check_selftest.py
 
   audit:
     runs-on: ubuntu-latest
