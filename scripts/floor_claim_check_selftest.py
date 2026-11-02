@@ -106,6 +106,23 @@ def build_fixture(root: Path) -> Path:
 #   每个用例把自己的 ID 记在这里 ⇒ 变异体注入后跑一遍 ⇒ 比对哪些用例转红。
 _RESULTS: dict[str, bool] = {}
 
+# ── 输出口径：`--mutate` 模式下的「红」是**预期红**，不得让人读成自测失败 ──
+#   ★ 背景（matrix-tools#205）：`--mutate` 会在每个变异体注入后跑一遍用例集，
+#     那些 ❌ 是**故意打红**的（用例**应当**转红 ⇒ 正是变异被抓住的证据）；
+#     但汇总行原写「自测结果：❌ 有用例未通过」⇒ **红 ≠ 失败**这条口径
+#     **没有自带在输出里** ⇒ 人读 CI 日志会误判成「自测挂了」，
+#     而 CI 判的其实是**退出码**（0 ⇒ 绿）。
+#   ⇒ 修法：`--mutate` 下用 🔴（预期红）替代 ❌，并把汇总行改成自解释文案。
+#   ⇒ **退出码语义不变**（CI 判退出码，不判符号）。
+_MUTATE_MODE = False
+
+
+def _mark(good: bool) -> str:
+    """用例结果标记。`--mutate` 下的失败是**预期红** ⇒ 用 🔴 与真失败区分。"""
+    if good:
+        return "✅"
+    return "🔴" if _MUTATE_MODE else "❌"
+
 
 def _record(cid: str, good: bool) -> bool:
     _RESULTS[cid] = good
@@ -128,7 +145,7 @@ def run(live: bool = False) -> int:
             verdict, detail = fcc.verify_claim(dep, old, new, pkg)
             good = verdict == want
             ok &= _record(name, good)
-            print(f"  {name} {'✅' if good else '❌'} want={want:13s} got={verdict:13s} | {why}")
+            print(f"  {name} {_mark(good)} want={want:13s} got={verdict:13s} | {why}")
             if not good:
                 print(f"       {detail[:160]}")
 
@@ -145,7 +162,7 @@ def run(live: bool = False) -> int:
         v_fake, d_fake = fcc.verify_claim(dep, "v0.9.2", "v0.12.1", "lifecycle")
         good = (v_hold == "IDENTICAL" and v_fake == "DIFFERS")
         ok &= _record("M13", good)
-        print(f"  M13 {'✅' if good else '❌'} ★同一串字两节 ⇒ 旧区间={v_hold}"
+        print(f"  M13 {_mark(good)} ★同一串字两节 ⇒ 旧区间={v_hold}"
               f"（期望 IDENTICAL） / 新区间={v_fake}（期望 DIFFERS）")
         if not good:
             print(f"       hold: {d_hold[:150]}")
@@ -156,7 +173,7 @@ def run(live: bool = False) -> int:
         good2 = (len(_c_old) == 1 and len(_c_new) == 1
                  and _c_old[0]["old"] == "v0.6.0" and _c_new[0]["old"] == "v0.9.2")
         ok &= _record("M13b", good2)
-        print(f"  M13b{'✅' if good2 else '❌'} 同一串字抽出**各自**的区间"
+        print(f"  M13b{_mark(good2)} 同一串字抽出**各自**的区间"
               f"⇒ old={_c_old[0]['old'] if _c_old else None}"
               f" / new={_c_new[0]['old'] if _c_new else None}")
         if not good2:
@@ -167,20 +184,20 @@ def run(live: bool = False) -> int:
     c = fcc.extract_claims("- build: core v0.9.2 → v0.12.1——抬地板带动修复传递")
     good = len(c) == 0
     ok &= _record("M5", good)
-    print(f"  M5  {'✅' if good else '❌'} 断言词缺失 ⇒ 提取 {len(c)} 条（期望 0，不得静默判绿）")
+    print(f"  M5  {_mark(good)} 断言词缺失 ⇒ 提取 {len(c)} 条（期望 0，不得静默判绿）")
 
     # M6 措辞变体
     c = fcc.extract_claims("- build: core v0.9.2 → v0.12.1——core/lifecycle 字节级未变")
     good = len(c) == 1
     ok &= _record("M6", good)
-    print(f"  M6  {'✅' if good else '❌'} 措辞变体「字节级未变」⇒ 提取 {len(c)} 条（期望 1）")
+    print(f"  M6  {_mark(good)} 措辞变体「字节级未变」⇒ 提取 {len(c)} 条（期望 1）")
 
     # M7 中文隔断形态
     c = fcc.extract_claims("- build: core 地板 v0.6.0 → v0.9.2——logx 唯一使用的 "
                            "core/lifecycle 逐字节未变，零行为风险")
     good = (len(c) == 1 and c[0]["old"] == "v0.6.0" and c[0]["new"] == "v0.9.2")
     ok &= _record("M7", good)
-    print(f"  M7  {'✅' if good else '❌'} 中文隔断形态「core 地板 v0.6.0 → v0.9.2」"
+    print(f"  M7  {_mark(good)} 中文隔断形态「core 地板 v0.6.0 → v0.9.2」"
           f"⇒ 提取 {len(c)} 条")
 
     # M8 版本号必须带 v 前缀
@@ -188,7 +205,7 @@ def run(live: bool = False) -> int:
                            "core/lifecycle 逐字节未变")
     good = len(c) == 0 or c[0]["old"] == "v0.9.2"
     ok &= _record("M8", good)
-    print(f"  M8  {'✅' if good else '❌'} 版本号带 v 前缀（否则扫描路径会全判 UNVERIFIABLE）")
+    print(f"  M8  {_mark(good)} 版本号带 v 前缀（否则扫描路径会全判 UNVERIFIABLE）")
 
     # M9 ★ 否定语境：引用旧假句并声明其不成立 ⇒ 不是待核断言
     disclaimed = ("- build: 矩阵内依赖地板对齐（align_floors 不动点）：core v0.9.2 → v0.12.1"
@@ -199,7 +216,7 @@ def run(live: bool = False) -> int:
     c = fcc.extract_claims(disclaimed)
     good = len(c) == 0
     ok &= _record("M9", good)
-    print(f"  M9  {'✅' if good else '❌'} ★否定语境（引用旧假句并声明其不成立）"
+    print(f"  M9  {_mark(good)} ★否定语境（引用旧假句并声明其不成立）"
           f"⇒ 提取 {len(c)} 条（期望 0；否则护栏会把「刚更正对的那条」判成假）")
 
     # M9b 否定语境**不得**把整条 bullet 的真信息也吃掉：同一 bullet 里若另有一条
@@ -209,7 +226,7 @@ def run(live: bool = False) -> int:
     c = fcc.extract_claims(mixed)
     good = len(c) == 1
     ok &= _record("M9b", good)
-    print(f"  M9b {'✅' if good else '❌'} 同一 bullet 内**未被否定**的断言仍要提取"
+    print(f"  M9b {_mark(good)} 同一 bullet 内**未被否定**的断言仍要提取"
           f"⇒ {len(c)} 条（期望 1）")
 
     # M10 断言词只在续行里
@@ -218,7 +235,7 @@ def run(live: bool = False) -> int:
     c = fcc.extract_claims(cont)
     good = len(c) == 1 and c[0]["pkg"] == "lifecycle"
     ok &= _record("M10", good)
-    print(f"  M10 {'✅' if good else '❌'} 断言词只在**续行** ⇒ 提取 {len(c)} 条（期望 1）")
+    print(f"  M10 {_mark(good)} 断言词只在**续行** ⇒ 提取 {len(c)} 条（期望 1）")
 
     # M11 别的断言类
     other_class = ("- refactor(validatorh): 底层校验迁移至 kitx/validator（pkg v0.10.0 拆分承接）"
@@ -226,12 +243,12 @@ def run(live: bool = False) -> int:
                    "deps: pkg v0.9.3 → v0.10.0、新增 kitx v0.1.0")
     good = fcc.broad_candidates(other_class)
     ok &= _record("M11", good)
-    print(f"  M11 {'✅' if good else '❌'} 别的断言类（「行为不变」+ 两个版本号）"
+    print(f"  M11 {_mark(good)} 别的断言类（「行为不变」+ 两个版本号）"
           f"应被宽口径抓到（单列人工判读）⇒ {fcc.broad_candidates(other_class)}")
     c = fcc.extract_claims(other_class)
     good = len(c) == 0
     ok &= _record("M11b", good)
-    print(f"  M11b{'✅' if good else '❌'} 但**不得**被工具口径误判为同类断言（提取 0 条）⇒ {len(c)} 条")
+    print(f"  M11b{_mark(good)} 但**不得**被工具口径误判为同类断言（提取 0 条）⇒ {len(c)} 条")
 
     # M12 scan() 的仓级聚合：必须按**仓**算（有断言的仓不能因为最后一个来源面没断言
     #     而被算成「无断言」）—— 复核班实测发现的假干净（旧实现读文件级计数）
@@ -247,7 +264,12 @@ def run(live: bool = False) -> int:
     #   变异自证（注入变异体 ⇒ 哪些用例精确转红）走 `--mutate` 模式。
     #   （措辞曾写成「变异自证：全部精确转红」⇒ 在 --mutate 运行时，
     #     被变异体故意打红的用例会把这行打成 ❌ ⇒ 误读成「框架失败」⇒ 已改。）
-    print(f"\n自测结果：{'✅ 全部用例通过' if ok else '❌ 有用例未通过'}")
+    if _MUTATE_MODE:
+        # ★ 自解释：这些红是**预期红**（变异被抓住的证据），不是自测失败。
+        print("\n变异注入中（以下 🔴 为**预期红**，不代表自测失败；"
+              "CI 判的是退出码，不是符号）")
+    else:
+        print(f"\n自测结果：{'✅ 全部用例通过' if ok else '❌ 有用例未通过'}")
     return 0 if ok else 1
 
 
@@ -283,7 +305,7 @@ def run_scan_aggregate() -> bool:
                 and res["repos_without_claims"] == 1
                 and res["total_claims"] == 1)
         ok &= _record("M12", good)
-        print(f"  M12 {'✅' if good else '❌'} 仓级聚合：2 个仓里**1 个**无此类断言"
+        print(f"  M12 {_mark(good)} 仓级聚合：2 个仓里**1 个**无此类断言"
               f"（实得 scanned_repos={res['scanned_repos']}、"
               f"repos_without_claims={res['repos_without_claims']}、"
               f"total_claims={res['total_claims']}）")
@@ -330,7 +352,7 @@ def run_end_to_end_same_string() -> bool:
                 and res["repos_without_claims"] == 0
                 and res["total_claims"] == 2)
         ok &= _record("M13c", good)
-        print(f"  M13c{'✅' if good else '❌'} ★端到端 scan()：同一串字两节 ⇒ "
+        print(f"  M13c{_mark(good)} ★端到端 scan()：同一串字两节 ⇒ "
               f"判定={verdicts} 提取={res['total_claims']} 条、"
               f"无断言仓={res['repos_without_claims']}（期望 2 条 / [DIFFERS, IDENTICAL] / 0）")
         for f in res["findings"]:
@@ -349,7 +371,7 @@ def run_live() -> bool:
             nested_all.append((rd.name, rel))
     good = len(nested_all) == 7
     ok &= _record("L1", good)
-    print(f"  L1 {'✅' if good else '❌'} 嵌套模块 CHANGELOG 应被枚举到 7 份，"
+    print(f"  L1 {_mark(good)} 嵌套模块 CHANGELOG 应被枚举到 7 份，"
           f"实得 {len(nested_all)} 份：{[f'{r}/{p}' for r, p in nested_all]}")
 
     # ★ 已更正的那条**不得**再被判成假断言（否定语境过滤的端到端证据）
@@ -359,7 +381,7 @@ def run_live() -> bool:
         c = fcc.extract_claims(v081)
         good = len(c) == 0
         ok &= _record("L2", good)
-        print(f"  L2 {'✅' if good else '❌'} logx v0.8.1 的 **Release 正文**（已更正）"
+        print(f"  L2 {_mark(good)} logx v0.8.1 的 **Release 正文**（已更正）"
               f"⇒ 提取 {len(c)} 条断言（期望 0：它声明旧句不成立，不再是待核断言）")
     except Exception as e:  # noqa: BLE001 - 网络不可用时只提示，不掩盖其它用例
         print(f"  L2 ⚠ 取 Release 正文失败（不影响其它用例）：{str(e)[:120]}")
@@ -454,7 +476,9 @@ def run_mutations() -> int:
     return 0 if ok else 1
 
 def main() -> int:
+    global _MUTATE_MODE
     if "--mutate" in sys.argv:
+        _MUTATE_MODE = True   # ★ 输出用 🔴 标「预期红」⇒ 别被误读成自测失败
         return run_mutations()
     live = "--live" in sys.argv
     return run(live=live)
