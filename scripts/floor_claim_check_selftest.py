@@ -25,6 +25,7 @@
   M4  包路径不存在 ⇒ 期望 UNVERIFIABLE
   M13 ★ **同一串字、在两个版本节 ⇒ 真伪必须不同**（真伪绑「文本自己声明的区间」）
   M13b ★ 同一串字 ⇒ 抽出的区间必须各自不同
+  M13c ★ **端到端** scan()：同一串字两节 ⇒ 提取 2 条、一成立一为假
 提取层（纯函数）：
   M5  断言词缺失 ⇒ 提取 0 条（不得静默判绿）
   M6  措辞变体（「字节级未变」）⇒ 提取 1 条
@@ -46,6 +47,7 @@
 """
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -125,7 +127,7 @@ def run(live: bool = False) -> int:
         for name, old, new, pkg, want, why in cases:
             verdict, detail = fcc.verify_claim(dep, old, new, pkg)
             good = verdict == want
-            ok &= good
+            ok &= _record(name, good)
             print(f"  {name} {'✅' if good else '❌'} want={want:13s} got={verdict:13s} | {why}")
             if not good:
                 print(f"       {detail[:160]}")
@@ -234,6 +236,7 @@ def run(live: bool = False) -> int:
     # M12 scan() 的仓级聚合：必须按**仓**算（有断言的仓不能因为最后一个来源面没断言
     #     而被算成「无断言」）—— 复核班实测发现的假干净（旧实现读文件级计数）
     ok &= run_scan_aggregate()
+    ok &= run_end_to_end_same_string()
 
     if live:
         ok &= run_live()
@@ -284,6 +287,55 @@ def run_scan_aggregate() -> bool:
               f"（实得 scanned_repos={res['scanned_repos']}、"
               f"repos_without_claims={res['repos_without_claims']}、"
               f"total_claims={res['total_claims']}）")
+    return ok
+
+
+def run_end_to_end_same_string() -> bool:
+    """M13c：**端到端**跑 `scan()` —— 同一串字在两个版本节 ⇒ 一成立一为假。
+
+    M13 只直接调 `verify_claim`（核验层两态）；M13c 走**真实扫描路径**：
+    造一个含「同一串字两个版本节」的仓 ⇒ `scan()` 提取 2 条断言 ⇒
+    判定必须是 **一成立一为假**（不是两条一样）。
+    ⇒ 若 scan 路径上丢了「文本声明的区间」（只认字符串），这里会红。
+
+    依赖仓名必须是 `core`（与 bullet 里的 dep 一致）⇒ fixture 造好后改名。
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        dep = build_fixture(ws)
+        (ws / "core").mkdir()
+        for item in dep.iterdir():          # fixture-dep → core
+            shutil.move(str(item), str(ws / "core" / item.name))
+        repo = ws / "logx"
+        (repo / ".git").mkdir(parents=True)
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n"
+            "## [v0.7.1] — 2026-10-19\n\n"
+            "- build: core 地板 v0.6.0 → v0.9.2——logx 唯一使用的 "
+            "core/lifecycle 逐字节未变，零行为风险\n\n"
+            "## [v0.8.1] — 2026-11-03\n\n"
+            "- build: 矩阵内依赖地板对齐：core v0.9.2 → v0.12.1——logx 唯一使用的 "
+            "core/lifecycle 逐字节未变，零行为风险\n",
+            encoding="utf-8")
+        old_ws = fcc.WORKSPACE
+        fcc.WORKSPACE = ws
+        try:
+            res = fcc.scan(include_releases=False)
+        finally:
+            fcc.WORKSPACE = old_ws
+        verdicts = sorted(f["verdict"] for f in res["findings"])
+        good = (len(res["findings"]) == 2
+                and verdicts == ["DIFFERS", "IDENTICAL"]
+                and res["repos_without_claims"] == 0
+                and res["total_claims"] == 2)
+        ok &= _record("M13c", good)
+        print(f"  M13c{'✅' if good else '❌'} ★端到端 scan()：同一串字两节 ⇒ "
+              f"判定={verdicts} 提取={res['total_claims']} 条、"
+              f"无断言仓={res['repos_without_claims']}（期望 2 条 / [DIFFERS, IDENTICAL] / 0）")
+        for f in res["findings"]:
+            print(f"        · {f['section']:<12} {f['old']} → {f['new']}  "
+                  f"{f['pkg']:<12} {f['verdict']}")
     return ok
 
 
@@ -342,13 +394,29 @@ def _mutate_verify_ignores_range():
     return patched
 
 
+def _mutate_verify_always_identical():
+    """核验层**永远判成立** ⇒ 同一串字两节都判 IDENTICAL ⇒ 端到端路径必须转红。"""
+    def patched(dep_dir, old, new, pkgpath):
+        return "IDENTICAL", "变异：假装永远成立"
+    return patched
+
+
 MUTATIONS = [
-    #   ⚠️ 预期转红集合含 M7 / M8：它们同样断言「抽出的 old 区间」⇒
-    #   变异确实破坏了它们 ⇒ **多红是正确行为**，不是误伤。
+    # ⚠️ **预期转红集合必须按「该变异真的破坏了谁」写死**，不能只写自己那条：
+    #   多红是**正确行为**（变异确实同时破坏了那些用例）⇒ 漏写反而会被框架判成
+    #   「转红不精确」⇒ 逼人把集合写对。
+    # ① 提取层丢掉 old 区间 ⇒ M7 / M8（断言 old 区间）+ M13b（抽各自区间）
+    #    + M13c（端到端 scan() 也走提取层）⇒ 全红。
     ("提取层丢掉文本声明的 old 区间（同一串字两节变成同一条）",
-     _mutate_extract_ignores_old_range, {"M7", "M8", "M13b"}),
+     _mutate_extract_ignores_old_range, {"M7", "M8", "M13b", "M13c"}),
+    # ② 核验层忽略区间（永远拿同一个 tag 比）⇒ 所有**走 verify_claim** 的用例都受影响：
+    #    C0 仍绿（它本就要 IDENTICAL）⇒ M1 / M2 / M3（判定翻转）+ M13 / M13c。
     ("核验层忽略文本声明的区间（永远拿同一个 tag 比）",
-     _mutate_verify_ignores_range, {"M13"}),
+     _mutate_verify_ignores_range, {"M1", "M2", "M3", "M13", "M13c"}),
+    # ③ 核验层永远判成立 ⇒ 凡期望非 IDENTICAL 的都翻转 ⇒ M1 / M2 / M3 / M4
+    #    （M4 期望 UNVERIFIABLE）+ M13 / M13c；C0 仍绿（本就期望 IDENTICAL）。
+    ("核验层永远判成立（同一串字两节都判真）",
+     _mutate_verify_always_identical, {"M1", "M2", "M3", "M4", "M13", "M13c"}),
 ]
 
 
