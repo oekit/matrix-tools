@@ -1,0 +1,141 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "114",
+      "category": "bare_other",
+      "bullet": "#113 / #114 `release_train` 的 CHANGELOG ",
+      "reason": "首跑归档：这条 bullet 的续行里提到了**别的号**（#154 的既有形态）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "117",
+      "category": "bare_other",
+      "bullet": "#116 / #117 `DEFAULT_BASE` 指向已不存在的旧工作区 +",
+      "reason": "首跑归档：这条 bullet 的续行里提到了**别的号**（#154 的既有形态）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "52",
+      "category": "cross_repo",
+      "bullet": "**logx**：caller 跳过注册表只增不删 ⇒ 用例自己注册的探针文件留",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "119",
+      "category": "cross_repo",
+      "bullet": "**concurrency**：GetBreaker 的 sharedBreak",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "67",
+      "category": "cross_repo",
+      "bullet": "**redisx**：兜底期断言把**后台探活**那次 EVAL 也算进业务计数",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.16",
+      "num": "79",
+      "category": "bare_other",
+      "bullet": "#100：`scripts/gen_matrix_go.py`：`go_floo",
+      "reason": "首跑归档：这条 bullet 的续行里提到了**别的号**（#154 的既有形态）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.15",
+      "num": "79",
+      "category": "bare_other",
+      "bullet": "#96：`scripts/maintenance_check.py`：base ",
+      "reason": "首跑归档：这条 bullet 的续行里提到了**别的号**（#154 的既有形态）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.14",
+      "num": "72",
+      "category": "cross_repo",
+      "bullet": "**pkg**：补 v0.23.0 起 Peek 非删除式读（可选接口 `Pee",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "31",
+      "category": "same_repo_other",
+      "bullet": "#88：`scripts/verify_version_line.py`——独立",
+      "reason": "首跑归档：这条 bullet 的续行里提到了**本仓的另一个号**（#154 的既有形态）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "24",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "33",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "46",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "31",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.7",
+      "num": "39",
+      "category": "cross_repo",
+      "bullet": "背景见 [oekit/data#39](https://github.com/o",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "46",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "48",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "56",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条",
+      "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    }
+  ]
+}
