@@ -415,6 +415,109 @@ bootstrap 是 Keep a Changelog）⇒ 旧版一跑就统一成第四种，还给 
 
 ## [v0.1.21] — 2026-10-29
 
+### fix(tools)：release_train 的 CHANGELOG 预校验形同虚设 + 多条 bullet 静默丢弃
+
+两条静默失效（#113 / #114）：
+
+- #113：本地预校验的脚本路径写的是旧 org 名（`profile/scripts/changelog_check.py`，
+  共享脚本仓早已改名为 `.github`）⇒ 路径恒不存在 ⇒ `if not exists: return`
+  ⇒ 预校验被静默跳过 ⇒ **本地放行、CI 才拦**，本地预校验形同虚设。
+  改法：新增 `find_changelog_check()`（`CHANGELOG_CHECK` 环境变量 → `<上级>/.github/scripts/`
+  → 本仓 `scripts/`），找不到时**明确告警**而不是静默 return。
+- #114：`--changelog` 可多次给出（每多一条就是一条 bullet），但版本节只写
+  `bullets[0]` ⇒ 其余静默丢弃 ⇒ 发版说明缺条目。
+  改法：抽出纯函数 `format_bullets()`，用 `"\n- ".join(bullets)` 全部写入。
+
+新增 `scripts/release_train_selftest.py` 并注册进 `audit.yml` 的 selftest job：
+两条反证——只取 `bullets[0]` ⇒ 用例 3 转红；路径换回旧 org 名 ⇒ 用例 1c 转红。
+
+### fix(tools)：close_issue 在 PR 未合入时写「已合入修复 ✅」并关单——假声明
+
+`--pr` 指向**未合入**的 PR 时，旧实现仍写「已合入修复 ✅」并把 issue 关掉 ⇒
+「已合入」是假声明，且问题在修复落地前就从看板上消失（#119）。
+
+2026-10-28 实测：close_issue.py "gormx#36" --no-release --pr 39 —— 当时 PR #39
+是 OPEN（CI 已绿、未合入），回执写成「已合入修复 ✅（无 SemVer 发布）」，issue 被 closed。
+
+根因：合入状态判定只看「目标本身是不是 PR」——目标是 issue 时无条件写「已合入修复 ✅」，
+`--pr` 指向的 PR 状态根本没查 ⇒ 与脚本自述的「不做假声明」相矛盾。
+
+修法：合入状态只看 `--pr` 指向的 PR，与目标类型无关；pending（未合入）⇒ 回执写
+「已提交修复（PR 尚未合入）」且**只发回执、绝不关单**（由 PR 正文的 Closes #N 在
+合入时关）；「读不到 PR 状态」按未合入处理（fail-closed）。
+
+新增 selftest 用例 11（目标是 issue + `--pr` 指向未合入 PR）：回执不得含「已合入修复」、
+必须含「已提交修复」、绝不能调 `gh issue close`；变异验证：去掉 pending 判定 ⇒
+用例 11 转红。
+
+### fix(tools)：DEFAULT_BASE 指向早已不存在的旧工作区 + pkg 子包口径漂移（23 → 24）
+
+三条同根因缺陷（工具自己骗人 / 口径漂移且无人能发现）：
+
+- #116：`matrix.py` 的 DEFAULT_BASE 兜底写的是早已不存在的旧工作区路径 ⇒
+  任何没显式给 MATRIX_BASE 的调用都撞上「repo X 不存在于 … 的任何已知布局中」
+  ⇒ handoff 读不到仓却报「无在途」（读不到 ≠ 事实为空，却报成「没有在途」）。
+  改法：按脚本自身位置推导（matrix-tools 的上级目录就是矩阵检出根；CI 里
+  matrix-tools 单独 clone 时上级是 runner 工作区，仓在 `<base>/repos/<name>`，
+  `repo_dir` 的第三个候选正好命中）。
+- #117：`matrix.py` 的 DESC 里 pkg 写「微工具集 23 合 1」，实际有 24 个公开子包
+  （多出 v0.27.0 起的 shellx）⇒ 同一模块两套口径，且没有门禁能发现：
+  矩阵表新鲜度检查比的是「README 的表 == DESC」，两边一起过期时照样通过。
+  改法：DESC 改 24 合 1 并补 shellx；新增 `scripts/desc_count_selftest.py` 拿仓里的
+  真实目录当第三只眼，断言声明的数字与包名清单都等于实际公开子包。
+- 同族第三处：`regen_readme.py` 写死了同一个旧工作区路径 ⇒ 本机直接 ImportError。
+
+配套修法（CI 自抓到的真 bug）：`public_subpackages()` 在仓读不到时返回 None
+（不是空集）⇒ 跳过该仓并打印「跳过 N 个仓：本地无兄弟仓检出」——CI 里 matrix-tools
+是**独立 clone**，自测若假设兄弟仓都在旁边会恒红且报的是假问题。
+
+### fix(tools)：gen_versions 取不到嵌套 tag 时静默丢掉 hostVersion 字段
+
+**「读不到 ≠ 没有」**（#79/#96 同族）在产物生成侧的残留：hostVersion 靠
+**commit 祖先关系**推导，而 ls-remote 只给 tag 名、给不出 commit ⇒ 必须读本地 git。
+而 `git pull` **不带 --tags** ⇒ 嵌套 tag 常常只在本地缺失 ⇒ `host_version()`
+静默返回 None ⇒ 产物里嵌套条目**丢掉 hostVersion 字段**（#125）。
+
+2026-10-28 实测（oekit 矩阵）：生成站点 versions.json 时本地 logx clone 缺
+hlog/v0.1.6 等嵌套 tag ⇒ logx/hlog、logx/kitexlog 的 hostVersion 消失 ⇒
+下游看不到「这次嵌套发布对应哪个父仓版本」；而矩阵门禁按 **tag 日期序**推出别的值
+⇒ 发布后矩阵永远判红，且**没有任何输出**说明产物缺字段的原因。
+
+两处修：
+
+1. 生成前 `_ensure_tags()`：缺的 tag 先 `git fetch --tags`（读不到就让调用方报）；
+2. `host_version()` 取不到 sha 时**明确告警**（打印本地缺哪个 tag），不再静默丢字段。
+
+### fix(tools)：release_post 的站点 versions.json PR 不排 auto-merge——半截链没人收
+
+release_post 对**模块仓**的版本行 PR 与 **BOM** PR 都排了 auto-merge，唯独**站点**
+versions.json 那步没有 ⇒ 站点 PR CI 全绿后**静默悬着**，半截链没人收（#115）。
+
+实测 2026-10-28：站点 PR #104 全绿却一直 OPEN，只能手工合。
+
+修法：`land_pr(..., auto_merge=True)` ⇒ 与另两条路径一致。
+
+### fix(tools)：dependabot 目录门禁漏了反向检查——嵌套模块存在却没登记
+
+旧门禁只查「**登记了**却不存在 / 目录里没有 go.mod」这一侧 ⇒「**存在却没登记**」
+零覆盖 ⇒ 嵌套模块的依赖**永远不会被 dependabot 提议升级**，而且**没有任何报错**
+（#118）。
+
+2026-10-28 实测：全矩阵 6 个嵌套模块未登记（bootstrap/nacos、bootstrap/obs、
+registry/nacos、registry/nacosimpl、kitex/istio、kitex 的 kitexotel）⇒
+共 130 项间接依赖冻结；形态是「直接依赖都是最新、落后全在间接依赖」。
+
+三处修：
+
+1. `check_dirs()` 拆成两个方向：`check_registered_dirs()`（原判据，措辞不变）
+   + `check_nested_registered()`（新：仓内每个含 go.mod 的子目录，含多层路径，
+   都必须在 gomod 条目里出现；排除 vendor/testdata/third_party/examples/隐藏目录）；
+2. `nested_module_dirs()`：扫仓内所有嵌套模块的相对路径（支持 a/b/c 多层）；
+3. 自测补两条反证：嵌套模块未登记 ⇒ 必须抓到；多层嵌套模块（a/b/c）同样要认出来
+   （变异测试实测：掐掉反向检查 ⇒ 两条用例都红 ⇒ 不是空转检查）。
+
+配套：bootstrap / registry / kitex 三仓的 dependabot.yml 已补登记（各开一条 PR）。
+
 ### fix(tools)：align_floors 看不见嵌套模块——第 4 层的 kitexotel 被漏扫
 
 `align_floors.py` 扫 go.mod 用的是 `glob("*/go.mod")`，只覆盖**一层**子目录。
