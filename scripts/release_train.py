@@ -386,9 +386,18 @@ def format_bullets(bullets: list[str], nested_self: bool, repo: str, main_tag: s
     ``issues``（#153）：关联问题单。版本节里**点名 issue** 是回执能定位到
     「本条修复」的**前提**——回执读的是 CHANGELOG 版本节（Release 正文的
     「合入记录」行它读不到）。不点名 ⇒ 回执只能提示「该版本节未提到本 issue」。
+
+    ⚠️ **main_tag 为空的措辞**（只发嵌套模块时）：旧实现无条件写
+    ``f"跟随 {repo} {main_tag} 发版"`` ⇒ main_tag 为空时产出
+    ``"跟随 registry  发版"``（**双空格**）⇒ 一句没人看得懂的文案进了版本节。
+    ⇒ 现在空值时**不编造父模块版本号**，改说「随本次 train 的父模块一并发布」。
     """
     if nested_self or not bullets:
-        body = f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+        if main_tag:
+            body = f"跟随 {repo} {main_tag} 发版（release_train 嵌套 train）"
+        else:
+            # ★ 父模块本次不在 train 里 ⇒ 不写一个空版本号（否则出双空格文案）
+            body = "随本次 train 的父模块一并发布（release_train 嵌套 train）"
     else:
         body = "\n- ".join(bullets)
     if issues:
@@ -574,7 +583,6 @@ def main():
     issues = [f"{r or repo}#{n}" for r, n in issue_refs]
 
     root = repo_dir(repo)
-    preflight_gate(root, apply)
     specs = []  # (名称, 模块目录, tag 名)，主模块在前
     for spec in args[1:]:
         name, ver = spec.split("=", 1)
@@ -589,6 +597,29 @@ def main():
                 print(f"{repo}/{name}: 子目录无 go.mod，不是嵌套模块")
                 sys.exit(2)
             specs.append((name, sub, f"{name}/{ver}"))
+
+    # ★ 只发嵌套模块（没有 main=）⇒ 显式拒绝并给出正确用法。
+    #   ⚠️ 位置要紧：**在 preflight_gate 之前** —— 用法错误应当**先**于工作区检查报出，
+    #   否则用户看到的是「须在 main 上（当前 ）」这类与真正问题无关的报错。
+    #   原因（实测）：main_tag 为空会一路漏下去 ⇒
+    #     ① 版本节文案写成「跟随 {repo}  发版」（**双空格**，父模块版本号是空的）；
+    #     ② 自动生成的分支名变成 `chore/rel-`（**没有版本号**）⇒ 分支名无法区分批次；
+    #     ③ 嵌套模块**脱离父仓单独发版** ⇒ 下游解析失败（matrix-tools#148：
+    #        父仓版本没发布就发嵌套模块，消费方直接解析失败）。
+    #   ⇒ 这不是「不支持的用法」，是**必须连父仓一起发**的发版 ⇒ 直接讲清楚。
+    if not any(name == "main" for name, _d, _t in specs):
+        only = "、".join(f"{name}={tag.split('/', 1)[1]}" for name, _d, tag in specs)
+        raise SystemExit(
+            f"{repo}: 本次 train 只有嵌套模块（{only}），没有父模块 main=。\n"
+            f"  ⇒ 嵌套模块**必须与父仓同 train**：父仓版本没发布，下游解析会失败"
+            f"（matrix-tools#148）。\n"
+            f"  ⇒ 请把父仓一并给出，例如：\n"
+            f"       python3 scripts/release_train.py {repo} main=vX.Y.Z {only} "
+            f"--apply --changelog \"...\"\n"
+            f"  ⇒ 若父仓本次无需发版（地板已就位），**不要**单独发嵌套模块。"
+        )
+
+    preflight_gate(root, apply)
 
     print(f"release train: {repo}（{'apply' if apply else 'dry-run'}）")
     for name, d, tag in specs:
