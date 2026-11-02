@@ -194,6 +194,21 @@ PR_REF_RE = re.compile(
     r"(?:#\d+(?:\s*[、,，/和]\s*#?\d+)*|/\d+)")
 
 
+def weak_issue_re(num: str) -> re.Pattern:
+    """**弱形态** `#N` 的匹配模式（#172）。
+
+    弱形态 = 裸 `#N`（版本节 bullet 末尾的 `（#158）` 这类）。
+    ⚠️ 必须带**左边界**：`#` 前面**不能**是词字符或 `#`。
+    否则 `pkg#46` / `concurrency#56` 里那个号会被当成本仓的号
+    ⇒ **跨仓同号张冠李戴**（issue 号在 org 内大量重号 ⇒ 极易踩中）。
+
+    - `（#46）` / `见 #46、#47` / `#46：修好了` ⇒ 前面是标点/空格 ⇒ **命中** ✓
+    - `pkg#46` / `concurrency#56` ⇒ 前面是字母 ⇒ **不命中** ✓
+    - `##1620` ⇒ 前面是 `#` ⇒ **不命中**（那是另一个号的一部分）✓
+    """
+    return re.compile(r"(?<![\w#])#" + re.escape(num) + r"\b")
+
+
 class IssueLocation(NamedTuple):
     """CHANGELOG 版本节里与某个 issue 相关的内容。
 
@@ -220,18 +235,29 @@ def mentions_issue(line: str, repo: str, num: str) -> bool:
       **PR 引用整段抹掉**再看：`PR #148、#149` 里的两个号都是 PR 号。
 
     两种形态都要求数字后面**不是**数字（`#1620` 不算 `#162`）。
+
+    ⚠️ **弱形态带左边界**（#172）：`#` 前面**不能**是词字符或 `#`
+    ⇒ `pkg#46` / `concurrency#56` 里那个号**不算本仓的号**
+    （否则跨仓同号 ⇒ 回执**张冠李戴**）。
+    ⇒ 强形态不受影响（`matrix-tools#46` 由上面那条分支单独命中）。
     """
     if re.search(re.escape(f"{repo}#{num}") + r"\b", line):
         return True
     stripped = PR_REF_RE.sub(" ", line)
-    return bool(re.search(r"#" + re.escape(num) + r"\b", stripped))
+    return bool(weak_issue_re(num).search(stripped))
 
 
 def _pr_only_mentions(line: str, num: str) -> bool:
-    """这个号在这行里**只**以 PR 形态出现（抹掉 PR 引用后就没了）。"""
-    if re.search(r"#" + re.escape(num) + r"\b", PR_REF_RE.sub(" ", line)):
+    """这个号在这行里**只**以 PR 形态出现（抹掉 PR 引用后就没了）。
+
+    ⚠️ 与 `mentions_issue` **同一套边界**（#172）⇒ 两边**口径一致**：
+    `pkg#46` 这种**别仓**的号，在两处都**不算**本仓的号
+    （只改一处会造成「弱形态不认了、但 pr_only 仍认」的**口径分裂**——
+    那正是 #153/#154/#158 这一族的根因：两边读法分裂）。
+    """
+    if weak_issue_re(num).search(PR_REF_RE.sub(" ", line)):
         return False        # 抹掉 PR 引用后还在 ⇒ 它是 issue 引用
-    return bool(re.search(r"#" + re.escape(num) + r"\b", line))
+    return bool(weak_issue_re(num).search(line))
 
 
 def _split_blocks(lines: list[str]) -> list[tuple[bool, list[str]]]:

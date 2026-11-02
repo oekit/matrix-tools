@@ -146,6 +146,48 @@ def all_assertions() -> list[str]:
     if not loc8.pr_only:
         failures.append("定位器：PR 形态没标成 pr_only")
 
+    # ── #172：跨仓同号**不得**被当成本仓的号 ──────────────────────
+    #   弱形态 `#N` 前面若是**别的仓名**（`pkg#46` / `concurrency#56`）
+    #   ⇒ 那是**别仓**的 issue 号 ⇒ 不是本仓 #46 ⇒ 不得绑定、不得算 mentioned。
+    #   （issue 号在 org 内**大量重号** ⇒ 每仓都有 #46/#56/#85… ⇒ 极易踩中）
+    loc9 = locate("- fix(x): 实测 pkg#46 / pkg#48 / concurrency#56 全绿\n",
+                  "matrix-tools", "46")
+    if loc9.entries:
+        failures.append(f"定位器：跨仓号 pkg#46 被当成本仓 #46 绑定了（张冠李戴）："
+                        f"{loc9.entries}")
+    if loc9.mentioned:
+        failures.append("定位器：跨仓号 pkg#46 被算成本仓 #46 的「提到」")
+    if loc9.pr_only:
+        failures.append("定位器：跨仓号 pkg#46 被算成「只以 PR 形态出现」"
+                        "（它是别仓的 issue 号，不是 PR 号）")
+
+    # 强形态不受影响：`matrix-tools#153` 仍必须绑定
+    loc10 = locate("- fix(x): 修好了（matrix-tools#153）\n", "matrix-tools", "153")
+    if not loc10.entries:
+        failures.append("定位器：强形态 matrix-tools#153 没绑定（左边界加过头了）")
+
+    # 真引用仍必须绑定：`（#153）` / `#153：…`
+    loc11 = locate("- fix(x): 修好了（#153）\n", "matrix-tools", "153")
+    if not loc11.entries:
+        failures.append("定位器：真引用「（#153）」没绑定（左边界加过头了）")
+    loc12 = locate("- #153：修好了某件事\n", "matrix-tools", "153")
+    if not loc12.entries:
+        failures.append("定位器：bullet 首行的「#153：…」没绑定")
+
+    # 两处口径必须**一致**：`mentions_issue` 与 `_pr_only_mentions` 同源
+    # （只改一处 ⇒ 出现「弱形态不认了、但 pr_only 仍认」的**口径分裂**
+    #   ⇒ 那正是 #153/#154/#158 这一族的根因：两边读法分裂）
+    from gen_releases import mentions_issue, _pr_only_mentions  # noqa: E402
+    cross_line = "- fix(x): 实测 pkg#46 全绿\n"
+    if mentions_issue(cross_line, "matrix-tools", "46"):
+        failures.append("定位器：mentions_issue 把跨仓号 pkg#46 当成本仓 #46")
+    if not mentions_issue(cross_line, "pkg", "46"):
+        failures.append("定位器：mentions_issue 对**本仓** pkg 的 #46 也不认了"
+                        "（跨仓判据把真引用也误伤了）")
+    if _pr_only_mentions(cross_line, "46"):
+        failures.append("定位器：_pr_only_mentions 把跨仓号 pkg#46 当成 PR 形态"
+                        "（两处口径分裂了）")
+
     # ── 回执正文 ──────────────────────────────────────────────
     body = build(SECTION_WITH_ENTRY, "matrix-tools", "153", "v0.1.30")
     if "**本条修复**" not in body:
@@ -227,12 +269,16 @@ def all_assertions() -> list[str]:
 def run_mutation(name: str, mutate) -> list[str]:
     """在变异下跑断言，返回 failures（空 = 变异没被抓到）。"""
     saved = (gen_releases.mentions_issue, gen_releases.locate_issue_entries)
+    saved_pr_only = gen_releases._pr_only_mentions
     saved_build = close_issue.build_change_content
     try:
         mutate()
         return all_assertions()
     finally:
         gen_releases.mentions_issue, gen_releases.locate_issue_entries = saved
+        # ⚠️ `_pr_only_mentions` 也必须还原（#172 新增的打桩点）
+        # ⇒ 否则它会**污染后续变异** ⇒ 后面的变异结果不可信。
+        gen_releases._pr_only_mentions = saved_pr_only
         close_issue.build_change_content = saved_build
 
 
@@ -295,6 +341,40 @@ def _mutate_claim_case_b_without_evidence():
     close_issue.build_change_content = _f
 
 
+def _mutate_cross_repo_counts():
+    """#172：弱形态**不带左边界** ⇒ `pkg#46` 被当成本仓 #46 ⇒ 张冠李戴。"""
+    def _f(line: str, repo: str, num: str) -> bool:
+        if re.search(re.escape(f"{repo}#{num}") + r"\b", line):
+            return True
+        stripped = gen_releases.PR_REF_RE.sub(" ", line)
+        return bool(re.search(r"#" + re.escape(num) + r"\b", stripped))
+    gen_releases.mentions_issue = _f
+
+
+def _mutate_pr_only_cross_repo():
+    """#172：`_pr_only_mentions` 认跨仓号 ⇒ 与 `mentions_issue` 口径分裂。
+
+    ⚠️ **这个变异必须有牙齿**：`pr_only` 分支只在「`mentions_issue` 不命中、
+    但 `_pr_only_mentions` 命中」时可达 ⇒ 语料必须让两者**判据不同**。
+
+    实测（2026-11-02）：**旧逻辑的 `_pr_only_mentions` 对 `pkg#46` 本来就返回
+    False** —— 它的第一道检查是「抹掉 PR 引用后**还在** ⇒ 它是 issue 引用 ⇒
+    return False」⇒ 跨仓号（不是 PR 引用）会通过这道检查 ⇒ 旧逻辑同样不把
+    跨仓号判成 pr_only。
+    ⇒ 所以 #172 正文里「`_pr_only_mentions` 对 `pkg#46` 也会返回 True」这句
+    **不准确**（实测证伪）；pr_only 侧**本来就**不误判跨仓号。
+    ⇒ 真正需要一起改的是**口径一致性**（不是「pr_only 也错」）——
+    两边共用同一个 `weak_issue_re` ⇒ 未来任一侧改动不会造成分裂。
+
+    为让本变异**真的改了行为**（否则「没被抓住」只说明变异无效），
+    这里打桩成「跨仓号 ⇒ pr_only 命中」，与 `mentions_issue` 的判定**相反**
+    ⇒ 分裂 ⇒ `pr_only` 分支可达 ⇒ 判据能抓住它。
+    """
+    def _pr(line: str, num: str) -> bool:
+        return bool(re.search(r"#" + re.escape(num) + r"\b", line))
+    gen_releases._pr_only_mentions = _pr
+
+
 MUTATIONS = [
     ("定位器恒不命中", _mutate_never_hit),
     ("定位器恒命中", _mutate_always_hit),
@@ -303,6 +383,8 @@ MUTATIONS = [
     ("回执又写上「不含本条修复」假断言", _mutate_restore_false_assertion),
     ("Release 正文证据被丢掉", _mutate_ignore_release_evidence),
     ("没证据却断言「很可能就在这一版里」", _mutate_claim_case_b_without_evidence),
+    ("跨仓号被当本仓号（#172 原始缺陷）", _mutate_cross_repo_counts),
+    ("pr_only 认跨仓号 ⇒ 口径分裂（#172）", _mutate_pr_only_cross_repo),
 ]
 
 
