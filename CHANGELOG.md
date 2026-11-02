@@ -4,6 +4,66 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.26] — 2026-11-02
+
+### feat(tools)：审计新增阶段——「各仓自身 go.mod 地板 vs 远端最新 tag」
+
+审计此前只查**嵌套模块对其父仓**的 require 方向，**根仓对别仓嵌套模块**的
+require 地板没人看 ⇒ 这一类漂移只能靠人翻出来（oekit/oekit#104 的 13 处 /
+6 个仓就是如此）。
+
+新增阶段逐仓解析自己的 `go.mod`，把每条 `github.com/oekit/<repo>` 的 require
+版本与该仓**远端最新 tag** 对比；落后即判红。判据自己解析 require 行、自己读
+远端 tag、自己按数字比版本 ⇒ **不与被检对象共享判断逻辑**。
+
+自测：`audit_floor_gate_selftest.py`（含变异自证）。
+
+### feat(tools)：地板对齐与审计门禁覆盖**别仓嵌套模块**（oekit/oekit#104）
+
+`oekit/oekit#104`（跨仓嵌套模块地板对齐）的真实成因是三道门禁都**看不见**
+「根仓 require 别仓嵌套模块」这一类地板：
+
+1. `check_nested_module_floors` 只管「子→父」方向；
+2. `align_floors.py` 的 `FLOOR_REQ_RE` 只匹配根模块形态；
+3. 阶段 6 只核对 BOM 快照的新鲜度。
+
+⇒ 13 处漂移（nacosimpl v0.1.0→v0.1.1、hlog v0.1.4→v0.1.6 …，跨 6 仓）只能靠人翻出来。
+
+本次补上两个方向：
+
+**1. align_floors.py（整改工具）**
+
+- `FLOOR_REQ_RE` 扩成同时匹配根模块与嵌套模块两种形态；
+- 取目标版本时按形态分流：根模块走 `latest_tag`，嵌套模块走新增的 `matrix.latest_nested_tag`。
+
+**2. matrix.latest_nested_tag / nested_tag_prefix（新增）**
+
+- 嵌套 tag 前缀 = 该模块在父仓里的**完整子路径**（不是最后一段）：
+  `logx/hlog` → `hlog/v0.1.6`；`kitexotel` → `observability/tracing/instrumentation/kitexotel/v0.7.4`；
+- 版本比较**按数字**（拆元组）——字符串排序会把 `v0.9.0` 排到 `v0.31.0` 之后；
+- 前缀表来自 `matrix.NESTED_MODULES` 登记表，不手写。
+
+**3. audit.py（判据）**
+
+- 新增 `check_nested_floors_of_other_repo`：各仓对**别仓嵌套模块**的 require 地板，不得落后该嵌套模块的远端最新 tag；
+- **判据独立于被检对象**：自己解析 require 行、自己按前缀过滤远端 tag、自己按数字比版本 ⇒ 三处逻辑都不与 `align_floors.py` 共享；
+- 嵌套模块的 module 路径表从**各仓自己的 go.mod** 推导 ⇒ 不依赖登记表，登记表漏登记时照样看得见。
+
+**自测（两个新文件，均含变异自证）**
+
+- `align_floors_nested_selftest.py`：6 组判据 + 3 项变异自证；
+- `audit_nested_floor_gate_selftest.py`：6 组判据 + 2 项变异自证。
+
+外部变异实测：正则退回「只匹配根模块」/ 前缀取最后一段 / 版本比较退回字符串排序 ⇒ 三条全部被抓住，且是**优雅判红**而非崩异常。
+
+⚠️ 变异自证里踩到的真坑（已修）：正则捕获组数与解包顺序耦合 ⇒ 正则被改回 4 组形态时 `ver` 拿到 `None` ⇒ `parse_semver(None)` 抛 `TypeError` ⇒ 自测**崩在异常**而不是判红（异常不算「抓住变异」）⇒ 判据加了显式形状校验。
+
+### ci(tools)：三个新自测接进 audit workflow
+
+`audit.yml` 的 selftest job 新增三步：`align_floors_nested_selftest.py` /
+`audit_floor_gate_selftest.py` / `audit_nested_floor_gate_selftest.py` ⇒ 门禁自带
+的变异自证随每次 CI 跑，不靠人记得跑。
+
 ## [v0.1.25] — 2026-10-31
 
 ### fix(tools)：真实 gh 的 EOF 报错格式没被识别成瞬时错误——读取层遇 EOF 直接打死整条链
