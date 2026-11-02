@@ -26,6 +26,7 @@ import re
 import subprocess
 import sys
 import tempfile
+from typing import NamedTuple
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import MODULES, ORG, repo_dir  # noqa: E402
@@ -172,6 +173,125 @@ def _extract(text: str, head: str) -> str | None:
     pat = re.compile(r"(?ms)^## \[" + re.escape(head) + r"\][^\n]*\n(.*?)(?=^## \[|\Z)")
     m = pat.search(text)
     return m.group(1).strip() if m else None
+
+
+# ---------- issue 定位：版本节里哪几条是「本 issue 的修复」（#153）----------
+
+# bullet 行：`- ` / `* ` / `+ `（可缩进）。
+BULLET_RE = re.compile(r"^(\s*)[-*+]\s+")
+# **PR 引用**：`PR #149` / `PRs #149` / `PR #148、#149`（连号列举）/ `pull request #149`
+# / `pull/149`。
+#
+# 本矩阵的 PR 与 issue **共用编号空间**（matrix-tools#151 既是 issue 也是 PR）
+# ⇒ 把 PR 号当成 issue 号，回执就会指到别的条目上——**比不提示更糟**
+# （张冠李戴）。所以判定要**逐号剥离 PR 引用**：先把整行的 PR 引用抹掉，
+# 再看目标号还在不在。
+#
+# 为什么不能只判「同一行里有 `PR #N`」：一行里可能同时写 `PR #149 修了 #148`
+# ——此时 `#148` 是 issue 引用，不能因为同行有 PR 就被抹掉。
+PR_REF_RE = re.compile(
+    r"(?i)\b(?:prs?|pull\s+requests?|merged\s+pr)\s*"
+    r"(?:#\d+(?:\s*[、,，/和]\s*#?\d+)*|/\d+)")
+
+
+class IssueLocation(NamedTuple):
+    """CHANGELOG 版本节里与某个 issue 相关的内容。
+
+    entries：绑定到该 issue 的**条目块**（一条 bullet 及其缩进续行）——
+    回执正文把它们单独列出来。
+    rest：版本节的其余内容（保持原顺序）。
+    mentioned：版本节里**任何形态**提到过该 issue（含只在叙述文字里提到）。
+    pr_only：版本节里这个号**只**以 PR 形态出现过（本 issue 的修复不在这一节，
+    但号本身出现过——「为什么定位不到」的答案）。
+    """
+
+    entries: list[str]
+    rest: str
+    mentioned: bool
+    pr_only: bool
+
+
+def mentions_issue(line: str, repo: str, num: str) -> bool:
+    """这一行是否提到了本 issue（**不是** PR 引用）。
+
+    两种形态：
+    - **强**：`<repo>#<num>`（如 `matrix-tools#125`）——本仓 issue 的规范写法；
+    - **弱**：`#<num>`（如版本节 bullet 末尾的 `（#158）`）——但要先把这行里的
+      **PR 引用整段抹掉**再看：`PR #148、#149` 里的两个号都是 PR 号。
+
+    两种形态都要求数字后面**不是**数字（`#1620` 不算 `#162`）。
+    """
+    if re.search(re.escape(f"{repo}#{num}") + r"\b", line):
+        return True
+    stripped = PR_REF_RE.sub(" ", line)
+    return bool(re.search(r"#" + re.escape(num) + r"\b", stripped))
+
+
+def _pr_only_mentions(line: str, num: str) -> bool:
+    """这个号在这行里**只**以 PR 形态出现（抹掉 PR 引用后就没了）。"""
+    if re.search(r"#" + re.escape(num) + r"\b", PR_REF_RE.sub(" ", line)):
+        return False        # 抹掉 PR 引用后还在 ⇒ 它是 issue 引用
+    return bool(re.search(r"#" + re.escape(num) + r"\b", line))
+
+
+def _split_blocks(lines: list[str]) -> list[tuple[bool, list[str]]]:
+    """把版本节切成块：bullet（含其缩进续行）成一块，其余各成一块。"""
+    blocks: list[tuple[bool, list[str]]] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        m = BULLET_RE.match(line)
+        if not m:
+            blocks.append((False, [line]))
+            i += 1
+            continue
+        indent = len(m.group(1))
+        blk = [line]
+        i += 1
+        while i < len(lines):
+            nxt = lines[i]
+            if not nxt.strip():
+                break
+            nm = BULLET_RE.match(nxt)
+            cur = len(nm.group(1)) if nm else len(nxt) - len(nxt.lstrip())
+            if cur <= indent:
+                break
+            blk.append(nxt)
+            i += 1
+        blocks.append((True, blk))
+    return blocks
+
+
+def locate_issue_entries(section: str, repo: str, num: str) -> IssueLocation:
+    """在 CHANGELOG 版本节里定位与本 issue 相关的内容（#153）。
+
+    「条目」= 一条 bullet 及其缩进续行。版本节把本 issue 绑到具体条目时
+    （bullet 末尾带 `（#158）`、或整条以 `#125` 开头），那条 bullet 就是
+    本条修复；**只在叙述文字里提到**（拿不到具体条目）时 entries 为空、
+    mentioned 为真——这两种情况回执的说法必须不同，不能混成一句。
+
+    这个号**只**以 PR 形态出现过时（pr_only）：本 issue 的修复不在这一节，
+    但号本身在 ⇒ 回执要能回答「为什么定位不到」。
+    """
+    blocks = _split_blocks(section.splitlines())
+    entries: list[str] = []
+    rest_lines: list[str] = []
+    mentioned = False
+    pr_only = False
+    for is_bullet, blk in blocks:
+        hit = any(mentions_issue(l, repo, num) for l in blk)
+        if hit:
+            mentioned = True
+        elif any(_pr_only_mentions(l, num) for l in blk):
+            pr_only = True
+        if is_bullet and hit:
+            entries.append("\n".join(blk))
+        else:
+            rest_lines.extend(blk)
+    return IssueLocation(entries=entries,
+                         rest="\n".join(rest_lines).strip(),
+                         mentioned=mentioned,
+                         pr_only=pr_only)
 
 
 def go_mod_at(repo_dir_path, tag: str, nested: str | None) -> str | None:
