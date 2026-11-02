@@ -292,7 +292,18 @@ def wanted_sections(root, specs) -> list[tuple[Path, str]]:
 
 
 def insert_top(path: Path, heading: str, bullet: str) -> bool:
-    """版本节插到文件最顶（严格递减门禁要求新版本在最上）；已存在返回 False。"""
+    """版本节插到文件最顶（严格递减门禁要求新版本在最上）；已存在返回 False。
+
+    ⚠️ **文件不存在 ⇒ 跳过，不创建**（实测 logx 仓形态）：
+       logx 的四个嵌套模块（hlog / kitexlog / sink / hertzlog）**都没有**独立的
+       `CHANGELOG.md` —— 嵌套版本节**只记在根 CHANGELOG**（形态 `## [hlog/v0.1.6]`）。
+       旧实现直接 `path.read_text()` ⇒ 对不存在的路径抛
+       `FileNotFoundError` ⇒ **logx 这种仓根本发不了版**（版本节 PR 落不下去）。
+       ⇒ 现在：文件不存在 ⇒ 返回 False（跳过该面），**不新建空文件**
+       （新建会造出「嵌套模块有独立 CHANGELOG」的假形态 ⇒ 与 logx 既有惯例不一致）。
+    """
+    if not path.exists():
+        return False
     t = path.read_text()
     if any(l.startswith(heading) for l in t.splitlines()):
         return False

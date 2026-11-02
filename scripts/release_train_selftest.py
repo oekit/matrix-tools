@@ -266,6 +266,21 @@ def main() -> int:
     if "main=" not in _out:
         failures.append(f"用例3f：报错里应给出正确用法（提到 main=）：{_out[:200]!r}")
 
+    # 3g：★ 嵌套模块**没有**独立 CHANGELOG（logx 仓形态）⇒ 版本节只写根，
+    #   且**不得**为它新建空文件（新建会造出「嵌套模块有独立 CHANGELOG」的假形态）。
+    #   旧实现 `path.read_text()` ⇒ FileNotFoundError ⇒ logx 这种仓根本发不了版。
+    with tempfile.TemporaryDirectory() as _td3:
+        _missing = Path(_td3) / "hlog" / "CHANGELOG.md"
+        try:
+            _r = release_train.insert_top(_missing, "## [v0.1.7]", "- x")
+        except Exception as _e:  # noqa: BLE001 - 旧实现会抛 FileNotFoundError
+            failures.append(f"用例3g：文件不存在时**不得抛异常**（旧实现 read_text 会炸）：{_e!r}")
+            _r = "raised"
+        if _r is not False:
+            failures.append(f"用例3g：文件不存在时应返回 False（跳过），实得 {_r!r}")
+        if _missing.exists():
+            failures.append(f"用例3g：**不得**为不存在的嵌套路径新建 CHANGELOG.md：{_missing}")
+
     failures.extend(issue_binding_assertions())
 
     if failures:
