@@ -136,6 +136,478 @@
       "category": "cross_repo",
       "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条",
       "reason": "首跑归档：这条 bullet 引用的是**别仓**的 issue 号（历史真实形态，非写错）"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "obs/v0.2.13",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "nacos/v0.3.9",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "v0.6.8",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "nacos/v0.3.2",
+      "num": "6",
+      "category": "cross_repo",
+      "bullet": "chore(deps): 父模块地板 bootstrap v0.6.1 → v0.6.2（audit 嵌套地板门禁首发抓漏，matrix-tools#6）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "obs/v0.2.7",
+      "num": "6",
+      "category": "cross_repo",
+      "bullet": "chore(deps): 父模块地板 bootstrap v0.6.1 → v0.6.2（audit 嵌套地板门禁首发抓漏，matrix-tools#6）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "concurrency",
+      "version": "v0.5.0",
+      "num": "7",
+      "category": "bare_other",
+      "bullet": "**feat(syncx)**：新增逐槽错误变体 `FanInErr`（`fn func(i int) (T, error)` 返回（#9）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "concurrency",
+      "version": "v0.5.0",
+      "num": "9",
+      "category": "bare_other",
+      "bullet": "**feat(syncx)**：新增逐槽错误变体 `FanInErr`（`fn func(i int) (T, error)` 返回（#9）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "concurrency",
+      "version": "v0.5.0",
+      "num": "4",
+      "category": "cross_repo",
+      "bullet": "**test(singleflight)**：接入 `pkg/singleflighttest` 共享语义契约（与",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "core",
+      "version": "v0.6.0",
+      "num": "1",
+      "category": "cross_repo",
+      "bullet": "`lifecycle.Manager`：优雅关停资源管理器（自 [oekit/logx](https://github.com/oekit/logx) `logx/shutdown`",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "core",
+      "version": "v0.6.0",
+      "num": "1",
+      "category": "cross_repo",
+      "bullet": "**breaking**：`config.ConfigWatcher` 日志接口改为 `*slog.Logger`（原 `logx.Logger`），",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.19.0",
+      "num": "76",
+      "category": "cross_repo",
+      "bullet": "feat(cache): 门面同步 pkg v0.24.0 的 Stats 观测面与按调用注入回源——cache 壳补 type alias Stats/StatsProvider/SourceInjector[T]，cachetest 壳补 RunStatsWithClock 与 RunSourceInjectionWithClock 两条契约入口；地板 pkg v0.23.1 → v0.24.0（门面跟版税，源仓 pkg#76/#77）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.18.0",
+      "num": "72",
+      "category": "cross_repo",
+      "bullet": "feat(cache): 门面同步 pkg v0.23.x 的 PeekGetter 别名与 2 个 stale-if-error 契约入口（契约套件 13 → 15 场景）；地板 pkg v0.16.0 → v0.23.1（门面跟版税，源仓 pkg#72/#74）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.13.0",
+      "num": "6",
+      "category": "cross_repo",
+      "bullet": "新增 `Lockout`/`LockoutConfig`（type alias，与源包同一类型）与 `NewLockout`（#6）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.12.0",
+      "num": "11",
+      "category": "cross_repo",
+      "bullet": "新增 `SourceFuncWithTTL`（type alias，与源包同一类型）——动态回填 TTL 与",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.11.0",
+      "num": "9",
+      "category": "cross_repo",
+      "bullet": "跟随 pkg 地板 v0.11.0 → v0.13.0（门面跟版税；shell_sync 门禁抓漏，pkg#9",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "data",
+      "version": "v0.9.0",
+      "num": "2",
+      "category": "cross_repo",
+      "bullet": "feat(timertask): 壳同步 timertask v0.1.5——`DeliveryMode` 投递语义类型 +",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.8.12",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板：github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1、github.com/oekit/logx/hlog v0.1.4 → v0.1.6（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.8.5",
+      "num": "106",
+      "category": "cross_repo",
+      "bullet": "feat(clientip): 跟随 pkg v0.26.0——**默认不采信 X-Real-IP**（BREAKING）：X-Real-IP 是单跳头，HTTP 头无法区分「代理写的」与「客户端自带的」，网关默认不写该头但原样透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP（限流/锁定计数桶被绕过、审计与访问日志来源 IP 可改写，oekit/pkg#106）；GetClientIP / GetClientIPWithDefaultProxies 不再采信该头，确需采信改用新增的 GetClientIPWithXRI / GetClientIPWithDefaultProxiesAndXRI（前置条件：可信代理必须覆写该头）；新增 GetClientIPWithSet 走预解析可信代理集合，请求期不再逐条 ParseCIDR 整份清单（oekit/pkg#107 热路径形态）；基座地板 pkg v0.25.2 → v0.26.0",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.8.5",
+      "num": "107",
+      "category": "cross_repo",
+      "bullet": "feat(clientip): 跟随 pkg v0.26.0——**默认不采信 X-Real-IP**（BREAKING）：X-Real-IP 是单跳头，HTTP 头无法区分「代理写的」与「客户端自带的」，网关默认不写该头但原样透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP（限流/锁定计数桶被绕过、审计与访问日志来源 IP 可改写，oekit/pkg#106）；GetClientIP / GetClientIPWithDefaultProxies 不再采信该头，确需采信改用新增的 GetClientIPWithXRI / GetClientIPWithDefaultProxiesAndXRI（前置条件：可信代理必须覆写该头）；新增 GetClientIPWithSet 走预解析可信代理集合，请求期不再逐条 ParseCIDR 整份清单（oekit/pkg#107 热路径形态）；基座地板 pkg v0.25.2 → v0.26.0",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "httpx",
+      "version": "v0.8.3",
+      "num": "31",
+      "category": "cross_repo",
+      "bullet": "fix(httpx): 同名 collector **类型不符**时的 panic 不可定位（无检查的类型断言 `are.ExistingCollector.(T)`）——改为有检查的断言 + 人能读懂的错误（既有类型 vs 请求类型 + 怎么改）；同型修法见 oekit/metrics#31",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "kitex",
+      "version": "observability/tracing/instrumentation/kitexotel/v0.7.5",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/logx/kitexlog v0.1.4 → v0.1.6（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "kitex",
+      "version": "v0.7.5",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/logx/kitexlog v0.1.4 → v0.1.6（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "kitex-examples",
+      "version": "v0.1.26",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板：bootstrap/nacos v0.3.8、bootstrap/obs v0.2.12、kitexotel v0.7.5（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "logx",
+      "version": "hlog/v0.1.3 + kitexlog/v0.1.3",
+      "num": "6",
+      "category": "cross_repo",
+      "bullet": "chore(deps): 父模块地板 logx v0.6.0 → v0.7.0（WithFilter/Slogger 线；audit 嵌套地板门禁首发抓漏，matrix-tools#6）；本仓根模块无变化",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "logx",
+      "version": "v0.4.0",
+      "num": "1",
+      "category": "cross_repo",
+      "bullet": "**refactor(shutdown)**：`Manager` 原语迁至 [oekit/core](https://github.com/oekit/core)",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "114",
+      "category": "bare_other",
+      "bullet": "#113 / #114 `release_train` 的 CHANGELOG 预校验形同虚设 + 多条 bullet 静默丢弃",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "113",
+      "category": "bare_other",
+      "bullet": "#113 / #114 `release_train` 的 CHANGELOG 预校验形同虚设 + 多条 bullet 静默丢弃",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "117",
+      "category": "bare_other",
+      "bullet": "#116 / #117 `DEFAULT_BASE` 指向已不存在的旧工作区 + pkg 子包口径漂移（23 → 24）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.29",
+      "num": "116",
+      "category": "bare_other",
+      "bullet": "#116 / #117 `DEFAULT_BASE` 指向已不存在的旧工作区 + pkg 子包口径漂移（23 → 24）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "52",
+      "category": "cross_repo",
+      "bullet": "**logx**：caller 跳过注册表只增不删 ⇒ 用例自己注册的探针文件留在全局 ⇒",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "119",
+      "category": "cross_repo",
+      "bullet": "**concurrency**：GetBreaker 的 sharedBreakers 全局 ⇒ 冲突回调只在「首次",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.24",
+      "num": "67",
+      "category": "cross_repo",
+      "bullet": "**redisx**：兜底期断言把**后台探活**那次 EVAL 也算进业务计数 ⇒ 计数 +1",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.16",
+      "num": "79",
+      "category": "bare_other",
+      "bullet": "#100：`scripts/gen_matrix_go.py`：`go_floor()` **fail-loud**——取不到 `go.mod`、或 `go.mod`",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.16",
+      "num": "100",
+      "category": "bare_other",
+      "bullet": "#100：`scripts/gen_matrix_go.py`：`go_floor()` **fail-loud**——取不到 `go.mod`、或 `go.mod`",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.15",
+      "num": "79",
+      "category": "bare_other",
+      "bullet": "#96：`scripts/maintenance_check.py`：base 解析认 `MATRIX_BASE`（与 `audit.py` 同口径），",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.15",
+      "num": "96",
+      "category": "bare_other",
+      "bullet": "#96：`scripts/maintenance_check.py`：base 解析认 `MATRIX_BASE`（与 `audit.py` 同口径），",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.14",
+      "num": "72",
+      "category": "cross_repo",
+      "bullet": "**pkg**：补 v0.23.0 起 Peek 非删除式读（可选接口 `PeekGetter` 外置——读到过期条目只算不命中、不删除它，",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "31",
+      "category": "same_repo_other",
+      "bullet": "#88：`scripts/verify_version_line.py`——独立 oracle：自己解析 semver、自己读 git",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "88",
+      "category": "bare_other",
+      "bullet": "#88：`scripts/verify_version_line.py`——独立 oracle：自己解析 semver、自己读 git",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "24",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex#33 /",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "33",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex#33 /",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "46",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex#33 /",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.13",
+      "num": "31",
+      "category": "cross_repo",
+      "bullet": "不改已发布版本的内容语义（各仓只补事实声明：network#24 / kitex#33 /",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.7",
+      "num": "39",
+      "category": "cross_repo",
+      "bullet": "背景见 [oekit/data#39](https://github.com/oekit/data/issues/39)：`all/` 聚合嵌套",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "46",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条回执全部没落地（三条 issue 上",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "48",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条回执全部没落地（三条 issue 上",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "matrix-tools",
+      "version": "v0.1.6",
+      "num": "56",
+      "category": "cross_repo",
+      "bullet": "本轮实测：pkg#46 / pkg#48 / concurrency#56 三条回执全部没落地（三条 issue 上",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "nns",
+      "version": "v0.5.6",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "nns-endpoint",
+      "version": "v0.2.10",
+      "num": "104",
+      "category": "cross_repo",
+      "bullet": "抬嵌套模块地板 github.com/oekit/registry/nacosimpl v0.1.0 → v0.1.1（oekit/oekit#104）",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.26.0",
+      "num": "104",
+      "category": "bare_other",
+      "bullet": "feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.26.0",
+      "num": "107",
+      "category": "bare_other",
+      "bullet": "feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.26.0",
+      "num": "105",
+      "category": "bare_other",
+      "bullet": "feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.26.0",
+      "num": "106",
+      "category": "bare_other",
+      "bullet": "feat(convert): 客户端 IP 解析收紧——**默认不采信 X-Real-IP**（单跳头无法区分「代理写的」与「客户端自带的」，网关默认透传客户端自带的 ⇒ 客户端可任意改写自己的客户端 IP，限流/锁定绕过 + 审计 IP 可改写，#106）：ResolveClientIP 去掉 xri 入参（BREAKING），确需采信改用 ResolveClientIPWithXRI / GetClientIPWithXRI / GetClientIPWithProxiesAndXRI；**代理头候选值做合法性校验与端口归一**（任意字符串进限流/锁定键 = 计数桶绕过 + 日志注入；带端口的候选与裸 IP 是两个分桶键，非法段不再进返回值，#104）；**可信代理裸 IP 条目归一为单主机网段**（此前被静默忽略：配置不生效且无任何告警，#104），NewTrustedProxySet 构造期对非法条目 fail-fast；**可信代理预解析** TrustedProxySet（此前每请求逐条 ParseCIDR 整份清单，#107），ResolveClientIPWithSet 与清单形态采信结果逐字一致；feat(encoding): 补 base64 无填充 URL 安全变体的字节入口 Base64RawURLEncodeBytes / Base64RawURLDecodeBytes（#105）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.24.0",
+      "num": "77",
+      "category": "bare_other",
+      "bullet": "feat(cache): 补观测计数面 Stats 与按调用注入回源——新增 cache.Stats 观测计数快照（Hits/Misses/Evictions/Expirations/Size）与可选能力接口 cache.StatsProvider（读路径计数，null marker 按未命中口径，容量淘汰与 TTL 过期回收分开计）；新增可选能力接口 cache.SourceInjector 与 GetOrLoadWithSource / GetOrLoadWithSourceTTL（回源函数由调用方在调用点给出，SingleFlightCache 保持单飞语义）；cachetest 补 RunStatsWithClock 与 RunSourceInjectionWithClock 两条契约（#76、#77）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.24.0",
+      "num": "76",
+      "category": "bare_other",
+      "bullet": "feat(cache): 补观测计数面 Stats 与按调用注入回源——新增 cache.Stats 观测计数快照（Hits/Misses/Evictions/Expirations/Size）与可选能力接口 cache.StatsProvider（读路径计数，null marker 按未命中口径，容量淘汰与 TTL 过期回收分开计）；新增可选能力接口 cache.SourceInjector 与 GetOrLoadWithSource / GetOrLoadWithSourceTTL（回源函数由调用方在调用点给出，SingleFlightCache 保持单飞语义）；cachetest 补 RunStatsWithClock 与 RunSourceInjectionWithClock 两条契约（#76、#77）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.22.0",
+      "num": "64",
+      "category": "bare_other",
+      "bullet": "feat(pathx): 补两个缺失原语——名字通配匹配 MatchGlob 与单段文件名合法性判定 IsSafeFileName；feat(stringx): 补 CSV 拆分原语 SplitCSVNonEmpty——拆 + trim + 丢空项，空串返回 nil（#63、#64、#65）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.22.0",
+      "num": "65",
+      "category": "bare_other",
+      "bullet": "feat(pathx): 补两个缺失原语——名字通配匹配 MatchGlob 与单段文件名合法性判定 IsSafeFileName；feat(stringx): 补 CSV 拆分原语 SplitCSVNonEmpty——拆 + trim + 丢空项，空串返回 nil（#63、#64、#65）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "pkg",
+      "version": "v0.22.0",
+      "num": "63",
+      "category": "bare_other",
+      "bullet": "feat(pathx): 补两个缺失原语——名字通配匹配 MatchGlob 与单段文件名合法性判定 IsSafeFileName；feat(stringx): 补 CSV 拆分原语 SplitCSVNonEmpty——拆 + trim + 丢空项，空串返回 nil（#63、#64、#65）",
+      "reason": "首跑归档：该 bullet 本就覆盖**本仓多个号**（历史真实形态，非写错）"
+    },
+    {
+      "repo": "redisx",
+      "version": "v0.3.1",
+      "num": "88",
+      "category": "cross_repo",
+      "bullet": "⚠️ 旧路径弃用通告版：模块已更名为 github.com/oekit/redisx（**更名自 v0.5.0",
+      "reason": "首跑归档：该 bullet 引用的是**别仓**的 issue 号（历史真实的归属引用，非写错）"
     }
   ]
 }

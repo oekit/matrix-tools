@@ -46,6 +46,17 @@ matrix-tools#169 的批量「把 issue 号写回 CHANGELOG 版本节」实测踩
   python3 scripts/check_writeback.py --repo matrix-tools --all --write-allowlist <path>
 
 退出码：0 干净；1 有告警（fail closed 友好）；2 用法/IO/解析错误（**读不到 ≠ 没有**）。
+
+`--write-allowlist` 的归档口径
+------------------------------
+归档必须覆盖**所有视角**（`all_perspective_findings`）：每个绑定号都当一次
+「自己的号」再取并集。`--all` 的**报告**只用一侧（自己的号 = bullet 绑定的
+第一个号），但**归档**若也只用那一侧 ⇒ 多号 bullet（合法的历史形态：一条 bullet
+覆盖本仓多个 issue）的**另一侧**盖不住 ⇒ 单条模式改以另一个号为目标时照样红
+⇒「归档完了还是红的」。
+
+去重按**约束键**（repo / version / num / category / bullet，缺一即通配），
+**不含 reason** ⇒ 只差 reason 的同键条目不重复入库。
 """
 from __future__ import annotations
 
@@ -329,6 +340,41 @@ def bound_nums(block: Block, repo: str) -> list[str]:
     return out
 
 
+def all_perspective_findings(section_text: str, repo: str, version: str,
+                             line_offset: int = 0) -> list[Finding]:
+    """一个版本节里**所有视角**的告警（每个绑定号各当一次「自己的号」）。
+
+    为什么 `--all` 那一侧不够（#181 的实测缺口）
+    ------------------------------------------
+    `--all` 模式把「自己的号」取成**该 bullet 绑定的第一个号** ⇒ 多号 bullet
+    （合法的历史形态：一条 bullet 覆盖本仓多个 issue，例如 concurrency v0.5.0 的
+    `FanInErr` 那条同时带 `#9` 与 `#7`）只会报出**一侧**。
+
+    ⇒ 用 `--all` 的结果归档 allowlist，**盖不住另一侧**：单条模式改以另一个号
+    为目标时（`--repo concurrency --version v0.5.0 --num 7` ⇒ 自己的号变成 7
+    ⇒ 告警从「#7」变成「#9」），allowlist 里的 `num` 对不上 ⇒ 照样红
+    ⇒ 「归档完了还是红的」。
+
+    ⇒ 归档必须按**所有视角**取并集：每个绑定号都当一次「自己的号」，
+    外加 `own=None`（只看跨仓号）那一路。
+    """
+    blocks = split_blocks(section_text.splitlines(), offset=line_offset)
+    out: list[Finding] = []
+    seen: set[tuple] = set()
+    for block in blocks:
+        if not block.is_bullet:
+            continue
+        nums = bound_nums(block, repo)
+        for own in (nums + [None]):
+            for f in judge_block(block, repo, own, version):
+                key = (f.category, f.num, f.matched, f.bullet, f.line)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(f)
+    return out
+
+
 def check_section(section_text: str, repo: str, version: str, num: str | None,
                   line_offset: int = 0) -> tuple[list[Finding], bool]:
     """检查一节 ⇒ (告警列表, 是否找到目标 bullet)。
@@ -421,6 +467,16 @@ def allowlist_entry(finding: Finding, reason: str) -> dict:
             "reason": reason}
 
 
+def allowlist_key(entry: dict) -> tuple:
+    """allowlist 条目的**约束键**（不含 reason）。
+
+    约束键 = 匹配时真正参与判断的那些字段（缺一即通配）⇒
+    同键的条目**互相等价** ⇒ 入库时按它去重，reason 不同不重复入库。
+    """
+    return (entry.get("repo"), entry.get("version"), str(entry.get("num")),
+            entry.get("category"), entry.get("bullet"))
+
+
 # ── CLI ────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -443,16 +499,22 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _run_all(repo: str, nested: str | None, file_override: str | None,
-             entries: list[dict]) -> tuple[list[Finding], list[str]]:
-    """全库 dry-run ⇒ (告警, 出错信息)。"""
+             entries: list[dict], want_perspectives: bool = False
+             ) -> tuple[list[Finding], list[str], list[Finding]]:
+    """全库 dry-run ⇒ (告警, 出错信息, 所有视角的告警)。
+
+    第三项只在 `--write-allowlist` 时需要（归档必须覆盖**所有视角**，
+    否则多号 bullet 的另一侧仍红）⇒ 由 `want_perspectives` 控制要不要算。
+    """
     findings: list[Finding] = []
     errors: list[str] = []
+    perspectives: list[Finding] = []
     # (文件, 节头, 节体, 节体首行的 0 基行号) —— 行号要落在**文件**坐标系里
     targets: list[tuple[Path, str, str, int]] = []
     if file_override:
         p = Path(file_override)
         if not p.exists():
-            return [], [f"✗ 文件不存在：{p}"]
+            return [], [f"✗ 文件不存在：{p}"], []
         lines = p.read_text(encoding="utf-8").splitlines()
         for head, s, e in section_ranges(lines):
             targets.append((p, head, "\n".join(lines[s:e]), s))
@@ -460,7 +522,7 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
         try:
             rdir = repo_dir(repo, BASE)
         except FileNotFoundError:
-            return [], [f"✗ 仓 {repo} 不在 {BASE} 的任何已知布局里"]
+            return [], [f"✗ 仓 {repo} 不在 {BASE} 的任何已知布局里"], []
         if nested:
             sub_cl = rdir / nested / "CHANGELOG.md"
             if sub_cl.exists():
@@ -470,7 +532,7 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
             else:
                 root_cl = rdir / "CHANGELOG.md"
                 if not root_cl.exists():
-                    return [], [f"✗ {root_cl} 不存在"]
+                    return [], [f"✗ {root_cl} 不存在"], []
                 lines = root_cl.read_text(encoding="utf-8").splitlines()
                 for head, s, e in section_ranges(lines):
                     if head.startswith(f"{nested}/"):
@@ -478,7 +540,7 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
         else:
             root_cl = rdir / "CHANGELOG.md"
             if not root_cl.exists():
-                return [], [f"✗ {root_cl} 不存在"]
+                return [], [f"✗ {root_cl} 不存在"], []
             lines = root_cl.read_text(encoding="utf-8").splitlines()
             for head, s, e in section_ranges(lines):
                 targets.append((root_cl, head, "\n".join(lines[s:e]), s))
@@ -486,7 +548,10 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
     for _path, head, body, body_start in targets:
         fs, _found = check_section(body, repo, head, None, line_offset=body_start)
         findings.extend(fs)
-    return apply_allowlist(findings, entries), errors
+        if want_perspectives:
+            perspectives.extend(
+                all_perspective_findings(body, repo, head, line_offset=body_start))
+    return apply_allowlist(findings, entries), errors, perspectives
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -509,11 +574,14 @@ def main(argv: list[str] | None = None) -> int:
     entries = load_allowlist(allow_path)
 
     findings: list[Finding] = []
+    perspectives: list[Finding] = []
     target_found = True
     file_used = None
 
     if args.all:
-        findings, errors = _run_all(args.repo, args.nested, args.file, entries)
+        findings, errors, perspectives = _run_all(
+            args.repo, args.nested, args.file, entries,
+            want_perspectives=bool(args.write_allowlist))
         if errors:
             for e in errors:
                 print(e)
@@ -566,10 +634,19 @@ def main(argv: list[str] | None = None) -> int:
             except json.JSONDecodeError as e:
                 print(f"✗ {wp} 不是合法 JSON：{e}")
                 return 2
-        new = [allowlist_entry(f, args.reason) for f in findings]
-        seen = {json.dumps(e, ensure_ascii=False, sort_keys=True) for e in existing}
-        added = [e for e in new
-                 if json.dumps(e, ensure_ascii=False, sort_keys=True) not in seen]
+        new = [allowlist_entry(f, args.reason) for f in perspectives]
+        # 按**约束键**去重（不是按整条 JSON）：同一条目若只是 reason 写得不一样，
+        # 不该在表里出现两行 ⇒ 否则 allowlist 会越滚越大、越滚越难读。
+        seen: set[tuple] = set()
+        for e in existing:
+            seen.add(allowlist_key(e))
+        added = []
+        for e in new:
+            k = allowlist_key(e)
+            if k in seen:
+                continue
+            seen.add(k)
+            added.append(e)
         wp.parent.mkdir(parents=True, exist_ok=True)
         wp.write_text(json.dumps({"version": 1, "entries": existing + added},
                                  ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

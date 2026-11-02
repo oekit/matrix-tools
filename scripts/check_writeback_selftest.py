@@ -23,14 +23,18 @@
 14. C12 CLI 端到端（干净 ⇒ 0；有告警 ⇒ 非 0）；
 15. C13 版本节不存在 ⇒ **退出码 2**（读不到 ≠ 没有干净）；
 16. C14 `--nested` 嵌套节（子目录 CHANGELOG + 根 CHANGELOG 回退）；
-17. C15 allowlist 读不懂 / 类别名写错 ⇒ 报错退出（豁免**静默失效**比误报更糟）。
+17. C15 allowlist 读不懂 / 类别名写错 ⇒ 报错退出（豁免**静默失效**比误报更糟）；
+18. C16 多号 bullet 的归档必须覆盖**两侧**（以 180 为目标与以 181 为目标都要绿）；
+19. C17 `--write-allowlist` 按**约束键**去重（只差 reason 不重复入库）。
 
 变异自证（每条必须**精确转红**，否则这份断言没有牙齿）：
 
 - M1「子串 `in` 判存在」（只问「这个号在**这一节里**出现过吗」，不问「出现在
   **哪条 bullet** 里」）⇒ 用例 C6 转红；
 - M2「不做 bullet 块限定（扫全文）」（整节当一条 bullet）⇒ 用例 C5、C6 转红；
-- M3「门禁完全失效」（一条都不报）⇒ 所有「期望有告警」的用例转红。
+- M3「门禁完全失效」（一条都不报）⇒ 所有「期望有告警」的用例转红；
+- M4「归档只取一侧视角」（回到 `--all` 的老行为）⇒ 用例 C16 转红；
+- M5「去重按整条（含 reason）」⇒ 用例 C17 转红。
 
 ⇒ 每条变异的**预期转红集合**都被写死并逐条核对（红得**精确**：
 不该红的用例必须还绿着）。
@@ -138,6 +142,13 @@ CL_ALL = """## [v0.2.0] — 2026-11-02
 ## [v0.1.9] — 2026-11-01
 
 - #170：另一条（关联 pkg#46）
+"""
+
+# C16/C17：**多号 bullet**（合法的历史形态：一条 bullet 覆盖本仓多个 issue）
+#     ⇒ 归档出来的 allowlist 必须覆盖**两侧**（以 180 为目标与以 181 为目标都要绿）
+CL_MULTI = """## [v0.2.0] — 2026-11-02
+
+- #180：新增逐槽错误变体 FanInErr（另见 #181）
 """
 
 
@@ -468,6 +479,56 @@ def run_all(root: Path, rid: str) -> list[tuple[str, str]]:
         if "JSON" not in str(e):
             fail("C15", f"报错要说清是 JSON 不合法：{e}")
 
+    # ── C16：多号 bullet 的归档必须覆盖**两侧** ──
+    # `--all` 把「自己的号」取成 bullet 绑定的**第一个**号 ⇒ 只归档一侧时，
+    # 单条模式改以另一个号为目标就**照样红** ⇒ 「归档完了还是红的」。
+    base = root / "c16"
+    write_repo(base, CL_MULTI)
+    al = base / "allow.json"
+    # ⚠️ 每轮必须**从头开始**：变异轮复用同一个 base 目录 ⇒ 上一轮写出的
+    # allow.json 还在 ⇒ 断言会拿旧归档当新结果 ⇒ 变异抓不住。
+    if al.exists():
+        al.unlink()
+    code, out = run_main(["--repo", REPO, "--all", "--write-allowlist", str(al),
+                          "--reason", "首跑归档"], base)
+    if not al.exists():
+        fail("C16", f"--write-allowlist 没写出 allowlist：{out[:200]}")
+    else:
+        entries = json.loads(al.read_text(encoding="utf-8"))["entries"]
+        nums = {str(e.get("num")) for e in entries
+                if e.get("category") == "bare_other" and e.get("version") == VERSION}
+        if nums != {"180", "181"}:
+            fail("C16", f"多号 bullet 的归档必须覆盖**两侧**（180 与 181），实得 {sorted(nums)}")
+    for n in ("180", "181"):
+        code, out = run_main(["--repo", REPO, "--version", VERSION, "--num", n,
+                              "--allowlist", str(al), "--json"], base)
+        if code != 0:
+            fail("C16", f"归档之后以 #{n} 为目标仍红（退出码 {code}）：{out[:200]}")
+    # 没有 allowlist 时**必须**红（否则「归档之后才绿」这条断言没有牙齿）
+    code, out = run_main(["--repo", REPO, "--version", VERSION, "--num", "181",
+                          "--json"], base)
+    if code == 0:
+        fail("C16", "没有 allowlist 时多号 bullet 应当告警（退出码非 0）"
+                    "——否则「归档之后才绿」这条断言没有牙齿")
+
+    # ── C17：`--write-allowlist` 按**约束键**去重（只差 reason 不重复入库）──
+    base = root / "c17"
+    write_repo(base, CL_MULTI)
+    al = base / "allow.json"
+    if al.exists():
+        al.unlink()
+    al.write_text(json.dumps({"version": 1, "entries": [
+        {"repo": REPO, "version": VERSION, "num": "180", "category": "bare_other",
+         "bullet": "#180：新增逐槽错误变体 FanInErr（另见 #181）", "reason": "手写的"}]},
+        ensure_ascii=False), encoding="utf-8")
+    run_main(["--repo", REPO, "--all", "--write-allowlist", str(al),
+              "--reason", "机器写的"], base)
+    entries = json.loads(al.read_text(encoding="utf-8"))["entries"]
+    if len(entries) != 2:
+        fail("C17", f"同键条目不该重复入库（只差 reason），实得 {len(entries)} 条")
+    if not [e for e in entries if e.get("reason") == "手写的"]:
+        fail("C17", "已存在的条目不该被机器写的条目顶掉（手写 reason 丢失）")
+
     return fails
 
 
@@ -478,6 +539,8 @@ def run_all(root: Path, rid: str) -> list[tuple[str, str]]:
 _ORIG_CHECK_SECTION = check_writeback.check_section
 _ORIG_SPLIT_BLOCKS = check_writeback.split_blocks
 _ORIG_JUDGE_BLOCK = check_writeback.judge_block
+_ORIG_ALL_PERSPECTIVE = check_writeback.all_perspective_findings
+_ORIG_ALLOWLIST_KEY = check_writeback.allowlist_key
 
 
 def _mutate_existence_criterion():
@@ -550,13 +613,50 @@ def _mutate_gate_disabled():
     check_writeback.judge_block = lambda block, repo, own_num, version: []
 
 
+def _mutate_single_perspective():
+    """M4：归档只取**一侧**视角（回到 `--all` 的老行为：自己的号 = 第一个绑定号）。
+
+    ⇒ 多号 bullet（合法的历史形态）只归档了一侧 ⇒ 单条模式改以另一个号为目标时
+    **照样红** ⇒ 「归档完了还是红的」。
+    """
+    def all_perspective_findings(section_text, repo, version, line_offset=0):
+        blocks = check_writeback.split_blocks(section_text.splitlines(),
+                                              offset=line_offset)
+        out = []
+        for block in blocks:
+            if not block.is_bullet:
+                continue
+            nums = check_writeback.bound_nums(block, repo)
+            own = nums[0] if nums else None
+            out.extend(check_writeback.judge_block(block, repo, own, version))
+        return out
+
+    check_writeback.all_perspective_findings = all_perspective_findings
+
+
+def _mutate_dedupe_by_whole_entry():
+    """M5：去重按**整条**（含 reason）⇒ 只差 reason 的同键条目会重复入库。"""
+    orig = check_writeback.allowlist_key
+
+    def allowlist_key(entry):
+        return orig(entry) + (entry.get("reason"),)
+
+    check_writeback.allowlist_key = allowlist_key
+
+
 MUTATIONS = [
     ("判据退化成子串 in 判存在（不问位置）", _mutate_existence_criterion, {"C6"}),
     ("不做 bullet 块限定（整节当一条 bullet）", _mutate_no_block_scope, {"C5", "C6"}),
     # ⚠️ C12（CLI 端到端）**不在** M3 的转红集合里：它跑的是**子进程**，
     # 进程内的打桩够不着它 ⇒ 那是「变异够不着那条路」，不是「断言没牙齿」。
+    # ⚠️ C16/C17 在集合里：它们断言的是「归档/去重**依据门禁的检出结果**」⇒
+    # 门禁一条都不报 ⇒ 归档自然是空的 ⇒ 必须转红。
     ("门禁完全失效（一条都不报）", _mutate_gate_disabled,
-     {"C1", "C2", "C3", "C4b", "C7", "C9", "C10", "C11", "C14"}),
+     {"C1", "C2", "C3", "C4b", "C7", "C9", "C10", "C11", "C14", "C16", "C17"}),
+    ("归档只取一侧视角（多号 bullet 的另一侧仍红）", _mutate_single_perspective,
+     {"C16"}),
+    ("去重按整条（含 reason）⇒ 同键条目重复入库", _mutate_dedupe_by_whole_entry,
+     {"C17"}),
 ]
 
 
@@ -578,6 +678,8 @@ def main() -> None:
                 check_writeback.check_section = _ORIG_CHECK_SECTION
                 check_writeback.split_blocks = _ORIG_SPLIT_BLOCKS
                 check_writeback.judge_block = _ORIG_JUDGE_BLOCK
+                check_writeback.all_perspective_findings = _ORIG_ALL_PERSPECTIVE
+                check_writeback.allowlist_key = _ORIG_ALLOWLIST_KEY
             got = {cid for cid, _ in fs}
             if not got:
                 print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
