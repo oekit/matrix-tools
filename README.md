@@ -155,11 +155,24 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 3. **跨仓文档变更**：不手工逐仓 checkout——`doc_wave.py --tables --pr` / `release_post.py` 批量走 PR
 4. **收尾**：`inflight.py release <repo>`；发版 = `release_train.py --apply` + `release_post.py`
 
-**发版模型：按需（pull-based，2026-10-19 起）**——默认只发改动的仓。底层依赖发新版后下游
-地板不动、不强制跟版；下游改代码消费新 API 时 go get 抬地板、随本仓版本自然发出。跨仓
-地板漂移不是漂移（audit 不检查）；全量对齐（align_floors.py）只在显式维护轮跑。BOM
-（github.com/oekit/oekit）是验证过的推荐组合锚点，release_post 自动更新，`go get oekit@latest`
-一次拉齐。
+**发版模型：按需（pull-based，2026-10-19 起）**——默认只发改动的仓：底层依赖发新版后，
+**下游不必跟着发新版**；下游改代码消费新 API 时 go get 抬地板、随本仓版本自然发出。
+
+⚠️ **但「下游不必发新版」≠「地板不用管」**（2026-11-02 起，oekit/oekit#102 / #104）：
+**工作树**里的依赖地板必须跟到最新，audit 有三道门禁判它——
+
+1. 各仓对**别仓根模块**的地板（`audit.scan_repo_floors`）；
+2. 嵌套模块对**父仓**的地板（`audit.check_nested_module_floors`）；
+3. 各仓对**别仓嵌套模块**的地板（`audit.scan_repo_nested_floors`）。
+
+⇒ 底层依赖发新版后，下游工作树会被判红 ⇒ 要跑一次 `align_floors.py --apply --pr` 跟上
+（全量对齐仍在显式维护轮跑，只是不再是「可做可不做」）。
+
+另一半事实：**已发布产物**的地板滞后**改不了**（tag 不可重推）⇒ 只能给那个模块发新 tag
+⇒ 这就是「只发嵌套模块」（父仓本轮不发新版）这条路径的用途。
+
+BOM（github.com/oekit/oekit）是验证过的推荐组合锚点，release_post 自动更新，
+`go get oekit@latest` 一次拉齐。
 
 写入型生成器（gen_tables/refresh_versions/gen_changelog/gen_versions/gen_diagram/
 gen_matrix_go/regen_readme）一律带干净树守卫：工作树脏直接拒绝执行——生成器产物

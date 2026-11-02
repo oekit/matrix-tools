@@ -33,9 +33,21 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   `scripts/release_train_selftest.py`；不改判据（check f 依赖可解析）、不改
   tag/检查/Release 流程、不改退出码语义。
 
-  **验证**：自测新增用例 4f/4g/4g2/4h 全绿；变异自证 2/2 全部转红（嵌套面退回旧行为
+  **验证**：自测新增用例 4g/4h/4i/4j 全绿；变异自证 2/2 全部转红（嵌套面退回旧行为
   ⇒ 3 条转红；门禁只校验根面 ⇒ 1 条转红）；`release_train_requires_selftest.py`、
   `close_issue_selftest.py`、`rerender_receipt_selftest.py` 仍全绿；`py_compile` 通过。
+
+- #210：README「跨仓地板漂移不是漂移（audit 不检查）」与实现矛盾 ⇒ 订正口径
+
+  该句写于 2026-10-19（pull-based 落地时），此后 2026-11-02 落了两道新门禁：
+  `audit.scan_repo_floors()`（跨仓**根模块**形态）与 `audit.scan_repo_nested_floors()`
+  （跨仓**嵌套模块**形态）——其注释自证：「嵌套模块对**别的**根模块的地板（如 bootstrap/nacos →
+  concurrency）**同样是漂移**，且嵌套模块自己发版**不会自动带起**它对别仓的根模块地板」。
+
+  ⇒ README 改为把两件事分开说：「下游**不必**跟着发新版」（pull-based 仍成立）+
+    「**工作树**地板必须跟到最新」（audit 三道门禁会判红）+「**已发布产物**的滞后只能靠发新 tag 修」。
+
+  **影响面**：只改 `README.md` 的说明文字；不改判据、不改脚本、不改发版流程。
 
 ## [v0.1.44] — 2026-11-03
 - #205：`floor_claim_check_selftest --mutate` 的输出会让人误读成「自测挂了」（退出码其实是 0）
