@@ -61,6 +61,8 @@ jobs:
         run: python3 scripts/release_train_selftest.py
       - name: 发版「依赖可解析」门禁自测（父仓地板未发布必须判出 / 同 train 放行 / 远端读不到 fail closed / 变异自证）
         run: python3 scripts/release_train_requires_selftest.py
+      - name: 发版「依赖可解析」门禁·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
+        run: python3 scripts/release_train_requires_selftest.py --mutate
       - name: DESC 子包口径自测（声明的「N 合 1」必须等于实际公开子包）
         run: python3 scripts/desc_count_selftest.py
       - name: BOM 生成器 Go 地板自测（取不到 go.mod 必须报错，不许兜底假地板）
