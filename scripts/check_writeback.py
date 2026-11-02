@@ -280,7 +280,10 @@ def resolve_changelog(
             rng = find_section(lines, version)
             if rng:
                 s, e = rng
-                return sub_cl, "\n".join(lines[s:e]), version, s
+                # ★ 嵌套文件里的节头是裸版本号（`v0.3.6`）⇒ 限定成 `<sub>/<ver>`
+                #   —— 与 `--all` 扫嵌套文件时用的键**一致** ⇒ 同一处内容在两种
+                #   模式下的 allowlist 键相同 ⇒ 归档一次即可（否则「归档完了还是红的」）。
+                return sub_cl, "\n".join(lines[s:e]), qualify_version(nested, version), s
         root_cl = rdir / "CHANGELOG.md"
         if not root_cl.exists():
             return None, None, None, 0
@@ -301,6 +304,55 @@ def resolve_changelog(
         s, e = rng
         return root_cl, "\n".join(lines[s:e]), version, s
     return root_cl, None, None, 0
+
+
+def nested_modules(rdir: Path) -> list[tuple[str, Path]]:
+    """本仓的**嵌套模块** ⇒ [(子路径, 该模块的 CHANGELOG.md)]。
+
+    判据 = **子目录里有 CHANGELOG.md**（递归找；仓根那份不算）。
+
+    ⚠️ **不要求子目录里有 go.mod**：门禁的输入可能是**只装了 CHANGELOG 的快照**
+    （`MATRIX_BASE` 那种：根目录放占位 go.mod，嵌套目录只放 CHANGELOG.md）
+    ⇒ 若把 go.mod 当必要条件，嵌套模块在快照布局下**一个都发现不了**
+    ⇒ 门禁又变回「假干净」（实测踩过：注入的违规新代码也没抓到）。
+    ⇒ 判据放宽到「子目录有 CHANGELOG.md」，并排除 vendor/testdata/.git 等目录。
+    （实测全 org 的嵌套 CHANGELOG 共 7 份，**全部**位于真实嵌套 Go 模块目录。）
+
+    ★ 为什么 `--all` 必须把它们算进来
+    ---------------------------------
+    嵌套模块的版本节**住在自己的 CHANGELOG.md 里**（根 CHANGELOG 里的
+    `## [nacos/v0.3.7]` 是**根视角**的记录，与嵌套文件里的 `## [v0.3.7]`
+    **内容可以完全不同** —— 实测 bootstrap/nacos v0.3.7：根=父模块地板变更，
+    嵌套=#33 补记）⇒ 只扫根 CHANGELOG 会**漏掉嵌套侧的写回**。
+    ⇒ 「`--all` 干净」这句话必须覆盖嵌套模块，否则是**假干净**。
+    """
+    skip = {".git", "vendor", "testdata", "node_modules", ".github", ".idea"}
+    out: list[tuple[str, Path]] = []
+    for cl in sorted(rdir.rglob("CHANGELOG.md")):
+        sub = cl.parent
+        if sub == rdir:
+            continue
+        rel = sub.relative_to(rdir)
+        if any(part in skip for part in rel.parts):
+            continue
+        out.append((rel.as_posix(), cl))
+    return out
+
+
+def qualify_version(sub: str, ver: str) -> str:
+    """嵌套模块的版本号要**带模块前缀** ⇒ `<sub>/<ver>`。
+
+    为什么必须限定
+    --------------
+    allowlist 的约束键含 `version` ⇒ 不限定的话 `registry/nacos` 的 `v0.1.0`
+    与 `registry/nacosimpl` 的 `v0.1.0` **撞键** ⇒ 一个模块的告警会被另一个
+    模块的豁免条目放过去（fail-open）。
+    ⇒ 限定后与根 CHANGELOG 里镜像节的头（`## [nacos/v0.1.0]`）同形 ⇒
+    两处的同一条 bullet 落在**同一个键**上。
+    """
+    if ver.startswith(sub + "/"):
+        return ver
+    return f"{sub}/{ver}"
 
 
 # ── 告警判定 ───────────────────────────────────────────────────────────
@@ -477,6 +529,29 @@ def allowlist_key(entry: dict) -> tuple:
             entry.get("category"), entry.get("bullet"))
 
 
+def _dedupe_by_key(findings: list[Finding]) -> list[Finding]:
+    """按 allowlist 的**约束键**去重（同一条告警只留一份）。
+
+    为什么需要
+    ----------
+    `--all` 现在会同时扫根 CHANGELOG 与嵌套模块的 CHANGELOG ⇒ 同一处内容
+    （根里的镜像节与嵌套文件里的节**逐字相同**时）会被扫两遍 ⇒ 同一条告警
+    出现两次 ⇒ 输出虚胖、归档表也虚胖。
+
+    ⇒ 用**约束键**（与 allowlist 入库同一套）去重 ⇒ 归档一次即覆盖两处。
+    ⇒ 「哪个文件先被扫到」不影响结果（先到的留下）。
+    """
+    out: list[Finding] = []
+    seen: set[tuple] = set()
+    for f in findings:
+        k = (f.repo, f.version, f.num, f.category, f.bullet)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(f)
+    return out
+
+
 # ── CLI ────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -544,6 +619,14 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
             lines = root_cl.read_text(encoding="utf-8").splitlines()
             for head, s, e in section_ranges(lines):
                 targets.append((root_cl, head, "\n".join(lines[s:e]), s))
+            # ★ 嵌套模块的版本节住在**自己的** CHANGELOG.md 里 ⇒ `--all` 必须一并扫。
+            #   只扫根 CHANGELOG ⇒「全库 dry-run 干净」是**假干净**（嵌套侧的写回
+            #   根本没见过）—— 实测全 org 有 7 个嵌套模块的版本节在根之外。
+            for sub, cl in nested_modules(rdir):
+                nlines = cl.read_text(encoding="utf-8").splitlines()
+                for head, s, e in section_ranges(nlines):
+                    targets.append((cl, qualify_version(sub, head),
+                                    "\n".join(nlines[s:e]), s))
 
     for _path, head, body, body_start in targets:
         fs, _found = check_section(body, repo, head, None, line_offset=body_start)
@@ -551,6 +634,11 @@ def _run_all(repo: str, nested: str | None, file_override: str | None,
         if want_perspectives:
             perspectives.extend(
                 all_perspective_findings(body, repo, head, line_offset=body_start))
+    # ★ 根 CHANGELOG 里的镜像节与嵌套文件里的节**可能是真镜像** ⇒ 同一处内容
+    #   被扫两遍 ⇒ 同一条告警出现两次 ⇒ 按**约束键**去重（与 allowlist 入库
+    #   用的是同一套键 ⇒ 归档一次即覆盖两处）。
+    findings = _dedupe_by_key(findings)
+    perspectives = _dedupe_by_key(perspectives)
     return apply_allowlist(findings, entries), errors, perspectives
 
 
