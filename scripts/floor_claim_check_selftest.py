@@ -34,6 +34,10 @@
   M10 断言词只在**续行**里 ⇒ 提取 1 条（否则假干净）
   M11 别的断言类（「行为不变」+ 两个版本号）⇒ 本工具口径提取 0 条，
       但宽口径**要**抓到（⇒ 单列人工判读，不静默漏掉）
+  M12 ★ **仓级计数不得泄漏**：仓的「无此类断言」判定必须跨来源面累加
+      （曾实测：logx 是全 org 唯一有断言的仓，却因**最后一个来源面**没有断言
+       而被算成「无此类断言」⇒ 与同屏「为假 0」叠加读成「所有仓都没这类断言」
+       = **假干净**）⇒ 本用例用 fixture 仓复现该形态并钉住期望值
 
 用法：
     python3 scripts/floor_claim_check_selftest.py            # 离线（CI 跑这个）
@@ -185,6 +189,57 @@ def run(live: bool = False) -> int:
     good = len(c) == 0
     ok &= good
     print(f"  M11b{'✅' if good else '❌'} 但**不得**被工具口径误判为同类断言（提取 0 条）⇒ {len(c)} 条")
+
+    # M12 ★ 仓级计数不得泄漏（跨来源面累加）
+    #   真实 bug 形态（实测 logx）：来源面按「根 CHANGELOG → 嵌套 CHANGELOG → Release 正文」
+    #   依次扫描，仓级判定若读的是**最后一个被扫描面**的计数，就会把这个仓误算成
+    #   「无此类断言」⇒ 与同屏「为假 0」叠加读成「所有仓都没这类断言」= **假干净**。
+    #   ⇒ fixture 精确复现该形态：根面**有**断言，末尾的嵌套面**没有**断言。
+    with tempfile.TemporaryDirectory() as td2:
+        ws = Path(td2) / "repos"
+        # 依赖仓（核验层要用它的 tag 树）
+        dep2 = build_fixture(ws / "fixture-dep")
+        # 被扫的仓：根 CHANGELOG 有断言 + 嵌套 CHANGELOG 无断言
+        repo = ws / "fixture-repo"
+        (repo / "sub").mkdir(parents=True, exist_ok=True)
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "selftest@example.invalid")
+        git(repo, "config", "user.name", "selftest")
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v1.0.0]\n\n"
+            "- build: core v0.6.0 → v0.9.2——core/lifecycle 逐字节未变\n",
+            encoding="utf-8",
+        )
+        (repo / "sub" / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [sub/v1.0.0]\n\n"
+            "- chore: 嵌套模块无任何断言\n",
+            encoding="utf-8",
+        )
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m", "fixture repo")
+        # 嵌套面读的是 origin/main ⇒ 需要一个 origin 远端指向本仓
+        git(repo, "remote", "add", "origin", str(repo))
+        git(repo, "update-ref", "refs/remotes/origin/main", "HEAD")
+
+        # 把核验器的工作区口径**临时**指向 fixture 工作区
+        old_ws, old_release = fcc.WORKSPACE, fcc.release_bodies
+        fcc.WORKSPACE = ws
+        # Release 正文这一路**不联网**：用假的 release_bodies（空 ⇒ 该面被跳过）
+        fcc.release_bodies = lambda repo_name: []
+        try:
+            res = fcc.scan()
+            # 期望：fixture-repo **有**断言 ⇒ 「无此类断言」的仓数必须是 0
+            #   （fixture-dep 无 go.mod ⇒ repo_dirs() 不收它 ⇒ 只扫到 1 个仓）
+            good = (res["repos_without_claims"] == 0
+                    and res["total_claims"] >= 1)
+            ok &= good
+            print(f"  M12 {'✅' if good else '❌'} ★仓级计数跨来源面累加"
+                  f"⇒ repos_without_claims={res['repos_without_claims']}（期望 0）"
+                  f"、提取 {res['total_claims']} 条（期望 ≥1）")
+            if not good:
+                print("       （末尾来源面无断言就把整个仓算成「无此类断言」⇒ 输出自相矛盾 = 假干净）")
+        finally:
+            fcc.WORKSPACE, fcc.release_bodies = old_ws, old_release
 
     if live:
         ok &= run_live()

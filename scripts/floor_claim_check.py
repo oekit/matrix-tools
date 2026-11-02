@@ -86,9 +86,11 @@ CLAIM_WORDS = ("逐字节未变", "字节级未变", "零行为风险")
 # ★ 提取口径披露（2026-11-03 自查，同伴提点后落地）：
 #   本工具**只**认上面 3 个字面量 ⇒ **同类但换措辞**的断言**提取不到**
 #   ⇒ 报「N 条断言」时若不披露口径，读者会误以为「全语料只有 N 条」。
-#   ⇒ 实测（全 org 32 个 CHANGELOG + 553 个 Release 正文）：
-#      **宽口径**（含两个版本号 + 任何可证伪措辞）候选 **10 条**，
-#      本工具口径**只抓到 2 条** ⇒ 其余 8 条属**别的断言类**
+#   ⇒ ⚠️ **本注释里的数字是快照，会过期**（发版 ⇒ Release 正文面增多 ⇒ 覆盖面增长）
+#      ⇒ 引用前必须**重跑本工具取当前值**，别直接抄这里的数字。
+#   ⇒ 实测（快照基线：2026-11-03，25 根 + 7 嵌套 CHANGELOG + 555 个 Release 正文）：
+#      **宽口径**（含两个版本号 + 任何可证伪措辞）候选 **23 条**，
+#      本工具口径**只抓到 2 条** ⇒ 其余 21 条属**别的断言类**
 #      （发布范围 / import 路径 / 行为不变）⇒ **没有新的假断言**，但那是**人工判读**的结论。
 #   ⇒ 「**可证伪 ≠ 可机检**」⇒ 工具判不了的类**单列**（与「读不到要单列」同源）。
 EXTRACTION_SCOPE = {
@@ -391,6 +393,8 @@ def scan(repo_filter: str | None = None) -> dict:
     for repo_dir in repos:
         # ── 根 CHANGELOG ──
         files = [("CHANGELOG.md", read_changelog(repo_dir))]
+        # ★ 仓级累加器：跨来源面累加「该仓是否抓到过断言」
+        repo_in_claims = 0
         # ── 嵌套 CHANGELOG（**必须扫**，否则是假干净）──
         for rel, _ in nested_changelogs(repo_dir):
             text, src = read_changelog_at(repo_dir, rel)
@@ -420,6 +424,11 @@ def scan(repo_filter: str | None = None) -> dict:
                 root_files += 1
             repo_key = repo_dir.name if rel == "CHANGELOG.md" else f"{repo_dir.name}/{rel}"
             section = rel.split(":", 1)[1] if is_release else "(preamble)"
+            # ★ in_claims 是**文件级**计数（每个来源面各自从 0 起算）
+            #   ⇒ 仓级判定必须用 repo_in_claims（跨来源面累加），
+            #   否则「仓的最后一个来源面没有断言」会把整个仓误算成「无此类断言」
+            #   （实测 logx 是全 org 唯一有断言的仓，却报自己「无此类断言」
+            #    ⇒ 与同屏「为假 0」叠加读成「所有仓都没这类断言」= 假干净）。
             in_claims = 0
             # ★ 断言词**可能落在 bullet 的续行里**（实测：bootstrap 根 CHANGELOG 的
             #   #42 / #33 就在续行上）⇒ 必须把续行并入所属 bullet 再判定，
@@ -428,7 +437,7 @@ def scan(repo_filter: str | None = None) -> dict:
 
             def flush_bullet() -> None:
                 """把累积的 bullet（首行 + 续行）判一次。"""
-                nonlocal in_claims, total_claims, broad_total
+                nonlocal in_claims, repo_in_claims, total_claims, broad_total
                 if not bullet_parts:
                     return
                 blk = "\n".join(bullet_parts)
@@ -443,6 +452,7 @@ def scan(repo_filter: str | None = None) -> dict:
                     bullet_parts.clear()
                     return
                 in_claims += 1
+                repo_in_claims += 1
                 total_claims += len(claims)
                 for c in claims:
                     dep_dir = WORKSPACE / c["dep"]
@@ -479,7 +489,8 @@ def scan(repo_filter: str | None = None) -> dict:
                 if bullet_parts and raw.strip():
                     bullet_parts.append(raw.strip())
             flush_bullet()
-        if not in_claims:
+        # ★ 仓级判定：用跨来源面累加的 repo_in_claims（**不是**最后一个来源面的 in_claims）
+        if repo_in_claims == 0:
             repos_without_claims += 1
 
     scanned_repos = len(repos)
