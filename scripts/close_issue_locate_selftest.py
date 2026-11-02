@@ -21,7 +21,16 @@ CHANGELOG 版本节**，而版本节里常常没有记这条 issue 的修复 ⇒
   3. 不排除 `PR #N`（PR 与 issue 共用编号空间）⇒ 「PR 号不算 issue 引用」必须失败；
   4. 「只在叙述里提到」也说成「未提到」⇒ 两种说法必须被分开断言。
 
+**#158 追加的判据**（回执不许做事实断言）：
+
+  5. 回执又写上「**不含本条修复**」⇒ 「版本节没点名」推不出「这一版不含它」
+     （一版可以捆绑多条修复、只点名其中一部分 ⇒ 修复就在这一版里）⇒ 必须转红；
+  6. **Release 正文证据被丢掉**（第四种情形被说成「无法判定」）⇒ 必须转红；
+  7. 没有证据却断言「很可能就在这一版里」⇒ 必须转红。
+
 **无副作用、不联网**：纯函数（定位 + 回执正文组装），不碰 GitHub。
+（Release 正文证据由调用方传入 `release_evidence`，本自测直接喂 True/False/None，
+不联网。）
 
 用法：python3 scripts/close_issue_locate_selftest.py
 """
@@ -153,12 +162,39 @@ def all_assertions() -> list[str]:
     body2 = build(SECTION_OTHER_ISSUE, "matrix-tools", "153", "v0.1.30")
     if "该版本节未提到本 issue" not in body2:
         failures.append(f"回执：版本节没提到本 issue 时没有明说：{body2[:200]}")
-    if "**不含本条修复**" not in body2:
-        failures.append("回执：版本节没提到本 issue 时没有声明「不含本条修复」")
+    # #158：旧实现在这里断言「**不含本条修复**」——那是关于**该版本内容**的事实断言，
+    # 而「版本节没点名」**推不出**它（一版可以捆绑多条修复、只点名其中一部分 ⇒
+    # 修复就在这一版里）⇒ 现在只说「无法从版本节判定」。
+    if "**不含本条修复**" in body2:
+        failures.append("回执：版本节没提到本 issue 时断言了「不含本条修复」——"
+                        "这是与事实可能相反的断言（#158）")
+    if "无法从版本节判定" not in body2:
+        failures.append("回执：版本节没提到本 issue 时没有说「无法从版本节判定」")
+    if "很可能就在这一版里" in body2:
+        failures.append("回执：没有 Release 正文证据却断言「很可能就在这一版里」")
     if "**本条修复**" in body2:
         failures.append("回执：定位不到却写成了「本条修复」")
     if "与本 issue 无关的改动" not in body2:
         failures.append("回执：定位不到时也没给出该版本的全部变更")
+
+    # #158 的**第四种**：版本节没提，但 **Release 正文点名了本 issue**
+    # ⇒ 本条修复很可能就在这一版里（版本节漏记）——判据依据不在版本节里。
+    body_b = build(SECTION_OTHER_ISSUE, "matrix-tools", "153", "v0.1.30", True)
+    if "Release 正文点名了本 issue" not in body_b:
+        failures.append(f"回执：Release 正文点名了本 issue 时没有说明（第四种情形）：{body_b[:200]}")
+    if "很可能就在这一版里" not in body_b:
+        failures.append("回执：Release 正文点名了本 issue 时没有说「很可能就在这一版里」")
+    if "**不含本条修复**" in body_b:
+        failures.append("回执：有 Release 正文证据却仍断言「不含本条修复」")
+    if "该版本节未提到本 issue" not in body_b:
+        failures.append("回执：第四种情形里没有说「该版本节未提到本 issue」")
+
+    # #158：**证据为 False**（Release 正文读了但没点名）时也不许断言情形 B
+    body_c = build(SECTION_OTHER_ISSUE, "matrix-tools", "153", "v0.1.30", False)
+    if "很可能就在这一版里" in body_c:
+        failures.append("回执：Release 正文没点名却断言「很可能就在这一版里」")
+    if "**不含本条修复**" in body_c:
+        failures.append("回执：Release 正文没点名时断言了「不含本条修复」（#158）")
 
     body3 = build(SECTION_PROSE_ONLY, "matrix-tools", "153", "v0.1.30")
     if "未绑定到具体条目" not in body3:
@@ -171,6 +207,9 @@ def all_assertions() -> list[str]:
         failures.append(f"回执：PR 形态的说法缺失：{body_pr[:200]}")
     if "该版本节未提到本 issue" in body_pr:
         failures.append("回执：PR 形态被说成了「未提到」——两种说法必须分开")
+    # #158：PR 形态分支原来断言「本 issue 的修复**不在这一节**」——同样是事实断言
+    if "修复**不在这一节**" in body_pr:
+        failures.append("回执：PR 形态分支断言了「修复不在这一节」——与事实可能相反（#158）")
 
     # 定位不到也必须给出正文（**只提示不阻断**）
     for name, b in (("未提到", body2), ("未绑定到条目", body3)):
@@ -188,11 +227,13 @@ def all_assertions() -> list[str]:
 def run_mutation(name: str, mutate) -> list[str]:
     """在变异下跑断言，返回 failures（空 = 变异没被抓到）。"""
     saved = (gen_releases.mentions_issue, gen_releases.locate_issue_entries)
+    saved_build = close_issue.build_change_content
     try:
         mutate()
         return all_assertions()
     finally:
         gen_releases.mentions_issue, gen_releases.locate_issue_entries = saved
+        close_issue.build_change_content = saved_build
 
 
 def _mutate_never_hit():
@@ -226,11 +267,42 @@ def _mutate_merge_two_messages():
     gen_releases.locate_issue_entries = _f
 
 
+def _mutate_restore_false_assertion():
+    """把「无法从版本节判定」换回旧的事实断言「**不含本条修复**」（#158）。"""
+    orig = close_issue.build_change_content
+
+    def _f(sec, repo, num, tag, release_evidence=None):
+        return orig(sec, repo, num, tag, release_evidence).replace(
+            "本条修复是否在这一版里**无法从版本节判定**", "**不含本条修复**")
+    close_issue.build_change_content = _f
+
+
+def _mutate_ignore_release_evidence():
+    """丢掉 Release 正文证据（第四种情形被说成「无法判定」）。"""
+    orig = close_issue.build_change_content
+
+    def _f(sec, repo, num, tag, release_evidence=None):
+        return orig(sec, repo, num, tag, None)
+    close_issue.build_change_content = _f
+
+
+def _mutate_claim_case_b_without_evidence():
+    """没有证据也断言情形 B（「很可能就在这一版里」）。"""
+    orig = close_issue.build_change_content
+
+    def _f(sec, repo, num, tag, release_evidence=None):
+        return orig(sec, repo, num, tag, True)
+    close_issue.build_change_content = _f
+
+
 MUTATIONS = [
     ("定位器恒不命中", _mutate_never_hit),
     ("定位器恒命中", _mutate_always_hit),
     ("PR 号被当 issue 引用", _mutate_pr_counts),
     ("「未绑定到条目」被说成「未提到」", _mutate_merge_two_messages),
+    ("回执又写上「不含本条修复」假断言", _mutate_restore_false_assertion),
+    ("Release 正文证据被丢掉", _mutate_ignore_release_evidence),
+    ("没证据却断言「很可能就在这一版里」", _mutate_claim_case_b_without_evidence),
 ]
 
 
