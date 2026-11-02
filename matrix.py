@@ -309,6 +309,15 @@ def _ls_remote_tags(url: str, timeout: int = 60, attempts: int = 3) -> tuple[lis
     return [], False
 
 
+def _is_local_origin(origin: str) -> bool:
+    """origin 是不是**本地路径**（file:// 或绝对路径）。
+
+    本地 origin 优先于 canonical 的理由见 remote_tags 的注释：
+    canonical 是按 org+仓名猜出来的，读到本地 clone 真正指向的仓才准。
+    """
+    return origin.startswith("file://") or origin.startswith("/")
+
+
 def remote_tags(repo: str, base: str | None = None) -> list[str]:
     """读某仓**远端**全部 tag（含嵌套前缀，形如 hlog/v0.1.4）。
 
@@ -320,7 +329,9 @@ def remote_tags(repo: str, base: str | None = None) -> list[str]:
     2. **canonical HTTPS 优先**，clone 的 origin URL 兜底：
        - HTTPS 走 gh 的 token，不依赖本机 SSH key/agent ⇒ SSH 抽风不影响结论；
        - 实测 SSH ≈6.5s/仓、HTTPS ≈1.2s/仓 ⇒ 优先 HTTPS 顺带把审计跑快约 5 倍；
-       - origin 兜底覆盖「HTTPS 被代理挡了、只有 SSH 通」的场景。
+       - origin 兜底覆盖「HTTPS 被代理挡了、只有 SSH 通」的场景；
+       - **例外**：origin 是**本地路径**时 origin 优先（本地镜像/离线夹具/fork
+         ——canonical 是猜出来的，读到本地 clone 真正指向的仓才准，见 _is_local_origin）。
     3. 两条都失败 ⇒ 抛 :class:`RemoteReadError`：宁可脚本失败，也不把「读不到」
        伪装成「没有」。
 
@@ -342,6 +353,20 @@ def remote_tags(repo: str, base: str | None = None) -> list[str]:
         origin = None
     urls: list[str] = []
     canonical = f"https://github.com/{ORG}/{repo}.git"
+    # **本地路径的 origin 优先**（2026-11-02 修，承接 align_floors 的远端 tag 口径）。
+    #
+    # 为什么要插这一条：canonical 是「按 org+仓名**猜**出来的 URL」，
+    # 而 clone 自己的 origin 才是**这个 clone 真正的远端**。
+    # 两者不是一回事的情形很常见：
+    #   - 本地镜像 / 离线夹具（selftest 造的临时仓、CI 的本地 bare 仓）；
+    #   - fork 或改名后的仓（origin 指向别处，canonical 指向 org 的另一个仓）。
+    # ⇒ 这两种情形下 canonical 优先会**读到另一个仓的 tag**，比读不到更糟
+    # （读到的 tag 是「存在但不是事实」）。
+    #
+    # 真实矩阵仓不受影响：它们的 origin 就是 https://github.com/oekit/<repo>.git
+    # （非本地路径 ⇒ 仍是 canonical 优先，实测 HTTPS ≈1.2s/仓）。
+    if origin and _is_local_origin(origin):
+        urls.append(origin)
     urls.append(canonical)
     if origin and origin not in urls:
         urls.append(origin)

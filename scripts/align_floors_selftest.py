@@ -188,6 +188,62 @@ def check_apply_repo_tidies_all_modules() -> None:
           "apply_repo 必须先改完全部 go.mod 再 tidy（否则 tidy 用的是旧父仓内容）")
 
 
+def check_plan_uses_remote_tags() -> None:
+    """**plan_repo 必须按远端 tag 判地板**（2026-11-02 修）。
+
+    形态：本地 clone 的 tag 陈旧（没 fetch / 没带 --tags）⇒ 按本地 tag 判 ⇒
+    **抬不动**，而工具自报「✓ 全矩阵地板零漂移」——**假绿比报错更危险**
+    （本文件已有两处同类教训：bootstrap#50 的 indirect 行漏抬、kitex#65 的
+    嵌套 go.sum 滞后）。
+
+    实测（2026-11-02，oekit#102 这一轮）：middleware v0.13.6 已发远端，而本地
+    clone 尚无该 tag ⇒ plan **漏掉** hertz 的 `middleware v0.13.5 → v0.13.6`
+    ⇒ 清单少 1 处，工具还报「零漂移」。
+
+    断言方式：**行为级**（不查源码字符串——那太弱，变异一下就漏）——把
+    `align_floors.latest_tag` 换成记录调用参数的替身，跑一次 `plan_repo`，
+    断言它**每次都带 remote=True**。
+
+    **变异自证**：把 `plan_repo` 退回 `latest_tag(dep, base)`（remote 默认 False）
+    ⇒ 本断言的 remote 判定转红 ⇒ 判据有牙齿。
+    """
+    import align_floors
+
+    calls: list[tuple[str, bool]] = []
+    orig = align_floors.latest_tag
+
+    def fake_latest_tag(repo, base=None, remote=False):  # noqa: ANN001
+        calls.append((repo, bool(remote)))
+        return "v9.9.9"
+
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td) / "pkg"
+        root.mkdir()
+        (root / "go.mod").write_text(
+            "module github.com/oekit/pkg\n"
+            "\n"
+            "go 1.24.0\n"
+            "\n"
+            "require (\n"
+            "\tgithub.com/oekit/concurrency v0.1.0\n"
+            ")\n"
+        )
+        align_floors.latest_tag = fake_latest_tag
+        try:
+            plans = align_floors.plan_repo("pkg", td)
+        finally:
+            align_floors.latest_tag = orig
+
+    check(bool(calls), "plan_repo 没有调用 latest_tag")
+    check(all(remote for _repo, remote in calls),
+          f"plan_repo 必须按**远端** tag 判地板（latest_tag(..., remote=True)）——"
+          f"本地 clone 陈旧会静默漏抬（2026-11-02 实测漏掉 hertz 的 middleware "
+          f"地板）：calls={calls}")
+    ups = [u for p in plans.values() for u in p]
+    check(any(u[1] == "v0.1.0" and u[2] == "v9.9.9" for u in ups),
+          f"plan_repo 应用远端 tag 判出抬升：{ups}")
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td) / "repo"
@@ -213,6 +269,7 @@ def main() -> None:
 
     check_indirect_lines()
     check_apply_repo_tidies_all_modules()
+    check_plan_uses_remote_tags()
 
     if FAILURES:
         print("align_floors 自测失败：")
@@ -220,7 +277,7 @@ def main() -> None:
             print(f"  ✗ {f}")
         sys.exit(1)
     print("align_floors 自测通过：根/一层/第四层嵌套模块均扫到，vendor 被排除，"
-          "indirect 行可抬升，嵌套模块 go.sum 跟随父仓")
+          "indirect 行可抬升，嵌套模块 go.sum 跟随父仓，地板按**远端** tag 判定")
 
 
 if __name__ == "__main__":

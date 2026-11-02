@@ -87,6 +87,19 @@ def make_repo(path: Path, tags: list[str], requires: dict[str, str] | None = Non
     _git(path, "commit", "-q", "-m", "init")
     for name in tags:
         _git(path, "tag", "-a", name, "-m", f"tag {name}")
+    # **必须给这个假仓一个本地 origin**（2026-11-02 修）：
+    # align_floors 现在按**远端** tag 判地板（本地 clone 陈旧 ⇒ 静默漏抬）⇒
+    # 假仓没有 origin 时，remote_tags 会按 org+仓名去猜 canonical URL ⇒
+    # 读到**真 oekit 仓**的 tag（本例把 pkg v0.5.0 读成真仓的 v0.31.1）⇒
+    # 自测既不确定（依赖网络）又判错了对象。
+    #
+    # 给一个本地 bare 仓当 origin ⇒ remote_tags 的「本地 origin 优先」规则命中
+    # ⇒ 读到的是**这个假仓自己的** tag，且全程**不联网**。
+    bare = path.parent / f"{path.name}-origin.git"
+    subprocess.run(["git", "init", "-q", "--bare", str(bare)], check=True)
+    _git(path, "remote", "add", "origin", str(bare))
+    subprocess.run(["git", "-C", str(path), "push", "--quiet", "origin", "--tags"],
+                   check=True)
     return path
 
 

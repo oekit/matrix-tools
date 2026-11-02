@@ -29,7 +29,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import MODULES, OEKIT_REQ_RE, git_branch, is_dirty, latest_tag, repo_dir, sh  # noqa: E402
+from matrix import (MODULES, OEKIT_REQ_RE, RemoteReadError, enable_tag_cache,  # noqa: E402
+                    git_branch, is_dirty, latest_tag, repo_dir, sh)
 from prkit import land_pr  # noqa: E402
 
 # 地板扫描用的 require 行正则：**容忍行尾的 `// indirect` 标记**。
@@ -93,7 +94,25 @@ def plan_repo(repo: str, base: str) -> dict[Path, list[tuple[str, str, str]]]:
         for m in FLOOR_REQ_RE.finditer(text):
             full, dep, ver = m.group(1), m.group(2), m.group(3)
             if dep not in latest_cache:
-                latest_cache[dep] = latest_tag(dep, base)
+                # **必须读远端 tag，不能读本地 tag**（2026-11-02 修）。
+                #
+                # 形态：本地 clone 的 tag 陈旧（`git fetch` 没跑 / 没带 --tags）⇒
+                # 按本地 tag 判 ⇒ **抬不动**，而工具自报「✓ 全矩阵地板零漂移」——
+                # **假绿比报错更危险**（本文件此前已有两处同类教训：bootstrap#50
+                # 的 indirect 行漏抬、kitex#65 的嵌套 go.sum 滞后）。
+                #
+                # 实测（2026-11-02，oekit#102 这一轮）：middleware v0.13.6 已发远端，
+                # 而本地 clone 尚无该 tag ⇒ plan **漏掉** hertz 的
+                # `middleware v0.13.5 → v0.13.6`（以及 BOM 那处）——
+                # 清单因此少 1 处，工具还报「零漂移」。
+                #
+                # 口径与 issue 的「核对口径」一致：按各仓**远端** tag 比对
+                # （与 `gen_versions._remote_tags` 同源）。
+                #
+                # remote=True 时 matrix.latest_tag 走 matrix.remote_tags：
+                # 读不到就抛 RemoteReadError（**fail-closed**，绝不静默降级本地 tag）——
+                # main() 捕获它并以退出码 2 报「判不了」，不与「没有漂移」混为一谈。
+                latest_cache[dep] = latest_tag(dep, base, remote=True)
             target = latest_cache[dep]
             if not target:
                 continue
@@ -186,14 +205,25 @@ def main() -> None:
     print("align_floors：依赖地板对齐（维护轮工具 / --repo 按需，非常规跟版）")
     plans_all: dict[str, dict[Path, list[tuple[str, str, str]]]] = {}
     skipped: list[str] = []
-    for repo in repos:
-        plans = plan_repo(repo, base)
-        if plans:
-            plans_all[repo] = plans
-            for gm, ups in plans.items():
-                rel = gm.relative_to(repo_dir(repo, base))
-                for full, ver, target in ups:
-                    print(f"  {repo:<14} {rel}: {full.split('/')[-1]} {ver} → {target}")
+    # 远端 tag 缓存：全矩阵 24 仓 × 多个依赖，同一依赖只读一次远端
+    # （不开缓存 ⇒ 每次 ls-remote 都要走 HTTPS，慢一个量级）。
+    enable_tag_cache()
+    try:
+        for repo in repos:
+            plans = plan_repo(repo, base)
+            if plans:
+                plans_all[repo] = plans
+                for gm, ups in plans.items():
+                    rel = gm.relative_to(repo_dir(repo, base))
+                    for full, ver, target in ups:
+                        print(f"  {repo:<14} {rel}: {full.split('/')[-1]} {ver} → {target}")
+    except RemoteReadError as e:
+        # **读不到 ≠ 没有**（matrix-tools#79 的口径）：判不了就明确报「判不了」，
+        # 绝不把它当成「零漂移」——否则工具会在读失败时静默放过整轮地板对齐。
+        print(f"❌ 读不到远端 tag ⇒ 无法判定地板漂移（**不是「零漂移」**）：{e}",
+              file=sys.stderr)
+        print("先修好网络/凭证再重试。", file=sys.stderr)
+        raise SystemExit(2)
     if not plans_all:
         print("\n✓ 全矩阵地板零漂移")
         return
