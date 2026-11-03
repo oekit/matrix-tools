@@ -97,9 +97,9 @@ jobs:
         run: python3 scripts/audit_fail_loud_selftest.py
       - name: 工具链闸门自测（合并回退只在 CLEAN 放行 / CHANGELOG 覆写要 --apply / local_dir 只此一份）
         run: python3 scripts/toolchain_selftest.py
-      - name: 台账写入器自测（事实与现实不符必须拒绝写入 / 收口必须报出漂移 / 坏账不许覆盖）
+      - name: 台账写入器自测（事实与现实不符必须拒绝写入 / 收口必须报出漂移 / 坏账不许覆盖 / 无锚点发版也要入账且被复核）
         run: python3 scripts/ledger_write_selftest.py
-      - name: 台账写入器自测·变异自证（封存保证 / 收口范围 / 修正通道 ⇒ 精确转红集合必须精确）
+      - name: 台账写入器自测·变异自证（封存保证 / 收口范围 / 修正通道 / 无锚点发版通道 / 调用点级接线 ⇒ 精确转红集合必须精确）
         run: python3 scripts/ledger_write_selftest.py --mutate
       - name: 历史回执重渲染自测（只编辑原评论不新发 / 已是 #153 形态幂等跳过 / 无回执与多条回执明确报错 / 变异自证）
         run: python3 scripts/rerender_receipt_selftest.py

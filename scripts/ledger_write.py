@@ -123,6 +123,174 @@ def tag_exists(org: str, repo: str, tag: str) -> bool:
                       f"无法判定它是否存在（拒绝写入，别把「读不到」记成「没有」）")
 
 
+def release_exists(org: str, repo: str, tag: str) -> bool:
+    """远端有没有这个 tag 对应的 GitHub Release。
+
+    为什么单独一条（2026-11-03 实测）：「tag 已打」与「Release 已发布」是**两件事**
+    —— oekit 的发版链要求两者都在（tag 推了但 Release 没建 ⇒ 消费方拿不到变更记录）。
+    台账若只记 tag ⇒ 下一轮去重会以为「这条已发布」⇒ 而 Release 缺失这件事没人知道。
+    ⇒ 无 issue 锚点的发版记录**必须**同时核到 Release。
+    """
+    try:
+        ghsafe.gh_json(["release", "view", tag, "--repo", f"{org}/{repo}", "--json", "tagName"])
+        return True
+    except ghsafe.GhCommandError as e:
+        detail = f"{e.stderr}\n{e.stdout}".lower()
+        if "404" in detail or "not found" in detail:
+            return False
+        raise
+    except ghsafe.GhReadError:
+        raise Refused(f"读远端 Release {org}/{repo}@{tag} 时正文不可解析 ⇒ "
+                      f"无法判定它是否存在（拒绝写入，别把「读不到」记成「没有」）")
+
+
+# ── 「无 issue 锚点的发版」通道（2026-11-03 实测补的缺口）────────────────
+#
+# 形态：工具仓自身发版（matrix-tools v0.2.0）、umbrella 仓发版（oekit BOM v0.2.0）、
+#       纯重构发版……这些发版**没有** issue 锚点 ⇒ 旧形态 `--issue repo#N`
+#       强制要求 `#N` ⇒ **根本记不进去**。
+# 实测：后台巡检的台账在 hertz v0.8.13 之后**断了 8 次发版**，其中 **5 次**
+#       （hertz v0.9.0 / matrix-tools v0.1.58 / matrix-tools v0.2.0 /
+#         oekit v0.1.81 / oekit v0.2.0）**无锚点** ⇒ 工具不支持 ⇒ 只能不记
+#       ⇒ 台账与现实分叉（下一轮去重/复核看不见它们）。
+RELEASE_ONLY_PREFIX = "（发版）"
+
+
+def release_only_key(repo: str, tag: str) -> str:
+    """无 issue 锚点发版的台账键（与真实 issue 键 `repo#N` **不同形态** ⇒ 不撞）。"""
+    return f"{RELEASE_ONLY_PREFIX}{repo}@{tag}"
+
+
+def is_release_only_key(key: str) -> bool:
+    """这条记录是不是「无 issue 锚点的发版」记录。"""
+    return str(key).startswith(RELEASE_ONLY_PREFIX)
+
+
+def _append_entry(entry: dict[str, Any], data: dict[str, Any]) -> dict[str, Any]:
+    """把条目追加到**最新一轮**（未收口）⇒ 封存保证（matrix-tools#211）。
+
+    为什么抽成公共函数：新增的「无 issue 锚点的发版」通道也必须受**同一条**
+    封存保证约束 ⇒ 两处各抄一遍判据 ⇒ 将来改一处忘一处 ⇒ 封存承诺失真。
+    """
+    run = latest_run(data)
+    if run is None:
+        run = {"started_at": now_iso(), "finished_at": None,
+               "handled": [], "also_done": [], "skip": []}
+        data.setdefault("runs", []).append(run)
+    # ★ **封存保证**（matrix-tools#211）：已收口的轮次**不许再追加**。
+    #   `--run-end` 的职责是「把这一轮每条事实**再回读一遍**」⇒ 收口之后追加的
+    #   条目**从未经过那次复核** ⇒ 封存承诺失真。
+    #   且轮次的 started_at/finished_at 早于它记录的事实 ⇒ 时间窗与事实不符。
+    #   ⇒ 取严：拒绝写入，提示先 `--new-run`（台账是审计线索，宁可多一条命令）。
+    if run.get("finished_at"):
+        raise Refused(
+            f"最新一轮（started_at={run.get('started_at')}）**已收口**"
+            f"（finished_at={run.get('finished_at')}）⇒ 拒绝往封存轮次里追加条目："
+            f"收口时只复核过当时那批事实，之后追加的条目从未被复核，"
+            f"且轮次时间窗会早于所记录事实。"
+            f"⇒ 请先 `--new-run` 开新一轮再记。")
+    run.setdefault("handled", []).append(entry)
+    data["last_run"] = run.get("started_at")
+    return run
+
+
+def cmd_add_release_entry(args, data: dict[str, Any]) -> None:
+    """记一条**没有 issue 锚点**的发版（工具仓 / umbrella 仓 / 纯重构）。
+
+    为什么需要（实测 2026-11-03）：后台巡检的台账在 hertz v0.8.13 之后**断了 8 次发版**
+    —— 其中 5 次**根本没有 issue 锚点** ⇒ 旧的 `--issue repo#N` 强制形态让它们
+    **记不进去** ⇒ 台账与现实分叉。
+
+    ⇒ 这里给一条**显式**通道 `--release-only --repo <repo> --tag <tag>`：
+      ① 事实回读**不打折**：tag 必须存在 **且** GitHub Release 必须存在
+         （tag 推了但 Release 没建 ⇒ 消费方拿不到变更记录 ⇒ 不能记成「已发版」）；
+      ② 给了 `--pr` 则 PR 必须已合并；
+      ③ 键用 `（发版）<repo>@<tag>` ⇒ 与真实 issue 键**不同形态、不撞**；
+      ④ `cmd_run_end` 也**复核**这类键 ⇒ 否则「记了没人核」＝白记。
+    """
+    org = args.org
+    repo = (args.repo or "").strip()
+    tag = (args.tag or "").strip()
+    if not repo:
+        raise SystemExit("✗ --release-only 必须给 --repo <repo>（如 hertz / matrix-tools / oekit）")
+    if not tag:
+        raise SystemExit("✗ --release-only 必须给 --tag <tag>")
+    if args.closed:
+        raise SystemExit("✗ --release-only 不接受 --closed（这条记录没有 issue 可关）")
+
+    key = release_only_key(repo, tag)
+    for r in data.get("runs") or []:
+        for e in r.get("handled") or []:
+            if e.get("issue") == key and e.get("org", org) == org:
+                raise Refused(f"台账里已经有 {key} 的记录 ⇒ 拒绝重复写入"
+                              f"（同一次发版只该有一条；要改它请用 --amend-*）")
+
+    # ── 事实回读（写入的字段来自这里，不是来自命令行参数）──
+    if not tag_exists(org, repo, tag):
+        raise Refused(f"远端没有 tag {org}/{repo}@{tag} ⇒ 拒绝记成「已发版」")
+    if not release_exists(org, repo, tag):
+        raise Refused(f"远端没有 {org}/{repo}@{tag} 对应的 GitHub Release ⇒ "
+                      f"拒绝记成「已发版」（tag 推了但 Release 没建 ⇒ "
+                      f"消费方拿不到变更记录 ⇒ 不能记「已发布」）")
+    merge_commit = ""
+    if args.pr:
+        pr_state, merge_commit = pr_facts(org, repo, args.pr)
+        if pr_state != "MERGED":
+            raise Refused(f"PR {org}/{repo}#{args.pr} 当前状态是 {pr_state or '未知'}，"
+                          f"**不是 MERGED** ⇒ 拒绝记成「已交付」")
+
+    entry = {
+        "issue": key, "org": org, "repo": repo, "release_only": True,
+        "kind": args.kind, "priority": args.priority,
+        "pr": args.pr, "merge_commit": merge_commit or None,
+        "tag": tag,
+        "release": f"https://github.com/{org}/{repo}/releases/tag/{tag}",
+        "closed": False, "board_status": args.board, "note": args.note or "",
+        "fact_at": now_iso(),
+    }
+    _append_entry(entry, data)
+    print(f"✓ 已记入（无 issue 锚点的发版）：{key}"
+          + (f"  PR#{args.pr}({merge_commit[:8]})" if args.pr else "")
+          + f"  tag={tag}  Release=已核到")
+
+
+def _review_release_only(org: str, e: dict[str, Any], label: str) -> list[str]:
+    """复核一条「无 issue 锚点的发版」记录 ⇒ 返回漂移列表（空 = 无漂移）。
+
+    ★ 为什么要单独一条：这类记录**没有 issue** ⇒ 旧复核逻辑按 `repo#N` 解析
+    键 ⇒ 解析不出数字 ⇒ **直接 continue 跳过** ⇒ 「记了没人核」＝白记。
+    ⇒ 这里按记录里的 repo/tag 回读：tag 在不在、**Release 在不在**、PR 合没合。
+    """
+    drift: list[str] = []
+    repo = str(e.get("repo") or "")
+    tag = str(e.get("tag") or "")
+    if not repo or not tag:
+        drift.append(f"{label}：记录里缺 repo/tag ⇒ 无法复核（不能当成「没问题」）")
+        return drift
+    try:
+        if not tag_exists(org, repo, tag):
+            drift.append(f"{label}：记录里写了 tag {tag}，但远端查不到")
+    except Exception as ex:  # noqa: BLE001 —— 读不到就报「无法判定」，不猜
+        drift.append(f"{label}：tag {tag} 无法判定（{ex}）")
+    try:
+        rel_ok = release_exists(org, repo, tag)
+    except Exception as ex:  # noqa: BLE001
+        rel_ok = None
+        drift.append(f"{label}：Release {tag} 无法判定（{ex}）")
+    if rel_ok is False:
+        drift.append(f"{label}：记录里写了 tag {tag} 的发版，但远端没有对应的 GitHub Release")
+    pr = e.get("pr")
+    if pr:
+        try:
+            pr_state, _sha = pr_facts(org, repo, int(pr))
+        except Exception as ex:  # noqa: BLE001
+            drift.append(f"{label}：PR#{pr} 读不到（{ex}）⇒ 无法判定")
+        else:
+            if pr_state != "MERGED":
+                drift.append(f"{label}：记录里写了 PR#{pr} 已合，但 GitHub 上是 {pr_state}")
+    return drift
+
+
 def latest_run(data: dict[str, Any]) -> dict[str, Any] | None:
     runs = data.get("runs") or []
     return runs[-1] if runs else None
@@ -177,25 +345,7 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
         "fact_at": now_iso(),
     }
 
-    run = latest_run(data)
-    if run is None:
-        run = {"started_at": now_iso(), "finished_at": None, "handled": [], "also_done": [], "skip": []}
-        data.setdefault("runs", []).append(run)
-    # ★ **封存保证**（matrix-tools#211）：已收口的轮次**不许再追加**。
-    #   `--run-end` 的职责是「把这一轮每条事实**再回读一遍**」⇒ 收口之后追加的
-    #   条目**从未经过那次复核** ⇒ 封存承诺失真。
-    #   且轮次的 started_at/finished_at 早于它记录的事实 ⇒ 时间窗与事实不符
-    #   （实测 2026-11-02：第 516 轮时间窗比它记录的 tag 发布时刻早 6 分半）。
-    #   ⇒ 取严：拒绝写入，提示先 `--new-run`（台账是审计线索，宁可多一条命令）。
-    if run.get("finished_at"):
-        raise Refused(
-            f"最新一轮（started_at={run.get('started_at')}）**已收口**"
-            f"（finished_at={run.get('finished_at')}）⇒ 拒绝往封存轮次里追加条目："
-            f"收口时只复核过当时那批事实，之后追加的条目从未被复核，"
-            f"且轮次时间窗会早于所记录事实。"
-            f"⇒ 请先 `--new-run` 开新一轮再记。")
-    run.setdefault("handled", []).append(entry)
-    data["last_run"] = run.get("started_at")
+    _append_entry(entry, data)
     print(f"✓ 已记入：{args.issue}  issue状态={state}"
           + (f"  PR#{args.pr}({merge_commit[:8]})" if args.pr else "")
           + (f"  tag={args.tag}" if args.tag else "")
@@ -220,11 +370,21 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
          一致，否则拒绝（事实不可知时拒绝写入，与本工具既有口径一致）。
     """
     target = args.issue
-    repo, _, num_s = target.partition("#")
-    if not repo or not num_s.isdigit():
-        raise SystemExit(f"✗ --issue 格式应为 repo#N，收到：{target}")
-    num = int(num_s)
     org = args.org
+    # ★ 「无 issue 锚点的发版」记录的键形态是 `（发版）<repo>@<tag>` ⇒ 修正通道
+    #   也要认它（否则一条错的发版记录**永远**修不了 ⇒ 那一轮**永远**收不了口）。
+    rel_only = is_release_only_key(target)
+    if rel_only:
+        _body = target[len(RELEASE_ONLY_PREFIX):]
+        repo, _, tag_in_key = _body.partition("@")
+        if not repo or not tag_in_key:
+            raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）<repo>@<tag>，收到：{target}")
+        num = None
+    else:
+        repo, _, num_s = target.partition("#")
+        if not repo or not num_s.isdigit():
+            raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）<repo>@<tag>，收到：{target}")
+        num = int(num_s)
 
     # 找到目标条目（跨轮次找，找不到就报错——不许凭印象改）
     hits: list[tuple[dict, dict]] = []
@@ -262,15 +422,28 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
                          "--amend-pr / --amend-note / --amend-board 指定）")
 
     # ③ 修正后的事实必须与现实一致（事实不可知 ⇒ 拒绝）
-    state = issue_state(org, repo, num)
-    if "closed" in changes and changes["closed"] and state != "CLOSED":
-        raise Refused(f"{org}/{target} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
-                      f"拒绝把记录改成 closed=True（事实不可知时拒绝写入）")
-    if "closed" in changes and not changes["closed"] and state == "CLOSED":
-        raise Refused(f"{org}/{target} 在 GitHub 上**确实已关**（{state}）⇒ "
-                      f"拒绝把记录改成 closed=False（那会与现实相反）")
-    if "tag" in changes and changes["tag"] and not tag_exists(org, repo, changes["tag"]):
-        raise Refused(f"远端没有 tag {org}/{repo}@{changes['tag']} ⇒ 拒绝写入")
+    if rel_only:
+        # 无 issue 锚点 ⇒ 没有 issue 状态可核 ⇒ 只核 tag / Release / PR
+        if "closed" in changes:
+            raise SystemExit("✗ 无 issue 锚点的发版记录没有 closed 字段可改")
+        new_tag = changes.get("tag") or tag_in_key
+        if not tag_exists(org, repo, new_tag):
+            raise Refused(f"远端没有 tag {org}/{repo}@{new_tag} ⇒ 拒绝写入")
+        if not release_exists(org, repo, new_tag):
+            raise Refused(f"远端没有 {org}/{repo}@{new_tag} 对应的 GitHub Release ⇒ 拒绝写入")
+        if "tag" in changes and changes["tag"] != tag_in_key:
+            # 键由 repo+tag **派生** ⇒ 改 tag 必须同步改键，否则键与内容不符
+            changes["issue"] = release_only_key(repo, changes["tag"])
+    else:
+        state = issue_state(org, repo, num)
+        if "closed" in changes and changes["closed"] and state != "CLOSED":
+            raise Refused(f"{org}/{target} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
+                          f"拒绝把记录改成 closed=True（事实不可知时拒绝写入）")
+        if "closed" in changes and not changes["closed"] and state == "CLOSED":
+            raise Refused(f"{org}/{target} 在 GitHub 上**确实已关**（{state}）⇒ "
+                          f"拒绝把记录改成 closed=False（那会与现实相反）")
+        if "tag" in changes and changes["tag"] and not tag_exists(org, repo, changes["tag"]):
+            raise Refused(f"远端没有 tag {org}/{repo}@{changes['tag']} ⇒ 拒绝写入")
     if "pr" in changes and changes["pr"]:
         pr_state, merge_commit = pr_facts(org, repo, int(changes["pr"]))
         if pr_state != "MERGED":
@@ -314,6 +487,11 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
         for e in run.get("handled", []):
             org = e.get("org", "oekit")
             issue = str(e.get("issue", ""))
+            # ★ 「无 issue 锚点的发版」记录也要**复核**（否则「记了没人核」＝白记）：
+            #   旧逻辑按 `repo#N` 解析键 ⇒ 解析不出数字 ⇒ 直接 continue 跳过。
+            if e.get("release_only") or is_release_only_key(issue):
+                drift.extend(_review_release_only(org, e, issue))
+                continue
             repo, _, num_s = issue.partition("#")
             if not num_s.isdigit():
                 continue
@@ -372,6 +550,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--new-run", action="store_true", help="开新一轮记录")
     p.add_argument("--run-end", action="store_true", help="收口最新一轮（并复核每条事实）")
     p.add_argument("--issue", help="repo#N")
+    p.add_argument("--release-only", action="store_true",
+                   help="记一次**无 issue 锚点**的发版（工具仓/umbrella 仓/纯重构）；配合 --repo/--tag")
+    p.add_argument("--repo", help="仓名（配合 --release-only 用，如 hertz / matrix-tools / oekit）")
     p.add_argument("--pr", type=int, help="PR 号（会回读并要求已合并）")
     p.add_argument("--tag", help="tag（会回读远端，要求存在）")
     p.add_argument("--kind", default="Chore", help="Bug/Enhancement/Refactor/Docs/Chore")
@@ -390,8 +571,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--amend-board", dest="amend_board", default=None, help="修正记录的看板状态")
     args = p.parse_args(argv)
 
-    if not any([args.new_run, args.run_end, args.issue]):
-        p.error("至少给一个动作：--new-run / --run-end / --issue")
+    if args.release_only and args.issue:
+        p.error("--release-only 与 --issue 不能同时给（一条记录要么有 issue 锚点，要么没有）")
+    if args.release_only and any(v is not None for v in (args.amend_closed, args.amend_tag,
+                                                        args.amend_pr, args.amend_note,
+                                                        args.amend_board)):
+        p.error("--release-only 不支持 --amend-*（修正通道用 --issue 定位记录）")
+    if not any([args.new_run, args.run_end, args.issue, args.release_only]):
+        p.error("至少给一个动作：--new-run / --run-end / --issue / --release-only")
 
     path = Path(args.ledger)
     data = load_ledger(path)
@@ -404,6 +591,8 @@ def main(argv: list[str] | None = None) -> int:
                 cmd_amend(args, data)
             else:
                 cmd_add_entry(args, data)
+        if args.release_only:
+            cmd_add_release_entry(args, data)
         if args.run_end:
             cmd_run_end(args, data)
     except Refused as e:

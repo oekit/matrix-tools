@@ -50,6 +50,14 @@ case "$1" in
       printf '{"state":"%s","mergeCommit":null}\\n' "${FAKE_PR_STATE:-OPEN}"
     fi
     ;;
+  release)
+    # gh release view <tag> --repo X --json tagName  ⇒ $1=release $2=view $3=tag
+    if [ -n "${FAKE_MISSING_RELEASE:-}" ] && [ "$3" = "${FAKE_MISSING_RELEASE}" ]; then
+      echo "gh: HTTP 404: Not Found (https://api.github.com/releases/$3)" >&2
+      exit 1
+    fi
+    printf '{"tagName":"%s"}\n' "$3"
+    ;;
   api)
     case "$2" in
       *"/${FAKE_MISSING_TAG:-__no_such_tag__}")
@@ -334,6 +342,155 @@ def main() -> int:
         else:
             print("  ✓ 用例14 全部收口后再跑 --run-end ⇒ 退出码 0 且台账未变")
 
+        # ═══ 2026-11-04：「无 issue 锚点的发版」通道（台账断链的根因之一）═══
+        #
+        # 形态：工具仓自身发版（matrix-tools v0.2.0）、umbrella 仓发版（oekit BOM v0.2.0）、
+        #       纯重构发版……这些发版**没有** issue 锚点 ⇒ 旧形态 `--issue repo#N`
+        #       强制要求 `#N` ⇒ **根本记不进去** ⇒ 台账与现实分叉（实测：8 次发版断链）。
+
+        # ── 用例 15：--release-only 正常写入 ⇒ 键形态 / 事实字段都对 ──────
+        led15 = ledger_of("rel_only.json")
+        run_tool(["--new-run"], base_env, led15)
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9",
+                      "--pr", "59", "--kind", "Chore", "--priority", "P2",
+                      "--note", "工具仓自身发版"], base_env, led15)
+        if r.returncode != 0:
+            failures.append(f"用例15 release-only 写入失败：{r.stdout}{r.stderr}")
+        else:
+            data15 = json.loads(led15.read_text(encoding="utf-8"))
+            entries15 = data15["runs"][-1]["handled"]
+            if len(entries15) != 1:
+                failures.append(f"用例15 台账里应有 1 条，实际 {len(entries15)}")
+            else:
+                e = entries15[0]
+                if e.get("issue") != "（发版）pkg@v9.9.9":
+                    failures.append(f"用例15 键形态不对（应是 （发版）pkg@v9.9.9）：{e.get('issue')}")
+                elif not e.get("release_only"):
+                    failures.append(f"用例15 记录缺 release_only 标记：{e}")
+                elif e.get("tag") != "v9.9.9" or "releases/tag/v9.9.9" not in (e.get("release") or ""):
+                    failures.append(f"用例15 tag/release 不对：{e.get('tag')} / {e.get('release')}")
+                elif e.get("closed") is not False:
+                    failures.append(f"用例15 无锚点发版不该有 closed=True：{e}")
+                elif e.get("merge_commit") != "1111111111111111111111111111111111111111":
+                    failures.append(f"用例15 merge_commit 不是回读来的：{e.get('merge_commit')}")
+                else:
+                    print("  ✓ 用例15 release-only 写入 ⇒ 键形态与事实字段都对")
+
+        # ── 用例 16：Release 不存在 ⇒ 拒绝写入（tag 推了但没发 Release）────
+        led16 = ledger_of("rel_norelease.json")
+        run_tool(["--new-run"], base_env, led16)
+        before16 = led16.read_text(encoding="utf-8")
+        env16 = dict(base_env)
+        env16["FAKE_MISSING_RELEASE"] = "v9.9.9"
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9"], env16, led16)
+        if r.returncode == 0:
+            failures.append("用例16 Release 不存在却写入成功 ⇒ 会把「tag 推了但没发 Release」记成已发布")
+        elif "拒绝写入" not in (r.stdout + r.stderr):
+            failures.append(f"用例16 拒绝时没给出原因：{r.stdout}{r.stderr}")
+        elif led16.read_text(encoding="utf-8") != before16:
+            failures.append("用例16 拒绝写入却把台账改了")
+        else:
+            print("  ✓ 用例16 Release 不存在 ⇒ 拒绝写入且台账未被改")
+
+        # ── 用例 17：tag 不存在 ⇒ 拒绝写入 ──────────────────────────────
+        led17 = ledger_of("rel_notag.json")
+        run_tool(["--new-run"], base_env, led17)
+        env17 = dict(base_env)
+        env17["FAKE_MISSING_TAG"] = "v8.8.8"
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v8.8.8"], env17, led17)
+        if r.returncode == 0:
+            failures.append("用例17 tag 不存在却写入成功 ⇒ 断言无效")
+        else:
+            print("  ✓ 用例17 tag 不存在 ⇒ 拒绝写入")
+
+        # ── 用例 18：PR 未合 ⇒ 拒绝写入 ─────────────────────────────────
+        led18 = ledger_of("rel_pr.json")
+        run_tool(["--new-run"], base_env, led18)
+        env18 = dict(base_env)
+        env18["FAKE_PR_STATE"] = "OPEN"
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9",
+                      "--pr", "60"], env18, led18)
+        if r.returncode == 0:
+            failures.append("用例18 PR 未合却写入成功 ⇒ 断言无效")
+        else:
+            print("  ✓ 用例18 PR 未合 ⇒ 拒绝写入")
+
+        # ── 用例 19：release-only 记录 ⇒ --run-end **要复核它** ──────────
+        #    （否则「记了没人核」＝白记：旧复核按 repo#N 解析键 ⇒ 解析不出数字 ⇒ 跳过）
+        led19a = ledger_of("rel_runend_ok.json")
+        run_tool(["--new-run"], base_env, led19a)
+        run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9",
+                  "--pr", "59"], base_env, led19a)
+        r = run_tool(["--run-end"], base_env, led19a)
+        if r.returncode != 0:
+            failures.append(f"用例19 release-only 记录的正常收口失败：{r.stdout}{r.stderr}")
+        else:
+            print("  ✓ 用例19a release-only 记录 ⇒ --run-end 正常收口通过")
+        # 现实变了：Release 没了 ⇒ 收口必须报出漂移（证明它**真的在复核**）
+        led19b = ledger_of("rel_runend_drift.json")
+        run_tool(["--new-run"], base_env, led19b)
+        run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9",
+                  "--pr", "59"], base_env, led19b)
+        env19 = dict(base_env)
+        env19["FAKE_MISSING_RELEASE"] = "v9.9.9"
+        r = run_tool(["--run-end"], env19, led19b)
+        if r.returncode == 0:
+            failures.append("用例19 Release 消失后收口仍成功 ⇒ release-only 记录**根本没被复核**")
+        elif "漂移" not in (r.stdout + r.stderr):
+            failures.append(f"用例19 收口没指出漂移：{r.stdout}{r.stderr}")
+        else:
+            print("  ✓ 用例19 Release 消失 ⇒ --run-end 报出漂移（release-only 记录确实被复核）")
+
+        # ── 用例 20：往**已收口**轮次追加 release-only ⇒ 拒绝（封存保证覆盖新通道）──
+        led20 = ledger_of("rel_sealed.json")
+        run_tool(["--new-run"], base_env, led20)
+        run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9"], base_env, led20)
+        r = run_tool(["--run-end"], base_env, led20)
+        if r.returncode != 0:
+            failures.append(f"用例20 首次收口失败：{r.stdout}{r.stderr}")
+        before20 = led20.read_text(encoding="utf-8")
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v8.8.8"], base_env, led20)
+        if r.returncode == 0:
+            failures.append("用例20 往已收口轮次追加 release-only 成功 ⇒ 封存保证对新通道失效")
+        elif "已收口" not in (r.stdout + r.stderr):
+            failures.append(f"用例20 拒绝时没说明「已收口」：{r.stdout}{r.stderr}")
+        elif led20.read_text(encoding="utf-8") != before20:
+            failures.append("用例20 拒绝写入却把台账改了")
+        else:
+            print("  ✓ 用例20 往已收口轮次追加 release-only ⇒ 拒绝且台账未被改")
+
+        # ── 用例 21：缺 --repo ⇒ 拒绝（不许记成无名仓的发版）─────────────
+        led21 = ledger_of("rel_norepo.json")
+        run_tool(["--new-run"], base_env, led21)
+        r = run_tool(["--release-only", "--tag", "v9.9.9"], base_env, led21)
+        if r.returncode == 0:
+            failures.append("用例21 缺 --repo 却写入成功 ⇒ 会记成无名仓的发版")
+        else:
+            print("  ✓ 用例21 缺 --repo ⇒ 拒绝写入")
+
+        # ── 用例 22：--release-only 与 --issue 同时给 ⇒ 拒绝（一条记录一个主语）──
+        led22 = ledger_of("rel_and_issue.json")
+        run_tool(["--new-run"], base_env, led22)
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9",
+                      "--issue", "pkg#47"], base_env, led22)
+        if r.returncode == 0:
+            failures.append("用例22 --release-only 与 --issue 同时给却成功 ⇒ 一条记录两种主语")
+        else:
+            print("  ✓ 用例22 --release-only 与 --issue 同时给 ⇒ 拒绝")
+
+        # ── 用例 23：同一次发版重复记入 ⇒ 拒绝（台账幂等）────────────────
+        led23 = ledger_of("rel_dup.json")
+        run_tool(["--new-run"], base_env, led23)
+        run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9"], base_env, led23)
+        before23 = led23.read_text(encoding="utf-8")
+        r = run_tool(["--release-only", "--repo", "pkg", "--tag", "v9.9.9"], base_env, led23)
+        if r.returncode == 0:
+            failures.append("用例23 同一次发版重复记入成功 ⇒ 台账会越记越脏")
+        elif led23.read_text(encoding="utf-8") != before23:
+            failures.append("用例23 拒绝重复写入却把台账改了")
+        else:
+            print("  ✓ 用例23 同一次发版重复记入 ⇒ 拒绝且台账未被改")
+
     if failures:
         print("\n✗ 自测失败：")
         for f in failures:
@@ -358,9 +515,11 @@ def main() -> int:
 
 _MUTATIONS = [
     # ① 封存保证退回旧写法：不查 finished_at ⇒ 往已收口轮次里追加也不拦
+    #    （★ 影响面**两条**：issue 通道（用例 7）与 release-only 通道（用例 20）
+    #      —— 封存保证现在走公共函数 `_append_entry` ⇒ 两处一起失效）
     ("封存保证退回旧写法（不查 finished_at）",
      ('if run.get("finished_at"):', 'if False:'),
-     {"7"}),
+     {"7", "20"}),
     # ② 收口范围退回旧写法：只收最新一轮 ⇒ 更早的未收口轮次永久悬空
     ("收口范围退回旧写法（只收最新一轮）",
      ('pending = [r for r in runs if not r.get("finished_at")]',
@@ -370,6 +529,26 @@ _MUTATIONS = [
     ("修正通道退回旧写法（amend 变成追加）",
      ('cmd_amend(args, data)', 'cmd_add_entry(args, data)'),
      {"10", "11", "12"}),
+    # ④ 「无 issue 锚点的发版」写入通道：Release 检查退掉（tag 推了就算已发版）
+    ("release-only 写入通道的 Release 检查退掉",
+     ('    if not release_exists(org, repo, tag):', '    if False:'),
+     {"16"}),
+    # ⑤ 收口复核跳过 release-only 记录 ⇒「记了没人核」＝白记
+    ("收口复核跳过 release-only 记录",
+     ('            if e.get("release_only") or is_release_only_key(issue):',
+      '            if False:'),
+     {"19"}),
+    # ⑥ ★★ **调用点级**变异：被测函数本身保持正确，**只把接线断了**
+    #    （main 不再把 --release-only 接到写入通道）
+    #    ⇒ 证明「默认接线真的被跑」⇒ 避免「自测只测了函数、接线早断了却全绿」
+    ("main 不再把 --release-only 接到写入通道（调用点退化）",
+     ('        if args.release_only:\n            cmd_add_release_entry(args, data)',
+      '        if args.release_only:\n            pass  # ← 变异：调用点退化'),
+     {"15", "16", "17", "18", "19", "20", "21", "23"}),
+    # ⑦ 「键换形态」变异：release-only 键退化成别的形态 ⇒ 证明键控本身有牙齿
+    ("release-only 键形态被改掉",
+     ('RELEASE_ONLY_PREFIX = "（发版）"', 'RELEASE_ONLY_PREFIX = "（发版X）"'),
+     {"15"}),
 ]
 
 
