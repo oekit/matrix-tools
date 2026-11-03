@@ -4,7 +4,7 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
-## [v0.1.47] — 2026-11-03
+## [v0.1.48] — 2026-11-03
 - #216：只发嵌套模块的提示里「模块=版本」错——多段嵌套丢首段 + 多模块时「修法示例命令行」不可照抄
 
   **现象**：`release_train.py` 的「只发嵌套模块」提示（`nested_only_gate`）有两处错。
@@ -40,6 +40,49 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   （`release_train_requires_selftest` / `changelog_section_selftest` / `close_issue_selftest` /
   `close_issue_locate_selftest` / `rerender_receipt_selftest` / `check_writeback_selftest` /
   `maintenance_check_selftest`）全绿、无回归；`py_compile` 通过。
+
+## [v0.1.47] — 2026-11-03
+- #213：缺一个「重渲染已发布 Release 正文」的工具（回执有 rerender_receipt，Release 侧没有）
+
+  **现象**：回执侧有 `scripts/rerender_receipt.py`（预览 / `--apply` / 只编辑原评论 /
+  幂等跳过）⇒ 但**已发布的 GitHub Release 正文**没有对应工具 ⇒ 读路径一改
+  （#214：嵌套 tag 改读根面），**已发布的 Release 正文就陈旧了**，却只能手工逐个
+  `gh release edit`。
+
+  **实测**：本轮 8 个嵌套 tag 全部命中该形态 ⇒ **6 个嵌套 tag 的 Release 正文
+  「变更记录」只有一句发布关系说明**（内容为空）⇒ 读者在 Release 页面读不到这一版
+  改了什么，而同一版的根 CHANGELOG 节里写着完整描述。
+
+  现有的 `gen_releases.py` **只补建缺失的 Release**（`--apply` 只对「远端没有 Release
+  的 tag」生效）⇒ **不会重渲染已有正文**。
+
+  **修法**：新增 `scripts/rerender_release_body.py`：
+
+  - **只编辑已有 Release 的正文**（`gh release edit <tag> --notes-file`）⇒ 不新建
+    Release、不改 tag、不改 issue 状态；
+  - **正文来源 = `gen_releases.build_notes()`**（与发版时**同一份代码**）⇒ 不另造一套
+    渲染口径，避免「工具渲染的」与「发版时渲染的」分叉；
+  - **默认只预览**（打印「当前正文 vs 新正文」的逐行差异），`--apply` 才写；
+  - **幂等**：正文逐字节一致 ⇒ 明确报「无需改动」并跳过（**不许**重复改写已发布内容）
+    ⇒ 判据是**逐字节相等**而非弱特征（#154 的教训）；
+  - **fail closed**：tag 不存在 / Release 不存在 / 渲染不出「变更记录」段 ⇒ 报错退出、
+    **不写**（**不许写出空正文**——空正文比陈旧更糟：读者连「有改了什么」都看不到）；
+  - **必须逐条留痕**：写进哪个 tag、旧正文备份落盘（可回滚）；
+  - **只对明确点名的 tag 生效** ⇒ 不允许「全仓所有 Release 重刷」这种默认动作。
+
+  **实测生效**：本轮已用它把 6 条陈旧的 Release 正文重渲染完成（registry
+  `nacos/v0.1.3`+`nacosimpl/v0.1.4`、bootstrap `nacos/v0.3.10`+`obs/v0.2.14`、
+  timertask `redis/v0.2.7`、kitex `…/kitexotel/v0.7.6`）⇒ 正文「变更记录」现在含
+  完整变更描述；重跑报「正文已一致 ⇒ 无需改动」（幂等）。
+
+  **影响面**：新增脚本一个（`scripts/rerender_release_body.py`）+
+  自测一个（`scripts/rerender_release_body_selftest.py`）+ `audit.yml` 接入该自测；
+  **不改** `gen_releases.py` 的渲染口径、不改发版流程、不改退出码语义。
+
+  **验证**：自测 10 条全绿（默认只预览 / `--apply` 才写 / 幂等 / 幂等判据非弱特征 /
+  三种 fail closed / 正文来源同一份代码 / 参数解析 / 只对点名 tag 生效）；变异自证
+  3/3 全部**精确**转红（写入门槛去掉 ⇒ 1 条转红；幂等判据放宽 ⇒ 3 条转红；
+  fail closed 去掉 ⇒ 1 条转红）。
 
 ## [v0.1.46] — 2026-11-03
 - #214：嵌套 tag 的回执/Release 应读承载变更描述的那一面（根面优先）——#208 的读路径续修
