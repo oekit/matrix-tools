@@ -4,6 +4,44 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.46] — 2026-11-03
+- #214：嵌套 tag 的回执/Release 应读承载变更描述的那一面（根面优先）——#208 的读路径续修
+
+  **现象**：`gen_releases.changelog_section()` 对嵌套 tag **优先读** `<sub>/CHANGELOG.md`
+  的 `[vX.Y.Z]`，而那一面按仓内约定**只写发布关系说明**（「跟随父仓发版（release_train
+  嵌套 train）」），**变更描述记在根 CHANGELOG 的 `[<sub>/vX.Y.Z]` 节**。
+
+  ⇒ 回执（`close_issue.py`）与 Release 正文（`build_notes`）读到的都是「只有发布关系
+  说明」那一面 ⇒ 回执的「本条修复」= 一句发布关系说明 ⇒ **读者读不到「这条到底改了什么」**。
+
+  **实测**：本轮 8 个嵌套 tag 全部命中该形态；4 条已发布回执
+  （`registry#49`、`bootstrap#70`、`timertask#68`、`kitex#86`）降级（号绑上了，
+  entries=1，但绑到的是发布关系说明）；另有 6 个嵌套 tag 的 Release 正文「变更记录」
+  是空的。
+
+  **根因**：**读路径**与**写路径**各修一半——#208（v0.1.45）让嵌套面**写**得如实了，
+  但回执/Release 仍然**读**嵌套面 ⇒ 写对了没人读。
+
+  **修法**：嵌套 tag 的读取改为 ① **先读根 CHANGELOG 的 `[<sub>/vX.Y.Z]`**（承载变更
+  描述的那一面）→ ② **再回退** `<sub>/CHANGELOG.md` 的 `[vX.Y.Z]`（历史形态）→ ③ 都没有
+  则返回 None（调用方回退 CHANGELOG 链接）。根 tag 行为不变。
+
+  ⚠️ 改优先级不是措辞问题：已发布产物（Release 正文 + 回执）都照这一面渲染 ⇒ 改优先级
+  **连已发布的回执一起修好**（重渲染即可，**不必改已发布文件**）。
+
+  ⚠️ 写回门禁的 `--nested` 是「**显式指定目标**」，不是「自动选择」⇒ **不许**被
+  「口径统一」顺手翻转（两处读法相同 ≠ 语义相同）⇒ 已用变异自证钉住。
+
+  **影响面**：只改 `scripts/gen_releases.py` 的 `changelog_section()`；新增
+  `scripts/changelog_section_selftest.py`；`audit.yml` 的 selftest job 接入该自测
+  （含变异自证）。不改判据、不改退出码语义、不改 tag/Release 流程。
+
+  **验证**：新自测覆盖 5 类形态全绿；变异自证 3/3 全部**精确**转红（含「写回门禁被
+  顺手翻转」⇒ 1 条转红）；既有自测（`release_train_selftest` /
+  `release_train_requires_selftest` / `close_issue_selftest` /
+  `rerender_receipt_selftest` / `close_issue_locate_selftest` /
+  `maintenance_check_selftest`）全绿、无回归；`py_compile` 全绿。
+
 ## [v0.1.45] — 2026-11-03
 - #208：只发嵌套模块时，嵌套 CHANGELOG 写进**假陈述**（父模块一并发布）+ 嵌套回执定位不到条目（fail-closed 门禁验错了那一份）
 

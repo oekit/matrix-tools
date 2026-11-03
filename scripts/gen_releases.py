@@ -150,19 +150,32 @@ def existing_releases(repo: str) -> set[str]:
 
 
 def changelog_section(repo_dir_path, version: str, nested: str | None) -> str | None:
-    """取 CHANGELOG 同版本小节正文。嵌套 tag 优先 <sub>/CHANGELOG.md 的 [vX.Y.Z]，
-    回退根 CHANGELOG 的 [<sub>/vX.Y.Z]（bootstrap/nacos 形态）；文件缺失返回 None
-    （调用方回退 CHANGELOG 链接）。"""
+    """取 CHANGELOG 同版本小节正文。
+
+    ★ **嵌套 tag 读哪一面**（#208 续修）：**先读根 CHANGELOG 的 `[<sub>/vX.Y.Z]`**
+    ——那一面承载**变更描述**（根 CHANGELOG 记「`## [nacos/v0.1.3]` = 这一版
+    改了什么」）；**再回退** `<sub>/CHANGELOG.md` 的 `[vX.Y.Z]`（历史形态：那一面
+    按仓内约定**只写**「跟随父仓发版」、**不写**变更描述 —— 见
+    `release_train_selftest` 用例 3c）。
+
+    旧实现**反过来**（先嵌套文件）⇒ 回执（`close_issue`）与 Release 正文
+    （`build_notes`）读到的都是**只有发布关系说明**的那一面 ⇒ 回执的
+    「本条修复」= 「随本次 train 一并发布（…）」⇒ **读者读不到「这条到底改了什么」**
+    （实测 2026-11-02：registry#49 的回执就是这样）。
+
+    ⚠️ **改优先级不是措辞问题**：已发布产物（Release 正文 + 回执）都照这一面
+    渲染 ⇒ 改优先级**连已发布的回执一起修好**（重渲染即可，**不必改已发布文件**）。
+    """
     if nested:
-        sub_cl = os.path.join(repo_dir_path, nested, "CHANGELOG.md")
-        if os.path.exists(sub_cl):
-            sec = _extract(open(sub_cl, encoding="utf-8").read(), version)
+        root_cl = os.path.join(repo_dir_path, "CHANGELOG.md")
+        if os.path.exists(root_cl):
+            sec = _extract(open(root_cl, encoding="utf-8").read(), f"{nested}/{version}")
             if sec is not None:
                 return sec
-        root_cl = os.path.join(repo_dir_path, "CHANGELOG.md")
-        if not os.path.exists(root_cl):
-            return None
-        return _extract(open(root_cl, encoding="utf-8").read(), f"{nested}/{version}")
+        sub_cl = os.path.join(repo_dir_path, nested, "CHANGELOG.md")
+        if os.path.exists(sub_cl):
+            return _extract(open(sub_cl, encoding="utf-8").read(), version)
+        return None
     root_cl = os.path.join(repo_dir_path, "CHANGELOG.md")
     if not os.path.exists(root_cl):
         return None

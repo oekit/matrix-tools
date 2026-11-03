@@ -59,6 +59,10 @@ jobs:
         run: python3 scripts/maintenance_check_selftest.py
       - name: release_train CHANGELOG 环节自测（预校验必须真跑、多条 bullet 不丢条目）
         run: python3 scripts/release_train_selftest.py
+      - name: 版本节读路径自测（嵌套 tag 读承载变更描述的那一面 / 回退规则 / Release 正文承载描述）
+        run: python3 scripts/changelog_section_selftest.py
+      - name: 版本节读路径自测·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
+        run: python3 scripts/changelog_section_selftest.py --mutate
       - name: 发版「依赖可解析」门禁自测（父仓地板未发布必须判出 / 同 train 放行 / 远端读不到 fail closed / 变异自证）
         run: python3 scripts/release_train_requires_selftest.py
       - name: 发版「依赖可解析」门禁·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
