@@ -568,6 +568,36 @@ def check_new_section_binding(bullets: list[str], repo: str, main_tag: str,
                 f"新建的{face}版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
 
 
+def branch_slug(tags: list[str]) -> str:
+    """发版分支名 slug：`<末段模块名>-<版本号>`，多模块用 `+` 连接。
+
+    **为什么不用完整 tag**（旧形态）：完整 tag 含多段路径（如
+    ``observability/tracing/instrumentation/kitexotel/v0.7.7``）⇒ 分支名变成
+    ``chore/rel-observability/tracing/.../v0.7.7``（**多层引用**）⇒
+    ① 与同仓其它分支有 **git 引用 D/F 冲突**风险（实测 fatal:
+    ``cannot lock ref 'refs/heads/chore/rel-observability/...'``）；
+    ② 分支名看不出是**哪个模块**的批次。
+
+    **为什么不用「只有版本号」**（``t.rsplit("/", 1)[-1]``）：那会**丢掉模块身份** ⇒
+    ① **同仓不同模块同版本号** ⇒ 撞分支名（registry 的 `nacos/v0.1.3` 与 `nacosimpl/v0.1.3`）；
+    ② ★ **同仓「根发版」与「嵌套发版」同版本号** ⇒ **完全同形** —— 根发版本来就合法地长成
+       `chore/rel-v0.7.8`（``main_tag`` 分支就是「只有版本号」）⇒ 同一个字符串
+       ⇒ ``open_pr`` 按**分支名**查 ⇒ **复用别的分支的 PR**。
+    ⇒ ⇒ 而「只有版本号」在**根发版**时本来就是正确形态 ⇒ 只在**嵌套发版**时必须带模块名
+    ⇒ ⇒ 本函数**只用于嵌套发版路径**（``main_tag`` 为空时）⇒ 保留模块名正是为了与根分支名区分。
+
+    ⇒ 只取**末两段**（模块名 + 版本号）⇒ 单层、唯一、可读；
+    ★ 提交标题仍保留**完整 tag**（``rel_title_tag``）⇒ 不丢路径信息。
+    """
+    parts: list[str] = []
+    for t in tags:
+        segs = t.split("/")
+        ver = segs[-1]
+        name = segs[-2] if len(segs) >= 2 else ""
+        parts.append(f"{name}-{ver}" if name else ver)
+    return "+".join(parts)
+
+
 def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
                      issues: list[str] | None = None) -> None:
     """缺版本节时：生成（置顶）→ 预校验 → PR → 排程合并 → 等合并 → 拉齐。
@@ -640,8 +670,9 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
         rel_slug = main_tag
         rel_title_tag = main_tag
     else:
-        rel_slug = "+".join(t for _n, _d, t in specs)
-        rel_title_tag = rel_slug
+        rel_slug = branch_slug([t for _n, _d, t in specs])
+        # ★ 标题保留**完整 tag**（分支名用 slug 是为了单层/唯一，标题不需要）
+        rel_title_tag = "+".join(t for _n, _d, t in specs)
     url = land_pr(root, repo, f"chore/rel-{rel_slug}",
                   f"chore: CHANGELOG 补 {rel_title_tag}（release_train --changelog）",
                   f"chore: CHANGELOG 补 {rel_title_tag}",
