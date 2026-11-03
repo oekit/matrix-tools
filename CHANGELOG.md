@@ -4,7 +4,7 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
-## [v0.1.48] — 2026-11-03
+## [v0.1.49] — 2026-11-03
 - #216：只发嵌套模块的提示里「模块=版本」错——多段嵌套丢首段 + 多模块时「修法示例命令行」不可照抄
 
   **现象**：`release_train.py` 的「只发嵌套模块」提示（`nested_only_gate`）有两处错。
@@ -52,6 +52,56 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   ⚠️ **本条不改任何已发布内容**：已发布版本节与已发布 Release 正文**逐字不动**
   （改了它们就与已发布产物不一致 ⇒ 违反「Release 正文 = 版本节逐字副本」）⇒
   只在**尚未发布的新节**里写这句。
+
+## [v0.1.48] — 2026-11-03
+- #217：git 网络子进程无界挂死——`sh()`/`fetch`/`ls-remote` 无限等，拖死一切后台任务
+
+  **现象**（2026-11-03 实录三连）：到 GitHub 的链路抖动时（本机 ssh 走
+  ssh.github.com:443，链路在「通/黑洞」间反复），已建立的 SSH 连接静默挂死：
+  `release_post` 的 BOM 后置任务卡 `git pull` 180s 无输出被杀、`audit` 门禁任务
+  180s 被杀、`gen_matrix_go` 单跑卡 `ensure_local_tag` 的 `git fetch --tags`
+  120s 被杀；`release_train` 的 `git fetch` 实录卡 10 分钟靠杀进程解围。
+
+  **根因**：matrix-tools 的 git 网络子进程**无超时、无 SSH keepalive**——`sh()`
+  无 timeout（fetch/pull/push 全从它走）、`ensure_local_tag` 的 fetch 无 timeout、
+  各处子进程不带 `GIT_SSH_COMMAND` ⇒ 连上后黑洞就无限等。
+
+  **修法**：①`matrix.git_env()` 注入 `ConnectTimeout=10 / ServerAliveInterval=10
+  ×2 / BatchMode` + `GIT_TERMINAL_PROMPT=0`（**用户已设则尊重不覆盖**）；②`sh()`
+  默认 `timeout=300`，超时 fail-loud RuntimeError（挂死不是慢，重试是调用方决策；
+  `timeout=None` 显式不设限）；③`ensure_local_tag` fetch `timeout=120`，超时并入
+  既有「fetch 失败」语义（真因由 go_floor 报，绝不兜底假地板）；④`_ls_remote_tags`
+  与 `gen_diagram` push 同步带 env/超时。
+
+  **影响面**：`matrix.sh()` 所有调用方（release_train/prkit/refresh_versions 等
+  的 fetch/pull/push 一律有界）、BOM 生成器的补 tag fetch、gen_diagram 的 push。
+
+  **验证**：新增 `scripts/git_env_selftest.py`（假 git + PATH 前置，不联网、无副作用）
+  7 例全绿；**双变异自证**——拆 timeout 接线 ⇒ 仅 B1 精确转红、拆 keepalive 注入 ⇒
+  A1/B3/C/D 精确转红（其余不受影响）；既有自测无回归（remote_reads 14/14、tag_cache、
+  gen_matrix_go、toolchain、changelog_section）；真实验收 `gen_matrix_go --check`
+  71s 有界跑完（此前网络黑洞下被杀）。自测已登记 audit.yml selftest job。
+
+- #218：产物版本号从本地陈旧 tag 起跳 ⇒ 版本回退（实录：BOM #120 把 `const Version`
+  从 v0.1.70 写回 v0.1.54）
+
+  **现象**：oekit BOM 仓 PR #120 的 diff 实证把 `matrix.go` 的 `const Version` 从
+  **v0.1.70 改回 v0.1.54**（版本回退），尽管同 PR 的 pkg v0.31.2→v0.32.0 内容更新
+  是对的。根因＝`bump_patch(latest_tag("oekit"))` 读**本地** tag（本地 v0.1.53、
+  远端已 v0.1.70；`git pull` 不带 tag、浅克隆、长期不 fetch 都会造成）⇒ bump 算出
+  **撞旧号**的版本 ⇒ 写进产物。`refresh_versions.sync_repo`（README/AGENTS 版本行
+  写入方）与 `release_post` step 1/2 是同款本地起跳。
+
+  **修法**：①上述三处版本号一律 `latest_tag(..., remote=True)`（#79 口径：读不到
+  fail-loud，绝不拿本地陈旧 tag 顶着写）；②**机械守卫**：bom_next 撞已存在的远端
+  tag ⇒ 拒跑（`remote_tag_exists`）——专防「谁又改回本地读」：本地陈旧时 bump 必
+  撞旧号，撞号即拦，绝不把回退版本写进产物。
+
+  **事故现场处置**：BOM 以 **v0.1.71**（远端起跳）重生成落 oekit#121（已合）+
+  tag + Release，版本序列已修正。
+
+  **验证**：remote_reads_selftest 14/14（latest_tag remote 路径既有判据）不变；
+  撞号守卫按实录事故形态（本地 v0.1.53 ⇒ bump v0.1.54 撞远端既有 tag）应拒跑。
 
 ## [v0.1.47] — 2026-11-03
 - #213：缺一个「重渲染已发布 Release 正文」的工具（回执有 rerender_receipt，Release 侧没有）
