@@ -293,8 +293,11 @@ def _ls_remote_tags(url: str, timeout: int = 60, attempts: int = 3) -> tuple[lis
     """
     for attempt in range(attempts):
         try:
+            # env=git_env()：SSH 黑洞时靠 keepalive 在 ~30s 内有界失败
+            # （2026-11-03 实录，见 git_env 文档），不再吃满 subprocess timeout。
             r = subprocess.run(["git", "ls-remote", "--tags", url],
-                               capture_output=True, text=True, timeout=timeout)
+                               capture_output=True, text=True, timeout=timeout,
+                               env=git_env())
         except Exception:
             r = None
         if r is not None and r.returncode == 0:
@@ -515,8 +518,52 @@ def declared_version(repo: str, base: str | None = None) -> str | None:
     return m.group(1) if m else None
 
 
-def sh(args, cwd, check=True):
-    r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
+def git_env() -> dict[str, str]:
+    """git 子进程环境：SSH keepalive + 禁交互提示（网络黑洞防挂死）。
+
+    为什么需要（2026-11-03 实录）：到 GitHub 的链路抖动时（本机 ssh 走
+    ssh.github.com:443，链路会在「通 / 黑洞」之间反复），**已建立的 SSH 连接
+    会静默挂死**——`git pull`/`git fetch` 无任何输出地无限等，连带三个后台
+    任务（gen_matrix_go / BOM 发版后置 / audit）全部超时，排查只能靠杀进程。
+
+    - ``ConnectTimeout=10``：连接阶段黑洞 ⇒ 10s 失败，不再等 OS 级 75s+；
+    - ``ServerAliveInterval=10`` × ``ServerAliveCountMax=2``：连上后黑洞
+      ⇒ ~30s 内被 SSH 层掐断，「无限挂」变「有界失败」，交给上层既有重试
+      （_ls_remote_tags 的 attempts/退避，#108）吸收瞬时抖动；
+    - ``BatchMode=yes`` + ``GIT_TERMINAL_PROMPT=0``：绝不弹交互提示
+      （cron/CI/后台任务里弹了就是另一种挂死）。
+
+    用户显式设置过的 ``GIT_SSH_COMMAND``/``GIT_TERMINAL_PROMPT`` 原样尊重
+    （setdefault 不覆盖）——本函数只补「没设时的防挂死默认」，不夺走用户的
+    自定义（代理跳板 / 专用 key 等场景靠这两个变量活着）。
+    """
+    env = dict(os.environ)
+    env.setdefault(
+        "GIT_SSH_COMMAND",
+        "ssh -o ConnectTimeout=10 -o ServerAliveInterval=10 "
+        "-o ServerAliveCountMax=2 -o BatchMode=yes")
+    env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    return env
+
+
+def sh(args, cwd, check=True, timeout: float | None = 300):
+    """跑子命令（git 网络操作的一等通道：fetch/pull/push 都从这里走）。
+
+    **timeout（2026-11-03 新增，默认 300s）**：此前无超时 ⇒ SSH 黑洞下
+    `git pull` 无界挂死（实录：release_train 卡 10 分钟靠杀进程解围、
+    BOM 后置任务 180s 超时无输出）⇒ 所有经 sh() 的 git 网络调用必须有界。
+    超时抛 RuntimeError（fail-loud），不静默重试——「挂死」不是「慢」，
+    重试交给调用方决策。本地操作（status/tag/log 等）秒级完成，300s 富余。
+
+    timeout=None 显式表示不设限（subprocess 原语义），仅给已知长操作用。
+    """
+    try:
+        r = subprocess.run(args, cwd=cwd, capture_output=True, text=True,
+                           timeout=timeout, env=git_env())
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"{' '.join(args)} 超过 {timeout}s 未完成，已中止（网络黑洞/挂死？"
+            f"git 子进程已带 SSH keepalive，仍超时说明链路或对端真不通）") from None
     if check and r.returncode != 0:
         raise RuntimeError(f"{' '.join(args)}: {r.stderr[-400:]}")
     return r

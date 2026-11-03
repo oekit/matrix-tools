@@ -14,9 +14,14 @@ PUSH = "--push" in sys.argv
 
 
 def sync_repo(repo: str, base: str | None = None, write: bool = True) -> list[str]:
-    """单仓版本行对齐最新 tag。write=False 只算不写（plan 用）。返回变更文件名清单。"""
+    """单仓版本行对齐最新 tag。write=False 只算不写（plan 用）。返回变更文件名清单。
+
+    「最新 tag」读**远端**（remote=True，#79 口径）：本地 tag ref 常陈旧（pull
+    不带 tag / 浅克隆 / 长期不 fetch）⇒ 用本地起跳会把旧版本号写进 README/AGENTS
+    （版本回退事故，2026-11-03 实录：BOM 产物 Version 被写回旧号）；读不到远端
+    ⇒ 抛 RemoteReadError fail-loud，绝不拿本地陈旧 tag 顶着写。"""
     d = repo_dir(repo, base)
-    lt = latest_tag(repo, base)
+    lt = latest_tag(repo, base, remote=True)
     if lt is None:  # 无 tag 的新仓跳过，避免写入 @None
         return []
     changed: list[str] = []
@@ -43,7 +48,7 @@ def main() -> None:
     for repo in MODULES:
         changed = sync_repo(repo, BASE)
         if changed:
-            lt = latest_tag(repo, BASE)
+            lt = latest_tag(repo, BASE, remote=True)  # 同 sync_repo：远端才是「最新」
             print(f"✓ {repo} → {lt}（{'、'.join(changed)}）")
             if PUSH:
                 d = repo_dir(repo, BASE)
