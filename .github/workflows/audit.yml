@@ -55,6 +55,10 @@ jobs:
         run: python3 scripts/git_env_selftest.py
       - name: 发版单元门禁自测（伞仓 BOM 漏检必须抓得到，口径不许分裂）
         run: python3 scripts/verify_release_units_selftest.py
+      - name: hostVersion 完备性自测（候选集不完备必须 fail closed，不许静默降级成旧值）
+        run: python3 scripts/host_version_selftest.py
+      - name: hostVersion 完备性自测·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
+        run: python3 scripts/host_version_selftest.py --mutate
       - name: 发布序列门禁自测（版本号回退必须抓得到，已登记例外不许掩盖新问题）
         run: python3 scripts/verify_version_line_selftest.py
       - name: 维护轮门禁自测（仓读不到不许报「零漂移」，到期不许不报）
