@@ -93,6 +93,81 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 
 ### 发版链（顺序不可反）
 
+**嵌套模块发版的四条约束**（2026-11-03 实测，踩过 ⇒ 写进规范，不只靠工具行为）：
+
+1. **嵌套模块的 CHANGELOG 节名按形态记**：**仓根** CHANGELOG 记**全名**（`## [nacosimpl/v0.1.3]`），
+   **嵌套模块自己的** CHANGELOG 记**短名**（`## [v0.1.3]`）。消费方按仓根的全名节定位发布说明。
+   - ⇒ `changelog_check.py` 规则 3「HEAD 处于 tag 时必须有同名小节」**必须按形态分别判定**
+     （根形态比根节名、嵌套形态比短名节名、**别的模块的文件不适用**该规则）
+     ⇒ 这条**已实现**（`oekit/.github` #57，main `55d39ba`）。
+   - ⚠️ **残留的洞**：#57 仍用 `git describe --exact-match` 取 tag ⇒ **同 commit 上有多个 tag 时
+     只返回任意一个**（实测优先返回嵌套 tag 名）⇒ 另一个模块的短名节**从不被校验** ⇒ 缺了也判绿
+     （**假绿**）。实测：registry HEAD 停在 `nacos/v0.1.3` + `nacosimpl/v0.1.4` 同 commit 上，
+     删掉 `nacosimpl/CHANGELOG.md` 的 `## [v0.1.4]` ⇒ 判 ✓（假绿）。
+     ⇒ 修法 = 改用 `git tag --points-at HEAD` 取**全部** tag 并逐个按形态判定。
+   - ⚠️ **「同仓的 train 发成功后重跑会被拦下」是错的**（2026-11-03 实测，勿写进规范）：
+     规则 3 要求同名节**存在**（不是「最新」）⇒ 已发布版本的短名节**留在文件里**
+     ⇒ 重跑判**绿**。实测（#57 与 #58 两版口径**都绿**）：bootstrap HEAD 停在
+     `nacos/v0.3.10`+`obs/v0.2.14` **两个 tag** 上 ⇒ `nacos/`、`obs/`、仓根**三个面全 ✓**；
+     registry HEAD 停在 `nacos/v0.1.3`+`nacosimpl/v0.1.4` ⇒ 三个面全 ✓；
+     timertask HEAD 不在任何 tag 上 ⇒ 规则 3 整段跳过 ✓；
+     kitex HEAD 停在 `…/kitexotel/v0.7.7` ⇒ ✓。
+     ⇒ 唯一会红的情形是**本模块刚发的版本节被删了**（那是**该红**，不是「凭空拦」）。
+2. **同一仓的多个嵌套模块，仍建议放同一条 train**（例：
+   `release_train.py bootstrap nacos=v0.3.10 obs=v0.2.14`）。
+   - ⚠️ **这条在 #57 之后已不再是「硬拦」**：实测 bootstrap HEAD 停在 `nacos/v0.3.10`（另一个模块的 tag）上，
+     查 `obs/CHANGELOG.md` ⇒ #57 判**绿**（修复前会判红：「HEAD 处于 tag nacos/v0.3.10，
+     但无同名小节 ## [nacos/v0.3.10]」）⇒ 「分两条 train 必被拦」**已不成立**。
+   - **仍建议同一条 train 的理由**（流程层面，非门禁层面）：① 一次发完 ⇒ 同一仓的嵌套模块
+     **版本号同轨**、不会被分两次的发布节奏拉开；② 版本节一次写齐 ⇒ 仓根的全名节与各模块的短名节
+     **同一次落盘**，不会短暂出现「一边有、一边无」；③ 少一轮 train ⇒ 少一轮 tag/查重/Release。
+   - ⇒ **性质**：这是**流程约定**，不是工具强制 ⇒ 违反它**不会被门禁拦住**，但会让发布节奏与
+     版本节对齐变差。
+3. **同一仓多个嵌套模块发版时，注意分支名形态**（`release_train` 自动开 PR 时用）：
+   - 分支名形如 `chore/rel-<tag>` ⇒ 深层嵌套会拼出**多层路径**
+     （`chore/rel-observability/tracing/instrumentation/kitexotel/v0.7.7`）
+     ⇒ 与同仓既有的 `chore/rel-<首段>` 短分支构成 **git 引用 D/F 冲突**（实测 `fatal: … exists;
+     cannot create 'refs/heads/chore/rel-nacos'`）。
+   - ⇒ 目标形态应是**单层且唯一**：`chore/rel-<模块名>-<版本号>`
+     （仓内既有惯例：`chore/rel-nacosimpl-v0.1.1`、`chore/rel-redis-v0.2.2`）
+     ⇒ **只取版本号不够**：`registry` 的 `nacos/v0.1.3` 与 `nacosimpl/v0.1.3` **同版本号**
+     ⇒ 只取版本号会撞名 ⇒ 而 `open_pr` 是按**分支名**查已有 open PR ⇒ 撞名会**复用别的模块的 PR**。
+4. **一轮闭合在有依赖链时不能一次发完，必须分阶段**：**被依赖方先发 → 依赖方抬地板 → 依赖方再发**，
+   且**抬升必须晚于被依赖方的发布**。
+   - **为什么必须分阶段**：tag **不可重推** ⇒ 地板落后只能靠**再发一个新 tag** 补
+     ⇒ 一次发完 = 依赖方**生而带旧地板** = 消费方解析到旧地板 = **自造欠账**。
+   - **为什么抬升必须晚于发布**：提前把 `require` 抬到**还没发布**的版本 ⇒ `go mod` **解析失败**
+     ⇒ 「依赖可解析」门禁会 fail closed（读不到 ≠ 已发布，#85 口径）。
+   - **本次实测的时序**（2026-11-03，取数 03:53Z）：`registry nacos/v0.1.3`+`nacosimpl/v0.1.4`
+     @22:50:24Z → `bootstrap` 抬地板 `8635da9` @22:59:25Z → `bootstrap nacos/v0.3.10`+`obs/v0.2.14`
+     @23:10:35Z（**tag 快照里已经是** `registry/nacos v0.1.3`+`registry/nacosimpl v0.1.4`）；
+     `logx kitexlog/v0.1.8` @22:39:55Z → `kitex` 抬地板 `7cad224` @23:02:57Z
+     → `kitex …/kitexotel/v0.7.6` @23:16:26Z（**tag 快照里已经是** `logx/kitexlog v0.1.8`）。
+   - ⇒ **依赖链**：`registry/nacos`+`registry/nacosimpl` → `bootstrap/nacos`；
+     `logx/kitexlog` → `kitex/…/kitexotel`。
+   - ⚠️ **父仓冻结**：本波已发的仓（logx / registry / timertask）**本波不得再发新版**
+     ⇒ 否则依赖链要重新算一轮。
+   - ⚠️ **「闭合」是局部口径，不是全 org 清零**：它指**本轮这条依赖链上各模块的最新产物互相一致**
+     ⇒ **不等于**「全 org 的已发布产物都不带旧地板」。
+     - 实测（2026-11-03T04:2xZ）：25 个仓里 **19 个**根仓的**已发布产物**带旧地板、合计 **62 条**
+       （零欠账 6 个：core / logx / oekit / pkg / registry / timertask；欠账最多：kitex-examples 10、
+       hertz 8、kitex 8、nns-endpoint 6）—— 数字随每次发版滚大 ⇒ **引用须带基线**
+       （哪次 run / 哪个 `origin/main` commit —— 同一条纪律见本仓各版本节的「口径」bullet）。
+     - ⇒ 该指标是**滚动**的：**每发一次任何依赖的版就新增一批实例**，重发能清掉的是旧批次
+       ⇒ **清零后仍会重新出现** ⇒ 全 org 口径的「闭合」**不可达**。
+     - ⇒ ⇒ **本波目标应写成「按依赖链推进一轮 + 每轮重扫欠账清单」，不要写「闭合」** ——
+       否则清单本身就是个达不成的承诺。
+   - ★ **发布的拓扑序 = 叶子仓根模块 → 该仓嵌套模块 → 下游仓根产品**（通用形态；本波实测：
+     `registry` 根 v0.5.3 @21:18Z → `registry` 一对 @22:50Z → `bootstrap` 抬地板 @22:59Z
+     → `bootstrap` 一对 @23:10Z）。
+     - **硬约束 = 「依赖可解析」门禁**（`release_train.py` 的 `check_requires_resolvable`）：
+       被 tag 模块 go.mod 里的每条 `github.com/oekit/*` require 必须**已发布**或**本 train 一起发**。
+     - ⚠️ **易漏的一条**：门禁用 `parse_go_mod_requires` ⇒ **只认 require、不认 replace**
+       ⇒ 嵌套模块 go.mod 里那条**被 `replace ... => ../` 指向本地的父仓根版本，仍然要查**
+       ⇒ **父仓根版本没发布就不能发嵌套模块** ⇒ 门禁 **fail closed**（下游消费方同样解析失败：
+       Go 忽略依赖里的 replace，#148）。
+     - ⇒ ⇒ 这就是「叶子根仓先发」那一跳的**机制来源**，不是经验规则。
+
 | 脚本 | 作用 |
 |---|---|
 | `scripts/release_train.py` | **单仓发版一条命令**：`--changelog "描述"` 自动补版本节（置顶+预校验）→ PR → 等合并 → 检查（tag 查重/tidy/build/CHANGELOG/gofmt/golangci-lint/**依赖可解析**）→ 按序 tag → Release；train 前自动拉齐 main，要求无在途登记。**依赖可解析**：被 tag 模块的每条 `github.com/oekit/*` require 必须**已发布**或**本 train 一起发版**——嵌套模块的 `replace ... => ../` 只对本仓自身构建有效，Go 忽略依赖里的 replace ⇒ 父仓版本没发布就发嵌套模块，下游消费方会直接解析失败（#148） |

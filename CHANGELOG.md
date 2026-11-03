@@ -4,6 +4,95 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.1.58] — 2026-11-03
+- 规范：把「嵌套模块发版」的**四条**约束写进 README 的「发版链（顺序不可反）」小节
+
+  **为什么写进规范而不只靠工具行为**：这四条都是**流程/形态约束**，工具行为只是碰巧让其中两条成立
+  ⇒ 不写下来 ⇒ 下一个接手的人（或下一个会话）分两条 train 发、用错分支名形态、
+  或在有依赖链时一次发完，就踩。
+
+  **① 嵌套模块的 CHANGELOG 节名按形态记**（仓根记全名、嵌套模块自己的记短名）
+  ⇒ `changelog_check.py` 规则 3 **必须按形态分别判定** ⇒ 这条**已实现**
+  （`oekit/.github` #57，main `55d39ba`）。
+  ⚠️ **但仍残留一个洞**：#57 仍用 `git describe --exact-match` 取 tag ⇒ **同 commit 上有多个 tag
+  时只返回任意一个**（实测优先返回嵌套 tag 名）⇒ 另一个模块的短名节**从不被校验** ⇒ 缺了也判绿
+  （**假绿**）。实测：registry HEAD 停在 `nacos/v0.1.3` + `nacosimpl/v0.1.4` 同 commit 上，
+  删掉 `nacosimpl/CHANGELOG.md` 的 `## [v0.1.4]` ⇒ 判 ✓（假绿）⇒ 修法 = 改用
+  `git tag --points-at HEAD` 取**全部** tag 并逐个按形态判定。
+  ⚠️ **另订正一条曾流传的错误规则**：「同仓的 train 发成功后重跑会被凭空拦下」⇒ **实测为假**——
+  规则 3 要求同名节**存在**（不是「最新」）⇒ 已发布版本的短名节**留在文件里** ⇒ 重跑判**绿**
+  （实测：#57 与 #58 两版口径下，bootstrap / registry / timertask / kitex 各相关面**全绿**）。
+
+  **② 同一仓的多个嵌套模块仍建议放同一条 train** —— ⚠️ **这条已不是「硬拦」**：
+  实测 bootstrap HEAD 停在 `nacos/v0.3.10`（另一个模块的 tag）上，查 `obs/CHANGELOG.md`
+  ⇒ #57 判**绿**（修复前会判红：「HEAD 处于 tag nacos/v0.3.10，但无同名小节 ## [nacos/v0.3.10]」）
+  ⇒ 「分两条 train 必被拦」**已不成立**。仍建议同一条 train 的理由是**流程层面**：
+  ① 同仓嵌套模块版本号**同轨**、不被两次发布节奏拉开；② 仓根全名节与各模块短名节**一次落盘**，
+  不会短暂出现「一边有、一边无」；③ 少一轮 train ⇒ 少一轮 tag/查重/Release。
+  ⇒ **性质**：**流程约定**，不是工具强制 ⇒ 违反它**不会被门禁拦住**。
+
+  **③ 分支名形态**（`release_train` 自动开 PR 时用）：`chore/rel-<tag>` 在深层嵌套下会拼出
+  **多层路径**（`chore/rel-observability/tracing/instrumentation/kitexotel/v0.7.7`）
+  ⇒ 与同仓既有的 `chore/rel-<首段>` 短分支构成 **git 引用 D/F 冲突**（实测 `fatal: … exists;
+  cannot create 'refs/heads/chore/rel-nacos'`）。目标形态应是**单层且唯一**：
+  `chore/rel-<模块名>-<版本号>`（仓内既有惯例：`chore/rel-nacosimpl-v0.1.1`、`chore/rel-redis-v0.2.2`）。
+  ⇒ **只取版本号不够**：`registry` 的 `nacos/v0.1.3` 与 `nacosimpl/v0.1.3` **同版本号**
+  ⇒ 只取版本号会撞名 ⇒ 而 `open_pr` 是按**分支名**查已有 open PR ⇒ 撞名会**复用别的模块的 PR**。
+
+  **④ 一轮闭合在有依赖链时不能一次发完，必须分阶段**：**被依赖方先发 → 依赖方抬地板 → 依赖方再发**，
+  且**抬升必须晚于被依赖方的发布**。
+  ⇒ **为什么**：tag **不可重推** ⇒ 地板落后只能靠**再发一个新 tag** 补 ⇒ 一次发完 =
+  依赖方**生而带旧地板** = 消费方解析到旧地板 = **自造欠账**；
+  而**提前抬升**到还没发布的版本 ⇒ `go mod` **解析失败**（「依赖可解析」门禁 fail closed）。
+  ⇒ **本次实测时序**（2026-11-03，取数 03:53Z）：`registry nacos/v0.1.3`+`nacosimpl/v0.1.4`
+  @22:50:24Z → `bootstrap` 抬地板 `8635da9` @22:59:25Z → `bootstrap nacos/v0.3.10`+`obs/v0.2.14`
+  @23:10:35Z（**tag 快照里已经是** `registry/nacos v0.1.3`+`registry/nacosimpl v0.1.4`）；
+  `logx kitexlog/v0.1.8` @22:39:55Z → `kitex` 抬地板 `7cad224` @23:02:57Z
+  → `kitex …/kitexotel/v0.7.6` @23:16:26Z（**tag 快照里已经是** `logx/kitexlog v0.1.8`）。
+  ⇒ **依赖链**：`registry/nacos`+`registry/nacosimpl` → `bootstrap/nacos`；
+  `logx/kitexlog` → `kitex/…/kitexotel`。⚠️ **父仓冻结**：本波已发的仓
+  （logx / registry / timertask）**本波不得再发新版**。
+  ⇒ ⚠️ **「闭合」是局部口径**：指本轮这条依赖链上各模块的最新产物互相一致，**不是**全 org 清零
+  ⇒ 实测（取数 2026-11-03T04:2xZ）25 个仓里 **19 个**根仓的**已发布产物**带旧地板、合计 **62 条**
+  （零欠账 6 个：core / logx / oekit / pkg / registry / timertask）⇒ 该指标**滚动**：
+  **每发一次任何依赖的版就新增一批实例** ⇒ 清零后仍会重新出现 ⇒ 全 org 口径的「闭合」**不可达**
+  ⇒ ⇒ **本波目标写成「按依赖链推进一轮 + 每轮重扫欠账清单」，别写「闭合」**。
+  ⇒ ★ **发布的拓扑序 = 叶子仓根模块 → 该仓嵌套模块 → 下游仓根产品**（通用形态；本波实测时序：
+  `registry` 根 v0.5.3 @21:18Z → `registry` 一对 @22:50Z → `bootstrap` 抬地板 @22:59Z
+  → `bootstrap` 一对 @23:10Z）⇒ **硬约束 =「依赖可解析」门禁**（`check_requires_resolvable`：
+  被 tag 模块 go.mod 的每条 `github.com/oekit/*` require 必须已发布或本 train 一起发）
+  ⇒ ⚠️ 门禁用 `parse_go_mod_requires` ⇒ **只认 require、不认 replace** ⇒ 嵌套模块 go.mod 里
+  那条**被 `replace ... => ../` 指向本地的父仓根版本仍然要查** ⇒ **父仓根版本没发布就不能发嵌套模块**
+  ⇒ 门禁 fail closed（下游同样解析失败：Go 忽略依赖里的 replace，#148）。
+
+  **影响面**：只改 `README.md` 的「发版链（顺序不可反）」小节（新增两段约束说明）+ 本版本节。
+  **不改任何判据、不改任何脚本行为、不改任何已发布内容。**
+
+  **依据**：全部为实测（7 个有独立 CHANGELOG 的嵌套模块逐个跑判据；旧版 vs 新版判据对照；
+  D/F 冲突复现；假绿夹具；**发布时序与 tag 快照的 go.mod 地板逐个核对**）。
+
+- **更正：5 个已发布版本节里的跨仓地板宣称，对该节所代表模块而言不成立**（2026-11-03 实测）
+  ⇒ 共 **8 处**（**4 处真缺陷 + 4 处落点错位**）。**登记在此，是因为本仓是「地板宣称」门禁的所有者**
+  （`changelog_claim_vs_gomod.py` / `floor_claim_check.py`）⇒ 由门禁所有者声明既往违反自家口径的已发布面。
+  ⚠️ **本条为更正**：下列原句**逐字引用**，**该说法不成立**；正确说法以**该模块自己** `go.mod` 的实际
+  require 为准（父仓靠 `replace` 引用本地路径 ⇒ **不进 require 清单**）。
+
+  - `bootstrap` 根面 `## [obs/v0.2.14]`：初版此处写「把父仓 bootstrap v0.6.8 与 logx v0.8.2、registry v0.5.3、registry/nacos v0.1.3、registry/nacosimpl v0.1.4 的地板带进已发布产物」，
+    **该说法对 `obs` 不成立** —— `obs` 产物实际只带 `bootstrap v0.6.8`、`core v0.12.1`、`logx v0.8.2`、
+    `metrics v0.1.10`、`tracing v0.3.2`、`concurrency v0.23.3`（indirect），**不含 registry 系依赖**
+    （该句对 `bootstrap/nacos` **成立** —— `nacos` 产物确实带 `registry v0.5.3`/`registry/nacos v0.1.3`/`registry/nacosimpl v0.1.4`）。
+  - `registry` 根面 `## [nacos/v0.1.3]`：初版此处写「把父仓 registry v0.5.3 与 logx v0.8.2 的地板带进已发布产物」，
+    其中 `registry v0.5.3` 一项**不成立** —— `nacos` 产物实际只有 `core v0.12.1` + `logx v0.8.2`。
+  - `registry` 根面 `## [nacos/v0.1.2]` 与 `## [v0.5.3]`：初版此处写「把父仓 registry v0.5.2 与 logx v0.8.1 的地板带进已发布产物」，
+    该抬升**属于 `nacosimpl`**（`nacosimpl` 在 `nacosimpl/v0.1.2` 快照里 require `registry v0.5.1` + `logx v0.8.0` + `core v0.12.1`）；
+    `nacos` 与仓根 `registry` 都不依赖 `logx`/`registry` ⇒ 写在 `nacos` 节与仓根节属**落点错位**。
+  - `timertask` 根面 `## [v0.2.7]`：初版此处写「把父仓 timertask v0.2.7 与 concurrency v0.23.3、logx v0.8.2 的地板带进已发布产物」，
+    其中 `concurrency v0.23.3`、`logx v0.8.2` 两项**不成立**（仓根产物只依赖 `pkg v0.31.2`）——
+    这两项抬升**属于 `redis`**（`redis` 在 `redis/v0.2.6` 快照里 require `concurrency v0.23.2` + `logx v0.8.0` + `timertask v0.2.6`）。
+
+  ⚠️ **仅针对已发布面**：已发布节与已发布 Release 正文一律**不可回改**（tag 快照不可变）⇒ 只能**向前更正**；
+  **新的版本节在写入前就会被拦**（逐模块核对宣称与该模块 `go.mod` 的 require ⇒ 拦截口径当前 **0 处**）。
+
 ## [v0.1.57] — 2026-11-03
 - #227：只发嵌套模块时的发版**分支名**用完整 tag ⇒ 深层嵌套模块拼出**多层引用**
   ⇒ git 引用 D/F 冲突 + 同仓同版本号撞分支名 ⇒ `open_pr` 复用别的模块的 PR
