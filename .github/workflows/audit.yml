@@ -107,6 +107,10 @@ jobs:
         run: python3 scripts/floor_claim_check_selftest.py
       - name: 地板类断言核验器·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
         run: python3 scripts/floor_claim_check_selftest.py --mutate
+      - name: 检查面 G 自测（打 tag 的模块 require 必须是最新已发布版本 / 落后一档与前瞻引用都拒绝 / 完整子路径前缀 / 远端读不到 fail closed）
+        run: python3 scripts/release_train_latest_selftest.py
+      - name: 检查面 G·变异自证（退回旧实现 / 落后放行 / 前缀截断 / fail-open ⇒ 精确转红集合必须精确）
+        run: python3 scripts/release_train_latest_selftest.py --mutate
 
   audit:
     runs-on: ubuntu-latest
