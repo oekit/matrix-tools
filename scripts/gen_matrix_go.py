@@ -5,8 +5,14 @@
   go.mod   module github.com/oekit/oekit；require 全部矩阵模块（含嵌套模块）的最新
            tag 作为 MVS 地板——下游 `go get github.com/oekit/oekit@latest` 一次拉齐
            一组经矩阵 CI 验证的兼容版本，不会再静默落到互不兼容的旧组合。
-  matrix.go 版本快照数据（Matrix []Module / Versions map / VersionOf），零 import，
-           消费方可仅 import 本包把 Versions 暴露给 /version 端点。
+  matrix.go 版本快照数据，零 import：消费方可仅 import 本包把版本/breaking
+           索引暴露给 /version 端点。
+           · 版本：Matrix() []Module / Versions() map[string]string / VersionOf(path)
+           · breaking：每个模块带自己的破坏性变更（嵌套只归自己）+ BreakingOf /
+             HasBreaking / BreakingModules。
+           ⚠️ v0.2.0 起 Matrix / Versions 由**导出的可变值**降级为**返回副本的
+           函数**（旧写法 oekit.Versions["x"] → 新写法 oekit.Versions()["x"]）：
+           旧的导出可变 map/切片可被消费方并发改写 ⇒ go run -race 实测 DATA RACE。
 
 注意：**不要在 oekit 仓跑 go mod tidy**——BOM 的 require 是「无 import 的地板」，
 tidy 会把它们清掉（pkg/network 等仓根目录无 Go 包，空导入保活的 tools.go 模式不可
@@ -23,17 +29,20 @@ clone 陈旧）。数据模块 `data/all` 已废弃 retract，跳过。
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import re
 import subprocess
 import sys
+import urllib.error
+import urllib.request
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import (  # noqa: E402
     MODULES, repo_dir, ensure_clean_all, enable_tag_cache, git_env,
     prefetch_remote_tags, RemoteReadError,
 )
-from gen_versions import _remote_tags  # noqa: E402
+from gen_versions import _remote_tags, breaking_index_by_module  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 OEKIT_DIR = os.path.join(BASE, "oekit")
@@ -101,8 +110,27 @@ def ensure_local_tag(repo_dir_path: str, tag: str, timeout: float = 120) -> None
         pass  # 同「fetch 失败」：交由 go_floor 报真因，绝不兜底假地板
 
 
+def _tag_gomods(repo_dir_path: str, tag: str) -> str:
+    """该 tag 下实际存在的 go.mod 列表（诊断用：取地板失败时告诉人文件在哪）。"""
+    r = subprocess.run(["git", "-C", repo_dir_path, "ls-tree", "-r", "--name-only", tag],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return "（读不到该 tag 的文件树）"
+    hits = [ln for ln in r.stdout.splitlines() if ln.endswith("go.mod")]
+    return "、".join(hits[:10]) or "（该 tag 下没有任何 go.mod）"
+
+
 def go_floor(repo_dir_path: str, tag: str) -> str:
     """取该 tag 的 go 指令（Go 地板）。
+
+    ⚠️ **嵌套模块必须读它自己的 go.mod**（改造B，实测 2026-11-03）：
+    嵌套 tag 形如 `obs/v0.2.14` ⇒ 读 `{tag}:obs/go.mod`。
+    旧实现一律读 `{tag}:go.mod` ⇒ 对嵌套 tag 来说那是**宿主仓根目录**的
+    go.mod（`module github.com/oekit/bootstrap`, `go 1.24.0`），
+    **不是** `obs/go.mod`（`module github.com/oekit/bootstrap/obs`,
+    `go 1.26.0`）⇒ 对外报的地板比真实**低报**（下游用 Go 1.25 构建会在
+    该模块处直接失败）。全量 35 条里 bootstrap/obs、timertask/redis 两条不符
+    （其余 9 个嵌套恰好宿主与嵌套同版本，掩盖了这个 bug）。
 
     **取不到就报错，绝不兜底**（matrix-tools#100）。
 
@@ -114,15 +142,20 @@ def go_floor(repo_dir_path: str, tag: str) -> str:
     地板**低报比不报更危险**：不报会让人去查，报一个具体数字会让人以为那就是事实。
     ⇒ 宁可让生成失败（错误消息里带可执行的修复步骤），也不能写出一个假地板。
     """
-    r = subprocess.run(["git", "-C", repo_dir_path, "show", f"{tag}:go.mod"],
+    # 嵌套模块的 go.mod 在**它自己的子目录**里；子路径来自 tag 前缀
+    # （Go 的子目录模块规则：tag 前缀 = 模块相对仓根的完整子路径）。
+    subpath = tag.rsplit("/", 1)[0] if "/" in tag else ""
+    rel = f"{subpath}/go.mod" if subpath else "go.mod"
+    r = subprocess.run(["git", "-C", repo_dir_path, "show", f"{tag}:{rel}"],
                        capture_output=True, text=True)
     if r.returncode != 0:
         raise SystemExit(
-            f"{repo_dir_path}: 取不到 {tag} 的 go.mod（本地 clone 缺该 tag？）——"
+            f"{repo_dir_path}: 取不到 {tag} 的 {rel}（本地 clone 缺该 tag？）——"
             f"先 `git -C {repo_dir_path} fetch --tags` 再生成。\n"
             f"**不兜底**：兜底值会被写进 BOM 产物，与真实地板无法分辨"
             f"（已因此污染过 BOM v0.1.42，见 matrix-tools#100）。\n"
-            f"git 说：{(r.stderr or r.stdout).strip()[:300]}")
+            f"git 说：{(r.stderr or r.stdout).strip()[:300]}\n"
+            f"该 tag 下实际存在的 go.mod：{_tag_gomods(repo_dir_path, tag)}")
     m = re.search(r"(?m)^go (\d+\.\d+(\.\d+)?)", r.stdout)
     if not m:
         raise SystemExit(
@@ -131,8 +164,94 @@ def go_floor(repo_dir_path: str, tag: str) -> str:
     return m.group(1)
 
 
+def _ver_key(v: str) -> tuple[int, int, int]:
+    """版本串 → 可比较的 (major, minor, patch)（按数字比，不按字符串比）。"""
+    m = re.search(r"v(\d+)\.(\d+)\.(\d+)", v)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else (0, 0, 0)
+
+
+def breaking_for(by_module: dict[str, list[dict]], subpath: str,
+                 pinned_version: str) -> list[dict]:
+    """该模块**自己**的 breaking 条目（嵌套只归自己，不折叠进宿主）+ 版本上界。
+
+    纯函数（不碰网络/不读文件）⇒ 自测能直接驱动它。
+
+    ⚠️ 归属键 = **相对仓根的完整子路径**（嵌套模块的版本号前缀）：
+    根模块用 ""，嵌套模块用 "obs" / "observability/tracing/instrumentation/kitexotel"。
+    """
+    return _breaking_upto(list(by_module.get(subpath, [])), pinned_version)
+
+
+def _breaking_upto(items: list[dict], pinned_version: str) -> list[dict]:
+    """只保留**不晚于**钉住版本的破坏性条目。
+
+    为什么：BOM 是**钉住版本**的快照，而 breaking 索引来自 CHANGELOG
+    （可能已经写到下一个版本去了）⇒ 把「还没进快照」的破坏性变更写进
+    快照，就是对下游说谎（「这个快照里有这条破坏性变更」——其实没有）。
+
+    口径：条目的版本号（去掉子路径前缀后）≤ 快照钉住的版本号。
+    """
+    limit = _ver_key(pinned_version)
+    out = []
+    for it in items:
+        v = str(it.get("version", "")).rsplit("/", 1)[-1]
+        if _ver_key(v) <= limit:
+            out.append(it)
+    return out
+
+
+PROXY_BASE = "https://proxy.golang.org"
+
+
+def proxy_go_directive(module_path: str, version: str, timeout: float = 20.0) -> str | None:
+    """读 Go proxy 上该模块该版本的 .mod → go 指令；**读不到返回 None**。
+
+    为什么用 proxy 复核（改造B）：本地 clone 的 go.mod 与 **proxy 上发布出去的
+    .mod** 是两件事——本地读错文件（嵌套模块读成宿主根）时，产物里的地板
+    会**低报**，而 proxy 上的 .mod 是消费方真正拿到的东西（实测
+    `bootstrap/obs@v0.2.14.mod` 是 `go 1.26.0`，而旧产物写 1.24.0）。
+
+    读法沿用 gen_versions._remote_tags 的既有手法：**读失败不静默**——
+    返回 None（= 读不到），由调用方区分「读不到」与「读到且不符」。
+    """
+    url = f"{PROXY_BASE}/{module_path}/@v/{version}.mod"
+    try:
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
+            text = resp.read().decode("utf-8", "replace")
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    m = re.search(r"(?m)^go (\d+\.\d+(\.\d+)?)", text)
+    return m.group(1) if m else None
+
+
+def check_go_against_proxy(modules: list[dict]) -> tuple[list[str], list[str]]:
+    """用 proxy 的 .mod 复核每条 Go 字段 → (漂移消息列表, 未核对模块列表)。
+
+    - **读到且不符** ⇒ 漂移（产物里的地板对外说谎，必须判红）；
+    - **读不到** ⇒ 未核对（**不**判红：proxy 在部分网络环境不可达，
+      拿网络抖动当漂移就是假红；但必须**显式列出**，不许静默）。
+    """
+    drift: list[str] = []
+    unchecked: list[str] = []
+    for m in modules:
+        got = proxy_go_directive(m["path"], m["version"])
+        if got is None:
+            unchecked.append(f"{m['path']}@{m['version']}")
+            continue
+        if got != m["go"]:
+            drift.append(f"{m['path']}@{m['version']}：产物写 Go {m['go']}，"
+                         f"proxy 上的 .mod 是 {got}")
+    return drift, unchecked
+
+
 def collect() -> list[dict]:
-    """[{repo, path, version, go, nested: bool}]，按 MODULES 自底向上序 + 嵌套字母序。"""
+    """[{repo, path, version, go, nested: bool, breaking: [...]}],
+    按 MODULES 自底向上序 + 嵌套字母序。
+
+    ⚠️ `breaking` 是**该模块自己**的破坏性变更（改造A）：嵌套模块的条目
+    **只归自己**，不再折叠进宿主仓。归属判据 = gen_versions 的版本号前缀
+    （= 该模块相对仓根的完整子路径）⇒ 与 Module.Path 一一对应。
+    """
     # 远端 tag **一次性并发读完**（开了缓存，后面的读取全是命中）：
     # 原来每仓串行读一次（24 仓实测 ≈35s），而 audit 把本脚本当子进程跑
     # ⇒ 整条审计的耗时大头。并发 8 路实测 35s → 6s。
@@ -153,8 +272,13 @@ def collect() -> list[dict]:
         if not ver:
             continue
         ensure_local_tag(d, ver)
+        # **breaking 索引按模块拆分**（改造A）：根模块拿无前缀的条目，
+        # 嵌套模块拿「前缀 == 自己子路径」的条目 ⇒ 嵌套的 breaking 不再
+        # 折叠进宿主（下游能直接定位到具体模块）。
+        breaking_by_module = breaking_index_by_module(repo)
         out.append({"repo": repo, "path": f"github.com/{ORG}/{repo}", "version": ver,
-                    "go": go_floor(d, ver), "nested": False})
+                    "go": go_floor(d, ver), "nested": False,
+                    "breaking": breaking_for(breaking_by_module, "", ver)})
         seen: set[str] = set()
         nested: list[dict] = []
         for tag in tags:
@@ -163,8 +287,11 @@ def collect() -> list[dict]:
                 continue
             seen.add(m.group(1))
             ensure_local_tag(d, tag)
-            nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{m.group(1)}",
-                           "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True})
+            sub = m.group(1)
+            nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{sub}",
+                           "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True,
+                           "breaking": breaking_for(breaking_by_module, sub,
+                                                          tag.rsplit("/", 1)[1])})
         out.extend(sorted(nested, key=lambda x: x["path"]))
     return out
 
@@ -179,6 +306,16 @@ def next_version() -> str:
         return "v0.1.0"
     major, minor, patch = (int(x) for x in tags[-1][1:].split("."))
     return f"v{major}.{minor}.{patch + 1}"
+
+
+def _go_str(s: str) -> str:
+    """Python 字符串 → Go 字符串字面量（含引号/反斜杠/控制字符的转义）。
+
+    breaking 条目的原文里有中文、引号（\`WithNNS\`）、反斜杠 ⇒ 必须转义，
+    否则生成的 matrix.go 编译不过（gofmt 会报错，但错误信息难读）。
+    JSON 的转义规则与 Go 字符串字面量兼容（\\" \\\\ \\n \\t \\uXXXX）⇒ 直接用。
+    """
+    return json.dumps(str(s), ensure_ascii=False)
 
 
 def render(modules: list[dict], version: str, generated_at: str) -> dict[str, str]:
@@ -204,10 +341,19 @@ def render(modules: list[dict], version: str, generated_at: str) -> dict[str, st
         "//",
         "// 下游 MVS 被抬到快照版本（已用的模块升到快照口径，不会静默落到互不兼容的旧组合）；",
         "// 不需要整组对齐时按需 go get 各模块即可，本包零强制。长期跟随快照的服务可在某处",
-        "// import 本包（如 /version 端点读 Versions），让 require 常驻 go.mod。",
+        "// import 本包（如 /version 端点读 Versions()），让 require 常驻 go.mod。",
         "//",
         "// 快照由 matrix-tools/scripts/gen_matrix_go.py 从各仓远端 tag 生成；矩阵版本变化后",
-        "// 重跑生成并打新 tag（audit 有新鲜度门禁）。Breaking index 见站点 versions.json。",
+        "// 重跑生成并打新 tag（audit 有新鲜度门禁）。",
+        "//",
+        "// 本包自带 **breaking 索引**：每个模块带自己的破坏性变更条目",
+        "//（嵌套模块的条目只归它自己，不折叠进宿主仓）⇒ 下游不必再查站点。",
+        "//",
+        "// ⚠️ **v0.2.0 起本包的导出全局被降级为不可变对外面**（Breaking 变更）：",
+        "//   Matrix / Versions 由**导出的可变值**改成**返回副本的函数**。",
+        "//   旧写法 oekit.Versions[\"x\"] / range oekit.Matrix → 新写法 oekit.Versions()[\"x\"] / range oekit.Matrix()。",
+        "//   原因：旧的导出的可变 map/切片可被消费方并发改写 ⇒ go run -race 实测 DATA RACE，",
+        "//   且可能触发不可 recover 的 fatal error: concurrent map read and map write。",
         "//",
         "// 本仓 go.mod 的 require 是无 import 的地板，勿跑 go mod tidy（会清掉；误跑后重跑生成器）。",
         "package oekit",
@@ -217,6 +363,18 @@ def render(modules: list[dict], version: str, generated_at: str) -> dict[str, st
         "",
         "// GeneratedAt 是快照生成时间（UTC）。",
         f'const GeneratedAt = "{generated_at}"',
+        "",
+        "// Breaking 是一条破坏性变更记录（来自各仓 CHANGELOG 的破坏性段）。",
+        "type Breaking struct {",
+        "\t// Version 是这次破坏性变更发生的版本：",
+        "\t//   根模块   → \"v0.5.0\"",
+        "\t//   嵌套模块 → \"<相对仓根的完整子路径>/v0.2.14\"（如 \"obs/v0.2.14\"）",
+        "\t// 前缀 = 该模块相对宿主仓根的子路径，与嵌套 tag 前缀同形",
+        "\t// （如 observability/tracing/instrumentation/kitexotel/v0.7.7）。",
+        "\tVersion string",
+        "\t// Line 是 CHANGELOG 里的原文条目。",
+        "\tLine string",
+        "}",
         "",
         "// Module 是矩阵中一个模块（根模块或嵌套模块）的版本声明。",
         "type Module struct {",
@@ -228,27 +386,109 @@ def render(modules: list[dict], version: str, generated_at: str) -> dict[str, st
         "\tVersion string",
         "\t// Go 是该模块声明的最低 go 版本。",
         "\tGo string",
+        "\t// Breaking 是**该模块自己**的破坏性变更条目。",
+        "\t// 嵌套模块的破坏性变更**只**出现在它自己的条目里（不折叠进宿主仓）。",
+        "\tBreaking []Breaking",
         "}",
         "",
-        "// Matrix 是全部模块的版本声明：根模块按 matrix.py 依赖自底向上序，",
-        "// 嵌套模块（logx/hlog、bootstrap/nacos 等）跟随宿主仓按路径字母序。",
-        "var Matrix = []Module{",
+        "// matrixSnapshot 是全部模块的版本声明（**包内私有**）：根模块按 matrix.py",
+        "// 依赖自底向上序，嵌套模块（logx/hlog、bootstrap/nacos 等）跟随宿主仓按路径字母序。",
+        "// 对外只给**副本**（见 Matrix()）——包内状态不可被消费方改写。",
+        "var matrixSnapshot = []Module{",
     ]
     for m in modules:
-        lines.append(f'\t{{Path: "{m["path"]}", Repo: "{m["repo"]}", Version: "{m["version"]}", Go: "{m["go"]}"}},')
+        brk = m.get("breaking") or []
+        brk_txt = ", ".join(f"{{Version: {_go_str(b['version'])}, Line: {_go_str(b['line'])}}}"
+                            for b in brk)
+        lines.append(
+            f'\t{{Path: {_go_str(m["path"])}, Repo: {_go_str(m["repo"])}, '
+            f'Version: {_go_str(m["version"])}, Go: {_go_str(m["go"])}, '
+            f'Breaking: []Breaking{{{brk_txt}}}}},')
     lines += [
         "}",
         "",
-        "// Versions 是按 module 路径索引的版本（Matrix 的 map 视图）。",
-        "var Versions = map[string]string{",
+        "// versionsSnapshot 是按 module 路径索引的版本（**包内私有**，对外只给副本）。",
+        "var versionsSnapshot = map[string]string{",
     ]
     for m in sorted(modules, key=lambda x: x["path"]):
-        lines.append(f'\t"{m["path"]}": "{m["version"]}",')
+        lines.append(f'\t{_go_str(m["path"])}: {_go_str(m["version"])},')
     lines += [
+        "}",
+        "",
+        "// breakingSnapshot 是按 module 路径索引的破坏性条目（**包内私有**，对外只给副本）。",
+        "var breakingSnapshot = map[string][]Breaking{",
+    ]
+    for m in sorted(modules, key=lambda x: x["path"]):
+        brk = m.get("breaking") or []
+        if not brk:
+            continue
+        brk_txt = ", ".join(f"{{Version: {_go_str(b['version'])}, Line: {_go_str(b['line'])}}}"
+                            for b in brk)
+        lines.append(f'\t{_go_str(m["path"])}: []Breaking{{{brk_txt}}},')
+    lines += [
+        "}",
+        "",
+        "// copyBreaking 复制破坏性条目切片（返回副本 ⇒ 消费方改不到包内状态）。",
+        "func copyBreaking(in []Breaking) []Breaking {",
+        "\tif in == nil {",
+        "\t\treturn nil",
+        "\t}",
+        "\tout := make([]Breaking, len(in))",
+        "\tcopy(out, in)",
+        "\treturn out",
+        "}",
+        "",
+        "// Matrix 返回全部模块的版本声明（**副本**）。",
+        "//",
+        "// ⚠️ v0.2.0 起 Matrix 是**函数**（旧版是导出的可变切片）：",
+        "// 迁移写法：range oekit.Matrix → range oekit.Matrix()；len(oekit.Matrix) → len(oekit.Matrix())。",
+        "func Matrix() []Module {",
+        "\tout := make([]Module, len(matrixSnapshot))",
+        "\tfor i, m := range matrixSnapshot {",
+        "\t\tout[i] = m",
+        "\t\tout[i].Breaking = copyBreaking(m.Breaking)",
+        "\t}",
+        "\treturn out",
+        "}",
+        "",
+        "// Versions 返回按 module 路径索引的版本（**副本**）。",
+        "//",
+        "// ⚠️ v0.2.0 起 Versions 是**函数**（旧版是导出的可变 map）：",
+        "// 迁移写法：oekit.Versions[\"x\"] → oekit.Versions()[\"x\"]。",
+        "func Versions() map[string]string {",
+        "\tout := make(map[string]string, len(versionsSnapshot))",
+        "\tfor k, v := range versionsSnapshot {",
+        "\t\tout[k] = v",
+        "\t}",
+        "\treturn out",
         "}",
         "",
         "// VersionOf 返回模块路径对应的快照版本，未收录返回空串。",
-        "func VersionOf(module string) string { return Versions[module] }",
+        "//",
+        "// 并发安全：versionsSnapshot 在包初始化后**只读** ⇒ 并发读无 race。",
+        "func VersionOf(module string) string { return versionsSnapshot[module] }",
+        "",
+        "// BreakingOf 返回某模块**自己**的破坏性变更条目（**副本**）；未收录返回 nil。",
+        "//",
+        "// 嵌套模块的条目只在这里出现（不折叠进宿主仓）：",
+        "//   BreakingOf(\"github.com/oekit/bootstrap/obs\") → 该嵌套模块自己的破坏性变更。",
+        "func BreakingOf(module string) []Breaking {",
+        "\treturn copyBreaking(breakingSnapshot[module])",
+        "}",
+        "",
+        "// HasBreaking 报告某模块有没有破坏性变更。",
+        "func HasBreaking(module string) bool { return len(breakingSnapshot[module]) > 0 }",
+        "",
+        "// BreakingModules 返回**有**破坏性变更的模块路径（**副本**，按矩阵序）。",
+        "func BreakingModules() []string {",
+        "\tout := []string{}",
+        "\tfor _, m := range matrixSnapshot {",
+        "\t\tif len(breakingSnapshot[m.Path]) > 0 {",
+        "\t\t\tout = append(out, m.Path)",
+        "\t\t}",
+        "\t}",
+        "\treturn out",
+        "}",
         "",
     ]
     return {"go.mod": "\n".join(go_mod) + "\n",
@@ -308,6 +548,19 @@ def main() -> int:
             open(target, "w", encoding="utf-8").write(content)
 
     if check:
+        # **proxy 复核 Go 字段**（改造B）：产物里的地板必须与 proxy 上发布出去的
+        # .mod 一致（嵌套模块读错文件时产物会低报，且没有任何其它门禁能看见）。
+        drift, unchecked = check_go_against_proxy(modules)
+        if drift:
+            print(f"❌ oekit BOM 的 Go 地板与 proxy 上的 .mod 不符 {len(drift)} 条：")
+            for d in drift[:8]:
+                print(f"   - {d}")
+            print("   （跑 gen_matrix_go.py 重生成并打新 tag）")
+            return 1
+        if unchecked:
+            print(f"⚠️ proxy 的 .mod 未核对 {len(unchecked)} 个模块（读不到 ≠ 不符，"
+                  f"不判红但必须知道没核）：{', '.join(unchecked[:6])}"
+                  f"{' ……' if len(unchecked) > 6 else ''}")
         if changed:
             print(f"❌ oekit BOM 陈旧（跑 gen_matrix_go.py 重生成并打新 tag）：{', '.join(changed)}")
             return 1

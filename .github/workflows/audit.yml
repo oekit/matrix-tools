@@ -93,6 +93,8 @@ jobs:
         run: python3 scripts/audit_floor_gate_selftest.py
       - name: 审计「各仓对别仓嵌套模块的地板」门禁自测（落后必须判出 / 口径不与根模块重叠 / 变异自证）
         run: python3 scripts/audit_nested_floor_gate_selftest.py
+      - name: 审计假绿自测（崩了≠零漂移 / CI 判退出码+成功标记 / 深层 CHANGELOG 扫得到 / 门禁不可用判红 / 变异自证）
+        run: python3 scripts/audit_fail_loud_selftest.py
       - name: 工具链闸门自测（合并回退只在 CLEAN 放行 / CHANGELOG 覆写要 --apply / local_dir 只此一份）
         run: python3 scripts/toolchain_selftest.py
       - name: 台账写入器自测（事实与现实不符必须拒绝写入 / 收口必须报出漂移 / 坏账不许覆盖）
@@ -138,9 +140,28 @@ jobs:
           GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
           GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
         run: |
-          MATRIX_BASE="$PWD/repos" python3 scripts/audit.py --remote-tags > audit-report.txt || true
+          # ⚠️ **判据从「报告文本里有没有 ❌」改成「审计有没有跑完」**
+          #   （实测 2026-11-03）：旧写法 `... || true` + `grep -c '❌'` 在
+          #   audit.py 崩掉时（报告 0 字节）得到 drift=0 ⇒ 「Fail on drift」
+          #   步骤不触发 ⇒ **PR 门禁判成零漂移全绿**（假绿）。
+          #   现在按**退出码**判：0=通过 / 1=真漂移 / 2=基础设施失败。
+          #   （`|| rc=$?` 而不是 `|| true`：GitHub 的 run 块默认 `bash -e`，
+          #     直接跑一条会失败的命令会让整个步骤提前退出，拿不到退出码。）
+          rc=0
+          MATRIX_BASE="$PWD/repos" python3 scripts/audit.py --remote-tags > audit-report.txt || rc=$?
           cat audit-report.txt
-          echo "drift=$(grep -c '❌' audit-report.txt || true)" >> "$GITHUB_OUTPUT"
+          drift=$(grep -c '❌' audit-report.txt || true)
+          echo "drift=$drift" >> "$GITHUB_OUTPUT"
+          echo "audit_rc=$rc" >> "$GITHUB_OUTPUT"
+          # 兜底：**报告里没有「✓ 矩阵审计通过」⇒ 结论不可信**（崩了 / 被 kill /
+          #   报告为空 / 退出码与报告自相矛盾）⇒ audit_ok=0 ⇒ 下面的门禁判红。
+          if [ "$rc" = "0" ] && grep -q '✓ 矩阵审计通过' audit-report.txt; then
+            echo "audit_ok=1" >> "$GITHUB_OUTPUT"
+          elif [ "$rc" = "1" ] && [ "$drift" != "0" ]; then
+            echo "audit_ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "audit_ok=0" >> "$GITHUB_OUTPUT"
+          fi
       - name: 地板类断言扫描（CHANGELOG + 已发布 Release 正文里的「逐字节未变/零行为风险」必须落到 git 对象层核）
         env:
           # Release 正文要走 GitHub API（GITHUB_TOKEN 是本仓 installation token，读不到别的仓）
@@ -150,7 +171,9 @@ jobs:
           # 退出码契约：发现**为假**的断言 ⇒ 1（PR 门禁直接红）；读不到的面只 ⚠️ 不阻断
           MATRIX_BASE="$PWD/repos" python3 scripts/floor_claim_check.py
       - name: Close previous drift issue
-        if: github.event_name != 'pull_request' && steps.audit.outputs.drift == '0'
+        # ⚠️ 只有审计**真的跑完**（audit_ok=1）且零漂移才关单：
+        #   审计崩了（drift=0）也关单 ⇒ 把上一轮的真实漂移 issue 关掉（假绿）。
+        if: github.event_name != 'pull_request' && steps.audit.outputs.drift == '0' && steps.audit.outputs.audit_ok == '1'
         uses: actions/github-script@v9
         with:
           script: |
@@ -181,12 +204,23 @@ jobs:
               await github.rest.issues.create({ owner: context.repo.owner,
                 repo: context.repo.repo, title: '矩阵漂移报告', body, labels: ['matrix-drift'] });
             }
+      - name: 审计未跑完 ⇒ 判红（基础设施失败，不是「零漂移」）
+        # audit.py 崩了 / 被 kill / 报告为空 ⇒ 结论行「✓ 矩阵审计通过」不存在
+        # （或退出码与报告自相矛盾）⇒ 旧门禁在这里判成「零漂移」⇒ PR 全绿
+        # （假绿，实测 2026-11-03：audit.py 崩 ⇒ stdout 0 字节 ⇒ grep -c ❌ = 0）。
+        # ⇒ 判红；且上一轮的漂移 issue **不关**（上面的 Close 步骤已按 audit_ok 守卫）。
+        if: steps.audit.outputs.audit_ok != '1'
+        run: |
+          echo "::error::审计没有产出可信结论（退出码 ${{ steps.audit.outputs.audit_rc }}，报告里 ❌ 行 ${{ steps.audit.outputs.drift }} 条）——审计崩了或没跑完，**不是**「零漂移」。详情见上方 audit-report.txt 与本步骤日志。"
+          exit 1
       - name: Fail on drift (PR only)
         # PR 门禁：漂移不让合。**不开 issue**——PR 上每推一次提交就开一个
         # issue 会把 issue 池冲垮，漂移详情留在本步骤的日志里就够了。
-        if: github.event_name == 'pull_request' && steps.audit.outputs.drift != '0'
+        # ⚠️ 判据同时看 **drift 与 audit_ok**：审计没跑完（audit_ok=0）时
+        #   drift 可能是 0（旧写法的假绿形态）⇒ 必须一并判红。
+        if: github.event_name == 'pull_request' && (steps.audit.outputs.drift != '0' || steps.audit.outputs.audit_ok != '1')
         run: |
-          echo "::error::矩阵审计发现 ${{ steps.audit.outputs.drift }} 项漂移——本 PR 不能合。详情见上方 audit-report.txt（本地复现：python3 scripts/audit.py --remote-tags）"
+          echo "::error::矩阵审计未通过（漂移 ${{ steps.audit.outputs.drift }} 项，审计退出码 ${{ steps.audit.outputs.audit_rc }}）——本 PR 不能合。详情见上方 audit-report.txt（本地复现：python3 scripts/audit.py --remote-tags）"
           exit 1
 
   # 消费面承诺巡检：矩阵对外的「按需取用 / 零捆绑 / 嵌套隔离 / 一次拉齐」
