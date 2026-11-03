@@ -93,7 +93,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 
 ### 发版链（顺序不可反）
 
-**嵌套模块发版的三条约束**（2026-11-03 实测，踩过 ⇒ 写进规范，不只靠工具行为）：
+**嵌套模块发版的四条约束**（2026-11-03 实测，踩过 ⇒ 写进规范，不只靠工具行为）：
 
 1. **嵌套模块的 CHANGELOG 节名按形态记**：**仓根** CHANGELOG 记**全名**（`## [nacosimpl/v0.1.3]`），
    **嵌套模块自己的** CHANGELOG 记**短名**（`## [v0.1.3]`）。消费方按仓根的全名节定位发布说明。
@@ -105,6 +105,14 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
      （**假绿**）。实测：registry HEAD 停在 `nacos/v0.1.3` + `nacosimpl/v0.1.4` 同 commit 上，
      删掉 `nacosimpl/CHANGELOG.md` 的 `## [v0.1.4]` ⇒ 判 ✓（假绿）。
      ⇒ 修法 = 改用 `git tag --points-at HEAD` 取**全部** tag 并逐个按形态判定。
+   - ⚠️ **「同仓的 train 发成功后重跑会被拦下」是错的**（2026-11-03 实测，勿写进规范）：
+     规则 3 要求同名节**存在**（不是「最新」）⇒ 已发布版本的短名节**留在文件里**
+     ⇒ 重跑判**绿**。实测（#57 与 #58 两版口径**都绿**）：bootstrap HEAD 停在
+     `nacos/v0.3.10`+`obs/v0.2.14` **两个 tag** 上 ⇒ `nacos/`、`obs/`、仓根**三个面全 ✓**；
+     registry HEAD 停在 `nacos/v0.1.3`+`nacosimpl/v0.1.4` ⇒ 三个面全 ✓；
+     timertask HEAD 不在任何 tag 上 ⇒ 规则 3 整段跳过 ✓；
+     kitex HEAD 停在 `…/kitexotel/v0.7.7` ⇒ ✓。
+     ⇒ 唯一会红的情形是**本模块刚发的版本节被删了**（那是**该红**，不是「凭空拦」）。
 2. **同一仓的多个嵌套模块，仍建议放同一条 train**（例：
    `release_train.py bootstrap nacos=v0.3.10 obs=v0.2.14`）。
    - ⚠️ **这条在 #57 之后已不再是「硬拦」**：实测 bootstrap HEAD 停在 `nacos/v0.3.10`（另一个模块的 tag）上，
@@ -124,6 +132,21 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
      （仓内既有惯例：`chore/rel-nacosimpl-v0.1.1`、`chore/rel-redis-v0.2.2`）
      ⇒ **只取版本号不够**：`registry` 的 `nacos/v0.1.3` 与 `nacosimpl/v0.1.3` **同版本号**
      ⇒ 只取版本号会撞名 ⇒ 而 `open_pr` 是按**分支名**查已有 open PR ⇒ 撞名会**复用别的模块的 PR**。
+4. **一轮闭合在有依赖链时不能一次发完，必须分阶段**：**被依赖方先发 → 依赖方抬地板 → 依赖方再发**，
+   且**抬升必须晚于被依赖方的发布**。
+   - **为什么必须分阶段**：tag **不可重推** ⇒ 地板落后只能靠**再发一个新 tag** 补
+     ⇒ 一次发完 = 依赖方**生而带旧地板** = 消费方解析到旧地板 = **自造欠账**。
+   - **为什么抬升必须晚于发布**：提前把 `require` 抬到**还没发布**的版本 ⇒ `go mod` **解析失败**
+     ⇒ 「依赖可解析」门禁会 fail closed（读不到 ≠ 已发布，#85 口径）。
+   - **本次实测的时序**（2026-11-03，取数 03:53Z）：`registry nacos/v0.1.3`+`nacosimpl/v0.1.4`
+     @22:50:24Z → `bootstrap` 抬地板 `8635da9` @22:59:25Z → `bootstrap nacos/v0.3.10`+`obs/v0.2.14`
+     @23:10:35Z（**tag 快照里已经是** `registry/nacos v0.1.3`+`registry/nacosimpl v0.1.4`）；
+     `logx kitexlog/v0.1.8` @22:39:55Z → `kitex` 抬地板 `7cad224` @23:02:57Z
+     → `kitex …/kitexotel/v0.7.6` @23:16:26Z（**tag 快照里已经是** `logx/kitexlog v0.1.8`）。
+   - ⇒ **依赖链**：`registry/nacos`+`registry/nacosimpl` → `bootstrap/nacos`；
+     `logx/kitexlog` → `kitex/…/kitexotel`。
+   - ⚠️ **父仓冻结**：本波已发的仓（logx / registry / timertask）**本波不得再发新版**
+     ⇒ 否则依赖链要重新算一轮。
 
 | 脚本 | 作用 |
 |---|---|
