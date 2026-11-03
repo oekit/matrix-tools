@@ -95,6 +95,8 @@ jobs:
         run: python3 scripts/toolchain_selftest.py
       - name: 台账写入器自测（事实与现实不符必须拒绝写入 / 收口必须报出漂移 / 坏账不许覆盖）
         run: python3 scripts/ledger_write_selftest.py
+      - name: 台账写入器自测·变异自证（封存保证 / 收口范围 / 修正通道 ⇒ 精确转红集合必须精确）
+        run: python3 scripts/ledger_write_selftest.py --mutate
       - name: 历史回执重渲染自测（只编辑原评论不新发 / 已是 #153 形态幂等跳过 / 无回执与多条回执明确报错 / 变异自证）
         run: python3 scripts/rerender_receipt_selftest.py
       - name: 写回前置门禁自测（跨仓号/本仓其它号/裸号都抓得住 / PR 引用与顶格段落不误报 / 判据看位置不看存在性 / 变异自证）
