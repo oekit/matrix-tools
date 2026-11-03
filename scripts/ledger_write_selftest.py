@@ -187,6 +187,153 @@ def main() -> int:
         else:
             print("  ✓ 用例6 坏台账 ⇒ 明确报错且原文件未被覆盖")
 
+        # ═══ #211：台账封存保证 + 收口范围 + 修正通道 ═══════════════════
+        #
+        # ① 封存保证：已收口的轮次**不许**再追加条目
+        #    （旧实现只查「最新一轮」且不查 finished_at ⇒ 收口后仍可往封存轮次里塞）
+        # ② 收口范围：`--run-end` 必须收**全部未收口轮次**
+        #    （旧实现只收 `runs[-1]` ⇒ 更早的未收口轮次永久悬空、记录从未复核）
+        # ③ 修正通道：`--amend` 能改错记录（否则错记录永久阻塞收口）
+        #    （实测 2026-11-03：本轮真事故——并发会话误关 issue ⇒ 台账回读成
+        #      closed=True ⇒ 收口被漂移拦下 ⇒ 只能绕过工具手改 JSON）
+
+        # ── 用例 7：已收口的轮次 ⇒ 拒绝追加 ──────────────────────────────
+        led7 = ledger_of("sealed.json")
+        run_tool(["--new-run"], base_env, led7)
+        run_tool(["--issue", "pkg#60", "--closed"], base_env, led7)
+        r = run_tool(["--run-end"], base_env, led7)
+        if r.returncode != 0:
+            failures.append(f"用例7 收口失败：{r.stdout}{r.stderr}")
+        before7 = led7.read_text(encoding="utf-8")
+        r = run_tool(["--issue", "pkg#61", "--closed"], base_env, led7)
+        if r.returncode == 0:
+            failures.append("用例7 往已收口轮次追加成功 ⇒ 封存保证被打破")
+        elif "已收口" not in (r.stdout + r.stderr):
+            failures.append(f"用例7 拒绝时没说明「已收口」：{r.stdout}{r.stderr}")
+        elif led7.read_text(encoding="utf-8") != before7:
+            failures.append("用例7 拒绝写入却把台账改了")
+        else:
+            print("  ✓ 用例7 往已收口轮次追加 ⇒ 拒绝且台账未被改")
+
+        # ── 用例 8：--new-run 之后追加 ⇒ 正常写入 ─────────────────────────
+        r = run_tool(["--new-run"], base_env, led7)
+        if r.returncode != 0:
+            failures.append(f"用例8 开新一轮失败：{r.stdout}{r.stderr}")
+        r = run_tool(["--issue", "pkg#62", "--closed"], base_env, led7)
+        if r.returncode != 0:
+            failures.append(f"用例8 新一轮里追加失败：{r.stdout}{r.stderr}")
+        else:
+            data7 = json.loads(led7.read_text(encoding="utf-8"))
+            if len(data7["runs"]) != 2 or len(data7["runs"][-1]["handled"]) != 1:
+                failures.append(f"用例8 台账形状不对：{data7['runs']}")
+            else:
+                print("  ✓ 用例8 --new-run 之后追加 ⇒ 正常写入")
+
+        # ── 用例 9：--run-end 收口**全部**未收口轮次 ─────────────────────
+        #    造两轮：第一轮**未收口**（悬空），第二轮也未收口 ⇒ 一次收口全收
+        led9 = tmp / "multi.json"
+        led9.write_text(json.dumps({
+            "runs": [
+                {"started_at": "2026-11-01T00:00:00Z", "finished_at": None,
+                 "handled": [{"issue": "pkg#70", "org": "oekit", "closed": True}],
+                 "also_done": [], "skip": []},
+                {"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                 "handled": [{"issue": "pkg#71", "org": "oekit", "closed": True}],
+                 "also_done": [], "skip": []},
+            ], "last_run": "2026-11-02T00:00:00Z"}, ensure_ascii=False), encoding="utf-8")
+        r = run_tool(["--run-end"], base_env, led9)
+        if r.returncode != 0:
+            failures.append(f"用例9 收口失败：{r.stdout}{r.stderr}")
+        else:
+            data9 = json.loads(led9.read_text(encoding="utf-8"))
+            unclosed = [i for i, rr in enumerate(data9["runs"]) if not rr.get("finished_at")]
+            if unclosed:
+                failures.append(f"用例9 仍有未收口轮次 {unclosed} ⇒ 只收了最新一轮"
+                                f"（更早的轮次永久悬空、记录从未复核）")
+            else:
+                print("  ✓ 用例9 --run-end 收口全部未收口轮次（不只最新一轮）")
+
+        # ── 用例 10：--amend 修正错记录 ⇒ 能改，且留痕 ───────────────────
+        led10 = tmp / "amend.json"
+        led10.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "pkg#80", "org": "oekit", "closed": True,
+                                   "tag": None, "note": "错的记录"}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        # 现实：issue 其实还 OPEN ⇒ 记录里的 closed=True 是错的
+        env10 = dict(base_env)
+        env10["FAKE_ISSUE_STATE"] = "OPEN"
+        r = run_tool(["--issue", "pkg#80", "--amend-open"], env10, led10)
+        if r.returncode != 0:
+            failures.append(f"用例10 amend 失败：{r.stdout}{r.stderr}")
+        else:
+            data10 = json.loads(led10.read_text(encoding="utf-8"))
+            e10 = data10["runs"][0]["handled"][0]
+            if e10.get("closed") is not False:
+                failures.append(f"用例10 closed 没被修正：{e10}")
+            elif not e10.get("amended_at") or e10.get("amended_from") is None:
+                failures.append(f"用例10 修正没有留痕：{e10}")
+            else:
+                print("  ✓ 用例10 --amend 修正错记录 ⇒ 生效且留痕（amended_at/from）")
+
+        # ── 用例 11：amend 与现实冲突 ⇒ 拒绝（事实不可知时拒绝写入）────────
+        led11 = tmp / "amend_conflict.json"
+        led11.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "pkg#81", "org": "oekit", "closed": False}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        # 现实：issue 已 CLOSED ⇒ 改成 closed=True 是对的；改成 false 才是错的
+        before11 = led11.read_text(encoding="utf-8")
+        r = run_tool(["--issue", "pkg#81", "--amend-open"], base_env, led11)
+        if r.returncode == 0:
+            failures.append("用例11 amend 与现实冲突却写入成功 ⇒ 会把台账改成假的")
+        elif led11.read_text(encoding="utf-8") != before11:
+            failures.append("用例11 拒绝写入却把台账改了")
+        else:
+            print("  ✓ 用例11 amend 与现实冲突 ⇒ 拒绝且台账未被改")
+
+        # ── 用例 12：amend 目标不存在 ⇒ 拒绝（不许凭印象改）──────────────
+        led12 = tmp / "amend_missing.json"
+        led12.write_text(json.dumps({"runs": [], "last_run": None}, ensure_ascii=False),
+                         encoding="utf-8")
+        r = run_tool(["--issue", "pkg#99", "--amend-open"], base_env, led12)
+        if r.returncode == 0:
+            failures.append("用例12 amend 不存在的记录却成功 ⇒ 会凭空造记录")
+        else:
+            print("  ✓ 用例12 amend 目标不存在 ⇒ 拒绝")
+
+        # ── 用例 13：写入时记 fact_at（时间窗自洽的输入）──────────────────
+        led13 = ledger_of("factat.json")
+        run_tool(["--new-run"], base_env, led13)
+        run_tool(["--issue", "pkg#85", "--closed"], base_env, led13)
+        data13 = json.loads(led13.read_text(encoding="utf-8"))
+        e13 = data13["runs"][-1]["handled"][0]
+        if not e13.get("fact_at"):
+            failures.append(f"用例13 条目没有 fact_at（时间窗自洽无从核对）：{e13}")
+        else:
+            print("  ✓ 用例13 写入时记 fact_at ⇒ 轮次时间窗可与事实核对")
+
+        # ── 用例 14：全部收口后再跑 --run-end ⇒ 退出码 0（不是错误）────────
+        #    旧实现会「重收最后一轮」；新语义下「没有未收口的轮次」是**干净状态**
+        #    ⇒ 退出码必须仍是 0 ⇒ 否则「重复跑 --run-end」会打破调用方。
+        led14 = ledger_of("allclosed.json")
+        run_tool(["--new-run"], base_env, led14)
+        run_tool(["--issue", "pkg#86", "--closed"], base_env, led14)
+        r = run_tool(["--run-end"], base_env, led14)
+        if r.returncode != 0:
+            failures.append(f"用例14 首次收口失败：{r.stdout}{r.stderr}")
+        before14 = led14.read_text(encoding="utf-8")
+        r = run_tool(["--run-end"], base_env, led14)
+        if r.returncode != 0:
+            failures.append(f"用例14 全部收口后再跑 --run-end 退出码非 0"
+                            f"（重复跑会打破调用方）：{r.stdout}{r.stderr}")
+        elif led14.read_text(encoding="utf-8") != before14:
+            failures.append("用例14 重复 --run-end 把台账改了")
+        else:
+            print("  ✓ 用例14 全部收口后再跑 --run-end ⇒ 退出码 0 且台账未变")
+
     if failures:
         print("\n✗ 自测失败：")
         for f in failures:
@@ -196,5 +343,90 @@ def main() -> int:
     return 0
 
 
+# ═══ 变异自证（--mutate）══════════════════════════════════════════════════
+#
+# **为什么要有**：新增的封存保证 / 收口范围 / 修正通道都是**门禁式断言**——
+# 一旦被改成恒放行，所有症状都消失（台账照样「收口成功」）⇒ 必须自证
+# 「它抓得住自己要防的东西」。
+#
+# **怎么构造**：把**被测脚本的源码**改写成旧实现（真实退回旧行为，
+# 不是 mock 掉判据）⇒ 跑一遍自测 ⇒ 比对「精确转红集合」。
+#
+# ⚠️ 期望集合必须**按该缺陷的实际影响面列全**（#223 的教训）：
+#   同一个缺陷可能打红多条断言 ⇒ 少列会被判「不精确」，
+#   但那不是判据没牙齿，是**期望集合没列全**。
+
+_MUTATIONS = [
+    # ① 封存保证退回旧写法：不查 finished_at ⇒ 往已收口轮次里追加也不拦
+    ("封存保证退回旧写法（不查 finished_at）",
+     ('if run.get("finished_at"):', 'if False:'),
+     {"7"}),
+    # ② 收口范围退回旧写法：只收最新一轮 ⇒ 更早的未收口轮次永久悬空
+    ("收口范围退回旧写法（只收最新一轮）",
+     ('pending = [r for r in runs if not r.get("finished_at")]',
+      'pending = [runs[-1]] if runs else []'),
+     {"9"}),
+    # ③ 修正通道退回旧写法：没有 amend ⇒ 错记录改不了（永久阻塞收口）
+    ("修正通道退回旧写法（amend 变成追加）",
+     ('cmd_amend(args, data)', 'cmd_add_entry(args, data)'),
+     {"10", "11", "12"}),
+]
+
+
+def _run_mutations() -> int:
+    """注入变异体 ⇒ 比对「精确转红集合」。"""
+    src = TOOL.read_text(encoding="utf-8")
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        for name, (old, new), expect in _MUTATIONS:
+            if old not in src:
+                print(f"✗ 变异「{name}」：源里找不到待替换片段 {old!r} ⇒ 变异体没生效")
+                ok = False
+                continue
+            mutated = src.replace(old, new, 1)
+            mtool = tmp / "ledger_write_mutated.py"
+            mtool.write_text(mutated, encoding="utf-8")
+            # 把被测脚本指到变异体，跑一遍自测（子进程，隔离）
+            sel = Path(__file__).read_text(encoding="utf-8")
+            sel_mut = sel.replace(
+                'TOOL = ROOT / "scripts" / "ledger_write.py"',
+                f'TOOL = Path(r"{mtool}")')
+            sel_path = tmp / "selftest_mutated.py"
+            sel_path.write_text(sel_mut, encoding="utf-8")
+            env = dict(os.environ)
+            env["PYTHONPATH"] = f"{ROOT}:{ROOT / 'scripts'}"
+            r = subprocess.run([sys.executable, str(sel_path)],
+                               capture_output=True, text=True, env=env)
+            out = r.stdout + r.stderr
+            # 变异后应当**失败**（有断言转红）⇒ 逐条抽取失败项
+            got: set[str] = set()
+            for line in out.splitlines():
+                s = line.strip()
+                if s.startswith("- 用例"):
+                    for tok in s.replace("：", " ").split():
+                        if tok.startswith("用例"):
+                            got.add(tok.replace("用例", "").rstrip("：,."))
+            if not got:
+                # 变异没让任何用例失败 ⇒ 判据没牙齿（或是变异体没生效）
+                print(f"✗ 变异「{name}」**没有让任何用例失败** ⇒ 判据没牙齿"
+                      f"（退出码 {r.returncode}）")
+                ok = False
+                continue
+            if got == expect:
+                print(f"✓ 变异「{name}」被抓住（精确转红 {sorted(got)}）")
+            else:
+                ok = False
+                print(f"✗ 变异「{name}」转红集合**不精确** ⇒ "
+                      f"期望 {sorted(expect)}，实际 {sorted(got)}")
+    if ok:
+        print(f"✓ 变异自证 {len(_MUTATIONS)}/{len(_MUTATIONS)} 全部**精确**转红")
+        return 0
+    print(f"✗ 变异自证未过：{len(_MUTATIONS)} 个变异体里至少一个转红集合不精确")
+    return 1
+
+
 if __name__ == "__main__":
+    if "--mutate" in sys.argv:
+        sys.exit(_run_mutations())
     sys.exit(main())
