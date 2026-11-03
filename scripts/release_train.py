@@ -479,7 +479,23 @@ def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
     """
     if any(name == "main" for name, _d, _t in specs):
         return True, ""
-    only = "、".join(f"{name}={_t.split('/', 1)[1]}" for name, _d, _t in specs)
+    # ★ `only` 有**两个消费者**，取值必须**各取各的**（#214）：
+    #   ① 文案（人读）⇒ 要「模块名=版本号」，多个用「、」分隔；
+    #   ② **修法示例命令行**（人照抄）⇒ 必须是 `name=ver` 的 **spec 形态**，
+    #      多个用**空格**分隔（spec 解析是 `spec.split("=", 1)` 逐个解析的）。
+    # ⚠️ **旧实现有**两处**错**（实测 2026-11-03）：
+    #   (a) `_t.split('/', 1)[1]` 对**多段**嵌套模块丢首段：
+    #       tag `observability/tracing/instrumentation/kitexotel/v0.7.6`
+    #       ⇒ `split('/', 1)[1]` = `tracing/instrumentation/kitexotel/v0.7.6`
+    #       ⇒ 文案给出**不存在的模块名**（丢了 `observability/`）。
+    #       ⇒ 正确取法 = `rsplit('/', 1)[-1]`（**只取版本号**，单段/多段都对）。
+    #   (b) 旧实现**同一个串**同时当下标分隔（文案用「、」）和**命令行参数**用
+    #       ⇒ 多模块时照抄示例命令得到 `nacos=v0.3.10、obs=v0.2.14`
+    #       ⇒ **一个 token** ⇒ `ver` = `v0.3.10、obs=v0.2.14`
+    #       ⇒ 被 spec 的版本号格式校验**直接拒掉**（退出码 2）⇒ 示例**不可用**。
+    #       ⇒ 修法：**两个消费者各用一个串**（文案串 vs 命令行串）。
+    only = "、".join(f"{name}={_t.rsplit('/', 1)[-1]}" for name, _d, _t in specs)
+    only_specs = " ".join(f"{name}={_t.rsplit('/', 1)[-1]}" for name, _d, _t in specs)
     planned = {(repo, tag) for _n, _d, tag in specs}
     unresolved: list[str] = []
     for name, d, tag in specs:
@@ -492,7 +508,7 @@ def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
             f"  ⇒ 未满足的 require：\n"
             + "".join(f"      - {u}\n" for u in unresolved)
             + f"  ⇒ 修法：把上面列出的仓一起放进本次 train（"
-            f"例：python3 scripts/release_train.py {repo} main=vX.Y.Z {only} "
+            f"例：python3 scripts/release_train.py {repo} main=vX.Y.Z {only_specs} "
             f"--apply --changelog \"...\"）\n"
             f"  ⇒ 若这些 require 其实**已发布**，那是远端读 tag 失败 ⇒ "
             f"**fail closed**（读不到 ≠ 已发布）⇒ 查网络/权限后重试。"
@@ -728,6 +744,36 @@ def check_new_section_binding(bullets: list[str], repo: str, main_tag: str,
                 f"新建的{face}版本节里 issue 号只出现在「关联问题单」行、没绑到具体条目"))
 
 
+def branch_slug(tags: list[str]) -> str:
+    """发版分支名 slug：`<末段模块名>-<版本号>`，多模块用 `+` 连接。
+
+    **为什么不用完整 tag**（旧形态）：完整 tag 含多段路径（如
+    ``observability/tracing/instrumentation/kitexotel/v0.7.7``）⇒ 分支名变成
+    ``chore/rel-observability/tracing/.../v0.7.7``（**多层引用**）⇒
+    ① 与同仓其它分支有 **git 引用 D/F 冲突**风险（实测 fatal:
+    ``cannot lock ref 'refs/heads/chore/rel-observability/...'``）；
+    ② 分支名看不出是**哪个模块**的批次。
+
+    **为什么不用「只有版本号」**（``t.rsplit("/", 1)[-1]``）：那会**丢掉模块身份** ⇒
+    ① **同仓不同模块同版本号** ⇒ 撞分支名（registry 的 `nacos/v0.1.3` 与 `nacosimpl/v0.1.3`）；
+    ② ★ **同仓「根发版」与「嵌套发版」同版本号** ⇒ **完全同形** —— 根发版本来就合法地长成
+       `chore/rel-v0.7.8`（``main_tag`` 分支就是「只有版本号」）⇒ 同一个字符串
+       ⇒ ``open_pr`` 按**分支名**查 ⇒ **复用别的分支的 PR**。
+    ⇒ ⇒ 而「只有版本号」在**根发版**时本来就是正确形态 ⇒ 只在**嵌套发版**时必须带模块名
+    ⇒ ⇒ 本函数**只用于嵌套发版路径**（``main_tag`` 为空时）⇒ 保留模块名正是为了与根分支名区分。
+
+    ⇒ 只取**末两段**（模块名 + 版本号）⇒ 单层、唯一、可读；
+    ★ 提交标题仍保留**完整 tag**（``rel_title_tag``）⇒ 不丢路径信息。
+    """
+    parts: list[str] = []
+    for t in tags:
+        segs = t.split("/")
+        ver = segs[-1]
+        name = segs[-2] if len(segs) >= 2 else ""
+        parts.append(f"{name}-{ver}" if name else ver)
+    return "+".join(parts)
+
+
 def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
                      issues: list[str] | None = None) -> None:
     """缺版本节时：生成（置顶）→ 预校验 → PR → 排程合并 → 等合并 → 拉齐。
@@ -800,8 +846,9 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
         rel_slug = main_tag
         rel_title_tag = main_tag
     else:
-        rel_slug = "+".join(t for _n, _d, t in specs)
-        rel_title_tag = rel_slug
+        rel_slug = branch_slug([t for _n, _d, t in specs])
+        # ★ 标题保留**完整 tag**（分支名用 slug 是为了单层/唯一，标题不需要）
+        rel_title_tag = "+".join(t for _n, _d, t in specs)
     url = land_pr(root, repo, f"chore/rel-{rel_slug}",
                   f"chore: CHANGELOG 补 {rel_title_tag}（release_train --changelog）",
                   f"chore: CHANGELOG 补 {rel_title_tag}",
