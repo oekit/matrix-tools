@@ -59,6 +59,28 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   **依据**：全部为实测（7 个有独立 CHANGELOG 的嵌套模块逐个跑判据；旧版 vs 新版判据对照；
   D/F 冲突复现；假绿夹具；**发布时序与 tag 快照的 go.mod 地板逐个核对**）。
 
+- **更正：5 个已发布版本节里的跨仓地板宣称，对该节所代表模块而言不成立**（2026-11-03 实测）
+  ⇒ 共 **8 处**（**4 处真缺陷 + 4 处落点错位**）。**登记在此，是因为本仓是「地板宣称」门禁的所有者**
+  （`changelog_claim_vs_gomod.py` / `floor_claim_check.py`）⇒ 由门禁所有者声明既往违反自家口径的已发布面。
+  ⚠️ **本条为更正**：下列原句**逐字引用**，**该说法不成立**；正确说法以**该模块自己** `go.mod` 的实际
+  require 为准（父仓靠 `replace` 引用本地路径 ⇒ **不进 require 清单**）。
+
+  - `bootstrap` 根面 `## [obs/v0.2.14]`：初版此处写「把父仓 bootstrap v0.6.8 与 logx v0.8.2、registry v0.5.3、registry/nacos v0.1.3、registry/nacosimpl v0.1.4 的地板带进已发布产物」，
+    **该说法对 `obs` 不成立** —— `obs` 产物实际只带 `bootstrap v0.6.8`、`core v0.12.1`、`logx v0.8.2`、
+    `metrics v0.1.10`、`tracing v0.3.2`、`concurrency v0.23.3`（indirect），**不含 registry 系依赖**
+    （该句对 `bootstrap/nacos` **成立** —— `nacos` 产物确实带 `registry v0.5.3`/`registry/nacos v0.1.3`/`registry/nacosimpl v0.1.4`）。
+  - `registry` 根面 `## [nacos/v0.1.3]`：初版此处写「把父仓 registry v0.5.3 与 logx v0.8.2 的地板带进已发布产物」，
+    其中 `registry v0.5.3` 一项**不成立** —— `nacos` 产物实际只有 `core v0.12.1` + `logx v0.8.2`。
+  - `registry` 根面 `## [nacos/v0.1.2]` 与 `## [v0.5.3]`：初版此处写「把父仓 registry v0.5.2 与 logx v0.8.1 的地板带进已发布产物」，
+    该抬升**属于 `nacosimpl`**（`nacosimpl` 在 `nacosimpl/v0.1.2` 快照里 require `registry v0.5.1` + `logx v0.8.0` + `core v0.12.1`）；
+    `nacos` 与仓根 `registry` 都不依赖 `logx`/`registry` ⇒ 写在 `nacos` 节与仓根节属**落点错位**。
+  - `timertask` 根面 `## [v0.2.7]`：初版此处写「把父仓 timertask v0.2.7 与 concurrency v0.23.3、logx v0.8.2 的地板带进已发布产物」，
+    其中 `concurrency v0.23.3`、`logx v0.8.2` 两项**不成立**（仓根产物只依赖 `pkg v0.31.2`）——
+    这两项抬升**属于 `redis`**（`redis` 在 `redis/v0.2.6` 快照里 require `concurrency v0.23.2` + `logx v0.8.0` + `timertask v0.2.6`）。
+
+  ⚠️ **仅针对已发布面**：已发布节与已发布 Release 正文一律**不可回改**（tag 快照不可变）⇒ 只能**向前更正**；
+  **新的版本节在写入前就会被拦**（逐模块核对宣称与该模块 `go.mod` 的 require ⇒ 拦截口径当前 **0 处**）。
+
 ## [v0.1.48] — 2026-11-03
 - #217：git 网络子进程无界挂死——`sh()`/`fetch`/`ls-remote` 无限等，拖死一切后台任务
 
