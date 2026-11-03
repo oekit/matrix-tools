@@ -20,7 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
+from matrix import MODULES, SITE_REPO, ensure_clean_all, git_env, repo_dir  # noqa: E402
 
 BASE = Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))).resolve()
 HOMEPAGE_REPO = "oekit"
@@ -353,7 +353,10 @@ def main() -> None:
             msg = "docs: architecture 图重新生成（matrix-tools gen_diagram，light+dark）"
             subprocess.run(["git", "add", str(p.relative_to(d))], cwd=d, check=True)
             subprocess.run(["git", "commit", "-q", "-m", msg], cwd=d, check=True)
-            subprocess.run(["git", "push", "-q"], cwd=d, check=True)
+            # push 带 keepalive + 超时（2026-11-03：git 网络子进程一律有界，
+            # 见 matrix.git_env/sh 的同款口径——黑洞下无界挂死是全仓共病）
+            subprocess.run(["git", "push", "-q"], cwd=d, check=True,
+                           timeout=300, env=git_env())
             print(f"⬆ {label}")
 
 

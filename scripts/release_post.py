@@ -28,7 +28,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from matrix import (MODULES, SITE_REPO, bump_patch, declared_version, git_branch,  # noqa: E402
-                    is_dirty, latest_tag, repo_dir, sh, tag_exists)
+                    is_dirty, latest_tag, remote_tag_exists, repo_dir, sh, tag_exists)
 from prkit import land_pr, merge_pr, open_pr  # noqa: E402
 
 SCRIPTS = Path(__file__).resolve().parent
@@ -72,7 +72,9 @@ def main() -> None:
         if is_dirty(d) or git_branch(d) != "main":
             skipped.append(repo)
             continue
-        lt = latest_tag(repo)
+        # 版本号一律读**远端** tag（本地 tag ref 常陈旧：pull 不带 tag、浅克隆/
+        # 长期不 fetch ⇒ 用本地起跳会把「最新」写成旧版——2026-11-03 实录见 3.5 节）
+        lt = latest_tag(repo, remote=True)
         files = sync_repo(repo, write=bool(no_pr))
         if files:
             changed_repos.append(repo)
@@ -86,7 +88,7 @@ def main() -> None:
     if changed_repos and not no_pr:
         print(f"\n== 2) {len(changed_repos)} 仓版本行 PR ==")
         for repo in changed_repos:
-            lt = latest_tag(repo)
+            lt = latest_tag(repo, remote=True)  # 同上：远端 tag 才是「最新」
             d = repo_dir(repo)
             url = land_pr(d, repo, VERSION_BRANCH,
                           f"docs: 版本引用对齐 {lt}",
@@ -149,7 +151,19 @@ def main() -> None:
             print("  ⚠ oekit 仓非 main/脏，跳过（手工 gen_matrix_go + PR）")
         else:
             sh(["git", "pull", "--ff-only", "origin", "main"], oekit)
-            bom_next = bump_patch(latest_tag("oekit") or "v0.1.0")
+            # 版本号必须从**远端**最新 tag 起跳（2026-11-03 实录事故）：本地 tags
+            # 陈旧（v0.1.53）而远端已发到 v0.1.70 ⇒ bump_patch 算出撞旧号的
+            # v0.1.54 ⇒ BOM 的 `const Version` 从 v0.1.70 被写回 v0.1.54（版本
+            # 回退，#120 的 diff 实证）⇒ 一律 latest_tag(..., remote=True)。
+            bom_next = bump_patch(latest_tag("oekit", remote=True) or "v0.1.0")
+            # 机械守卫：bump 结果撞上已存在的远端 tag ⇒ fail-loud。remote=True
+            # 之后理论上不会再撞；这条专防「谁又改回本地读」——本地陈旧时
+            # bump 必撞旧号，撞号即拦，绝不把回退版本写进产物。
+            if remote_tag_exists("oekit", bom_next):
+                raise SystemExit(
+                    f"❌ BOM 版本 {bom_next} 已存在于远端——本地 tag 陈旧导致 bump "
+                    f"撞旧号？先 `git -C {oekit} fetch --tags` 对齐再跑（2026-11-03 "
+                    f"实录事故形态，见本段注释）")
 
             def edit_bom():
                 r = subprocess.run([sys.executable, str(SCRIPTS / "gen_matrix_go.py"),

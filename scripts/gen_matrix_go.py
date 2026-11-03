@@ -30,8 +30,8 @@ import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 from matrix import (  # noqa: E402
-    MODULES, repo_dir, ensure_clean_all, enable_tag_cache, prefetch_remote_tags,
-    RemoteReadError,
+    MODULES, repo_dir, ensure_clean_all, enable_tag_cache, git_env,
+    prefetch_remote_tags, RemoteReadError,
 )
 from gen_versions import _remote_tags  # noqa: E402
 
@@ -71,7 +71,7 @@ def classify_check(rc: int, out: str) -> tuple[str, str]:
     return "stale", last or "oekit: BOM 新鲜度检查失败"
 
 
-def ensure_local_tag(repo_dir_path: str, tag: str) -> None:
+def ensure_local_tag(repo_dir_path: str, tag: str, timeout: float = 120) -> None:
     """本地 clone 缺该 tag 时补取一次（best-effort，失败不抛）。
 
     为什么需要：生成器的**版本取自远端 tag**（gen_versions.latest_version →
@@ -83,14 +83,22 @@ def ensure_local_tag(repo_dir_path: str, tag: str) -> None:
     ——fetch 本身可能因网络抖动失败，不能拿它兜底（那正是 #100 的成因）。
 
     只在 tag 确实缺失时才 fetch：稳态（clone 已是最新）零额外网络开销。
+
+    **fetch 必须有界**（2026-11-03 实录）：SSH 黑洞下这个 fetch 无界挂死，
+    整个 BOM 生成/audit 门禁跟着无限等（后台任务只能超时强杀）⇒ timeout
+    默认 120s + git_env() keepalive；超时也走「失败不抛」的既有语义——
+    真因仍由 go_floor 报，但挂死变成秒级可诊断的「fetch 没取到」。
     """
     have = subprocess.run(["git", "-C", repo_dir_path, "rev-parse", "--verify", "--quiet",
                            f"refs/tags/{tag}"], capture_output=True, text=True)
     if have.returncode == 0:
         return
     # 失败不抛：真因由 go_floor 报（它的消息里带 git 的原始 stderr，更可诊断）
-    subprocess.run(["git", "-C", repo_dir_path, "fetch", "--quiet", "--tags", "origin"],
-                   capture_output=True, text=True)
+    try:
+        subprocess.run(["git", "-C", repo_dir_path, "fetch", "--quiet", "--tags", "origin"],
+                       capture_output=True, text=True, timeout=timeout, env=git_env())
+    except subprocess.TimeoutExpired:
+        pass  # 同「fetch 失败」：交由 go_floor 报真因，绝不兜底假地板
 
 
 def go_floor(repo_dir_path: str, tag: str) -> str:
