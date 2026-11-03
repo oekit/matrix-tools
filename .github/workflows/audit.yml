@@ -65,6 +65,8 @@ jobs:
         run: python3 scripts/maintenance_check_selftest.py
       - name: release_train CHANGELOG 环节自测（预校验必须真跑、多条 bullet 不丢条目）
         run: python3 scripts/release_train_selftest.py
+      - name: 发版分支名 slug 自测（分支名必须单层/唯一/含版本号，退回旧写法必须转红）
+        run: python3 scripts/release_train_slug_selftest.py
       - name: 版本节读路径自测（嵌套 tag 读承载变更描述的那一面 / 回退规则 / Release 正文承载描述）
         run: python3 scripts/changelog_section_selftest.py
       - name: 版本节读路径自测·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
