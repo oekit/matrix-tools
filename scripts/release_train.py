@@ -25,6 +25,10 @@
      或**本 train 一起发版**——嵌套模块的 `replace ... => ../` 只对本仓自身构建
      有效（Go 忽略依赖里的 replace）⇒ 父仓版本没发布就发嵌套模块，下游消费方
      直接解析失败（matrix-tools#148）
+  g. **依赖地板是最新的**：被 tag 模块的每条 github.com/oekit/* require 必须等于
+     该依赖**当前最新的已发布版本**——否则打出去的 tag 把**旧地板**焊进已发布
+     产物（消费方 `go get <mod>@<tag>` 拿到的是那个 tag 的 go.mod，抬工作树也
+     改不了它；而已发布的 tag 不可重推 ⇒ 只能发新号补 ⇒ 欠一版）（matrix-tools#212）
   0. train 前自动 fetch + ff 拉齐 main（tag 永远打在远端 main 最新基线上，
      不再依赖"记得先 pull"——并行会话推过 main 也不落空）
 """
@@ -299,6 +303,162 @@ def gate_verdict(unresolved: list[str]) -> bool:
     **确实**分别被用例 11 / 12 / 13 抓到 ⇒ 避免自测只「跑过」却从未验证过它能转红。
     """
     return bool(unresolved)
+
+
+def _semver_key(v: str) -> tuple:
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)", v)
+    return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
+
+
+def latest_published_for(repo: str, tag_prefix: str, tags=None) -> str | None:
+    """某仓在 `tag_prefix` 前缀下的**最新已发布版本**（检查面 G 的「移动靶」）。
+
+    `tag_prefix` = `""`（根模块，tag 形如 `v0.8.2`）或
+    `"<完整子路径>/"`（嵌套模块，tag 形如 `hlog/v0.1.6`）。
+
+    ⚠️ **必须按完整子路径前缀取**（不能用最后一段）：#148 自测已有同款夹具。
+    ⚠️ 读远端失败 ⇒ 抛 `RemoteReadError`（调用方 fail closed，不静默降级）。
+    """
+    if tags is None:
+        from matrix import remote_tags  # 延迟导入：便于自测注入
+        tags = remote_tags(repo)
+    best: str | None = None
+    for t in tags:
+        if not t.startswith(tag_prefix):
+            continue
+        ver = t[len(tag_prefix):]
+        if not re.fullmatch(r"v\d+\.\d+\.\d+", ver):
+            continue
+        if best is None or _semver_key(ver) > _semver_key(best):
+            best = ver
+    return best
+
+
+def planned_order_for(repo: str, specs) -> dict[tuple[str, str], int]:
+    """本次 train 待发的 **(仓, 完整 tag) → 在 `specs` 里的下标**（检查面 G 用）。
+
+    ⚠️ **必须用完整 tag，不能用「(仓, 版本号)」**：
+      · 形态与 `required_tag_form` 的产出**完全一致**（根 `v0.8.2` /
+        嵌套 `hlog/v0.1.9` / 深层嵌套 `observability/tracing/instrumentation/kitexotel/v0.7.7`）
+        ⇒ 可直接比对；
+      · 且能区分**版本号相同**的两个模块 —— 实测形态「父仓 `timertask v0.2.7` +
+        嵌套 `timertask/redis v0.2.7`」两者的版本号**相同** ⇒ 只看版本号会
+        **撞键**（后写的覆盖先写的）⇒ 判定会用到**错的**那个模块的下标。
+
+    下标 = 打 tag 的顺序（`main()` 里按 `specs` 逐个 `git tag`）。
+    """
+    return {(repo, tag): i for i, (_n, _d, tag) in enumerate(specs)}
+
+
+def check_requires_latest(repo: str, name: str, module_dir, planned_order, failures,
+                          cur_idx: int, tags_for=None) -> None:
+    """★ **检查面 G**（matrix-tools#212）：打 tag 的模块，其 oekit require
+    必须是**该依赖在打 tag 那一刻的最新已发布版本**。
+
+    **为什么这条是必需的**（#148 只查了「可解析」）：
+    #148 的判据是「每条 require 要么已发布、要么本 train 一起发」
+    ⇒ **一个带旧地板的产物照样能发出去** ⇒ 消费方 `go get <mod>@<tag>`
+    拿到的是**那个 tag 的 go.mod**（旧地板）⇒ 抬了工作树也不改变消费方拿到的内容
+    ⇒ 而已发布的 tag **不可重推** ⇒ 只能发新号补 ⇒ **欠一版**。
+    实测（2026-11-02/03）：`hlog/v0.1.8` 的快照 require `logx v0.8.1` ≠ 父仓最新
+    `v0.8.2`；`nacosimpl/v0.1.3` 的快照 require `registry v0.5.2` ≠ `v0.5.3`。
+
+    **三档判定**（不能一刀切）：
+
+    | 档 | 形态 | 判定 |
+    |---|---|---|
+    | 已是最新 | require == 最新已发布版本 | ✅ 放行 |
+    | 落后一档 | require < 最新已发布版本 | ❌ 拒绝（产物带旧地板 ⇒ tag 不可重推 ⇒ 欠一版） |
+    | 前瞻引用 | require > 最新已发布版本 | ❌ 拒绝，**除非**该依赖**在本 train 内且先于本模块打 tag** |
+
+    ⚠️ **「本 train 内」用完整 tag 作键**（`(目标仓, 完整 tag)`）：
+    `specs` 的 tag 形态与 `required_tag_form` 的产出形态**完全一致**
+    （根 `v0.8.2` / 嵌套 `hlog/v0.1.9` / 深层嵌套
+    `observability/tracing/instrumentation/kitexotel/v0.7.7`）⇒ 可直接比对。
+    ⚠️ **不能只用「(仓, 版本号)」**：实测形态「父仓 `timertask v0.2.7` + 嵌套
+    `timertask/redis v0.2.7`」两者的版本号**相同** ⇒ 只看版本号会**撞键**
+    ⇒ 必须带上模块名（完整 tag）才区分得开。
+
+    ⚠️ **顺序也要判**（#212 验收：「顺序颠倒 ⇒ 拒绝并指向顺序」）：
+    Go 不允许 require 未发布版本 ⇒ 若待发依赖的 tag **晚于**本模块创建
+    ⇒ 本模块的产物就 require 了一个**尚未发布**的版本 ⇒ 消费者解析失败。
+    ⇒ 「同 train 内一起发」只在**依赖的 tag 先于本模块创建**时合法
+    ⇒ 打 tag 顺序 = `specs` 顺序（`main()` 里按 `specs` 逐个 `git tag`）
+    ⇒ 故用 `planned_order`（键 = `(仓, 完整 tag)`，值 = 在 `specs` 里的下标）。
+
+    ⚠️ 远端读不到 ⇒ **fail closed**（读不到 ≠ 已发布，#85 口径）。
+    """
+    if tags_for is None:
+        tags_for = latest_published_for
+    gomod = module_dir / "go.mod"
+    if not gomod.exists():
+        return
+    try:
+        text = gomod.read_text(encoding="utf-8")
+    except OSError as e:  # noqa: BLE001 —— 读不到就报「判不了」，不猜
+        failures.append(f"{name}: 读不到 go.mod（{e}）⇒ require 是否最新判不了")
+        return
+    for path, ver in parse_go_mod_requires(text):
+        if not path.startswith("github.com/oekit/"):
+            continue
+        try:
+            target_repo, tag = required_tag_form(path, ver)
+        except ValueError as e:
+            failures.append(f"{name}: {e}")
+            continue
+        # tag 形如 `v0.8.2`（根）或 `hlog/v0.1.6`（嵌套）⇒ 前缀 = 去掉版本号那部分
+        prefix = tag[:-(len(ver))] if tag.endswith(ver) else ""
+        # ★ 「同 train 内一起发」的判定：**按 (目标仓, 完整 tag)** 比。
+        #   形态与 `required_tag_form` 的产出完全一致 ⇒ 可直接比对；
+        #   且能区分「父仓 timertask v0.2.7」与「嵌套 timertask/redis v0.2.7」，
+        #   而只看 (仓, 版本号) 会把这两者**撞成同一个键**。
+        dep_idx = planned_order.get((target_repo, tag))
+        if dep_idx is not None:
+            if dep_idx < cur_idx:
+                # 依赖的 tag **先于**本模块创建 ⇒ 合法形态（父仓先打 tag）
+                continue
+            if dep_idx == cur_idx:
+                # 自己 require 自己 ⇒ 无效形态（模块不该依赖自己的某个版本）
+                failures.append(
+                    f"{name}: 依赖 {path} {ver} 指向**本模块自己**"
+                    f"（{target_repo}@{tag} 就是本次要打的这个 tag）"
+                    f" ⇒ 自己 require 自己 ⇒ 无效 ⇒ 不许打这个 tag")
+                continue
+            # ⇒ 顺序颠倒：本模块的产物会 require 一个**尚未发布**的版本
+            failures.append(
+                f"{name}: 依赖 {path} {ver} 指向**本 train 内**待发布的 "
+                f"{target_repo}@{tag}，但它的**打 tag 顺序排在本模块之后**"
+                f"（本模块第 {cur_idx + 1} 个，待发依赖第 {dep_idx + 1} 个）"
+                f" ⇒ Go 不允许 require 未发布版本 ⇒ 本模块的产物会 require "
+                f"一个尚未发布的版本 ⇒ 下游解析失败"
+                f" ⇒ 请把 {target_repo} {tag} 排到 {name} **之前**"
+                f"（同 train 内父仓/依赖的 tag 必须早于本模块）")
+            continue
+        try:
+            latest = tags_for(target_repo, prefix)
+        except RemoteReadError as e:
+            failures.append(f"{name}: 远端 tag 读不到（{e}）⇒ 无法判定 "
+                            f"{target_repo} 的最新已发布版本 ⇒ 判不了，不许放行")
+            continue
+        if latest is None:
+            failures.append(f"{name}: 依赖 {path} {ver} —— 远端 {target_repo} 在前缀 "
+                            f"{prefix or '（根）'}下**没有任何已发布版本** ⇒ 判不了")
+            continue
+        if ver == latest:
+            continue  # 已是最新 ⇒ 放行
+        if _semver_key(ver) < _semver_key(latest):
+            failures.append(
+                f"{name}: 依赖 {path} {ver} **落后于最新已发布版本 {latest}**"
+                f"（远端 {target_repo} 最新已发布 {target_repo}@{prefix}{latest}）"
+                f" ⇒ 打这个 tag 会把**旧地板**写进已发布产物（tag 不可重推 ⇒ 只能发新号补）"
+                f" ⇒ 请先把 {target_repo} 的最新已发布版本（{prefix}{latest}）"
+                f"抬进本模块的 go.mod 再打 tag")
+        else:
+            failures.append(
+                f"{name}: 依赖 {path} {ver} **前瞻引用**未发布版本"
+                f"（{target_repo} 最新已发布是 {prefix}{latest}）"
+                f" ⇒ Go 不允许 require 未发布版本 ⇒ 不许打这个 tag"
+                f" ⇒ 请把该依赖**先发**（或把它放进本次 train 并**先于**本模块打 tag）")
 
 
 def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
@@ -760,10 +920,19 @@ def main():
     check_repo(root, failures)
     # 本次 train 会发布的 tag（**带仓名**）：同名的 vX.Y.Z 在别的仓可能是另一个版本
     planned_tags = {(repo, tag) for _n, _d, tag in specs}
-    for name, d, tag in specs:
+    # 本次 train 会发布的 **(仓, 完整 tag) → 在 specs 里的下标**：检查面 G 用它判
+    # 「同 train 内一起发」**并判顺序**（依赖的 tag 必须先于本模块创建）。
+    # ⚠️ 键用**完整 tag** 而非「(仓, 版本号)」——见 `planned_order_for` 的说明。
+    planned_order = planned_order_for(repo, specs)
+    for cur_idx, (name, d, tag) in enumerate(specs):
         print(f"[check] {tag}")
         check_module(repo, name, d, tag, failures)
         check_requires_resolvable(repo, name, d, planned_tags, failures)
+        # ★ **检查面 G**（matrix-tools#212）：require 必须是**最新已发布版本**
+        #   ⇒ 否则打出去的 tag 把**旧地板**焊进已发布产物（tag 不可重推 ⇒ 欠一版）。
+        #   紧贴打 tag 判（不只在建版本节时判）⇒ 「最新已发布版本」这个移动靶
+        #   在判定与打 tag 之间不会被人抢先发新版。
+        check_requires_latest(repo, name, d, planned_order, failures, cur_idx)
     if failures:
         print(f"\n❌ {len(failures)} 项检查失败，未打任何 tag：")
         for f in failures:
