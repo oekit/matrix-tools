@@ -203,6 +203,17 @@ def _ensure_tags(repo: str, wanted: list[str]) -> None:
     ⇒ 嵌套 tag 常常只在本地缺失 ⇒ 推导静默失败（host_version 返回 None）
     ⇒ 产物丢掉 hostVersion 字段，且没有任何输出说明原因（2026-10-28 实测：
     logx/hlog 的 hostVersion 消失、矩阵门禁随即判红）。
+
+    ⚠️ **wanted 必须是「候选集所需的全部 tag」，不只是被推导的那个**
+    （matrix-tools#223）：`host_version` 的候选集 = 该仓**全部父仓根 tag**
+    （`vX.Y.Z` 形态），取其中「commit 是嵌套 tag 祖先」的最新者。
+    ⇒ 只 ensure 嵌套 tag 本身时，**父仓根 tag 仍可能只在本地缺失** ⇒
+    候选集少一个 ⇒ `max()` 落到**上一个**版本 ⇒ **静默降级成旧值**
+    （实测：本地缺 `v0.8.2` ⇒ 返回 `v0.8.1`，**零告警**）。
+    ⇒ 错值比丢字段更隐蔽（丢字段门禁立刻判红，错值会被当成事实）。
+
+    ⇒ 因此这里检查的是「wanted 全部在本地」，且调用方必须把
+    **父仓根 tag 一并传进来**（见 `nested_versions`）。
     """
     d = repo_dir(repo, BASE)
     try:
@@ -218,6 +229,26 @@ def _ensure_tags(repo: str, wanted: list[str]) -> None:
                        capture_output=True, text=True, timeout=180)
     except Exception:  # noqa: BLE001 — 拿不到就由调用方报「读不到」
         pass
+
+
+def _local_tag_names(repo: str) -> set[str]:
+    """本地 clone 里真实存在的 tag 名集合（读不到 ⇒ 空集，调用方须自行判「读不到」）。"""
+    try:
+        return set(subprocess.check_output(
+            ["git", "-C", str(repo_dir(repo, BASE)), "tag", "--list"], text=True,
+            stderr=subprocess.DEVNULL).split())
+    except Exception:  # noqa: BLE001 — git 不可用时不该让生成器崩
+        return set()
+
+
+def _remote_root_tags(repo: str) -> list[str]:
+    """远端该仓的**父仓根 tag**（`vX.Y.Z` 形态，无 "/"）——候选集的全集。
+
+    这是「候选集应该有多大」的**权威答案**：远端 tag 列表由 `matrix.remote_tags`
+    读（canonical HTTPS 优先，读不到抛 RemoteReadError ⇒ 绝不用本地 tag 顶替）。
+    """
+    return [t for t in _remote_tags(repo)
+            if "/" not in t and re.fullmatch(r"v\d+\.\d+\.\d+", t)]
 
 
 def _local_tag_meta(repo: str) -> dict[str, tuple[str, int]]:
@@ -276,7 +307,8 @@ def _ver_key(v: str) -> tuple:
     return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 
 
-def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -> str | None:
+def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]],
+                 expected_roots: list[str] | None = None) -> str | None:
     """嵌套发布对应的**父仓版本**（判据：commit 祖先关系，客观事实）。
 
     语义：父仓根 tag 的 commit 是该嵌套发布 commit 的祖先 ⇒ 该嵌套发布发生在
@@ -289,6 +321,16 @@ def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -
     限制（写在这里，也写进注释）：只能表达「**现在**仍成立」的对应关系——
     嵌套模块被移除后又重新加回时，历史对应关系会与当前源码树不一致；本字段
     描述的是发布历史的事实，不是当前源码树的事实。
+
+    ★ **完备性断言**（matrix-tools#223）：`expected_roots` 是**远端**该仓的
+    父仓根 tag 全集（权威）。本地 `meta` 必须**覆盖**它，否则候选集不完整 ⇒
+    `max()` 会落到**上一个**版本 ⇒ **静默降级成旧值**（错值比丢字段更隐蔽：
+    丢字段门禁立刻判红，错值会被当成事实）。
+    ⇒ 覆盖不全时**一律 fail closed**（返回 None + 显式告警），**绝不**返回旧值。
+
+    ⚠️ 为什么「远端有、本地缺」必须算**不完备**而不是「取次新」：
+    候选集少一个 tag，**可能**正好少了「正确答案那个」——本地缺 `v0.8.2` 时
+    返回 `v0.8.1`，而正确答案是 `v0.8.2` ⇒ 这不是「退化」，是**错**。
     """
     sha = meta.get(nested_tag, (None, 0))[0]
     if not sha:
@@ -300,6 +342,20 @@ def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]]) -
         print(f"⚠️ 嵌套 tag {nested_tag} 在本地 clone 里找不到 ⇒ 无法推导对应父仓版本"
               f"（本地缺 tag ⇒ 请 `git fetch --tags`；本地产物将缺 hostVersion）")
         return None
+    # ★ **完备性断言**（#223）：本地候选集必须覆盖远端父仓根 tag 全集。
+    #   不覆盖 ⇒ 候选集缺项 ⇒ max() 可能落到次新值 ⇒ **静默降级成错值**。
+    #   ⇒ 这里 fail closed（返回 None + 显式告警），把「缺 hostVersion 字段」
+    #   这个**可被门禁抓到**的形态，换掉「字段在、值是错的」这个抓不到的形态。
+    if expected_roots is not None:
+        local_roots = {n for n in meta
+                       if "/" not in n and re.fullmatch(r"v\d+\.\d+\.\d+", n)}
+        missing = sorted(set(expected_roots) - local_roots)
+        if missing:
+            print(f"⚠️ {repo}: 本地 clone 缺父仓根 tag {missing} ⇒ "
+                  f"hostVersion 的候选集不完整 ⇒ **拒绝推导**（返回 None，"
+                  f"本地产物将缺 hostVersion 字段）"
+                  f"——否则会静默降级成旧值（错值比缺字段更隐蔽）")
+            return None
     cands: list[tuple[tuple, tuple, str]] = []
     for name, (s, ct) in meta.items():
         if "/" in name or not re.fullmatch(r"v\d+\.\d+\.\d+", name):
@@ -326,6 +382,16 @@ def nested_versions(repo: str) -> list[dict]:
         return []
     meta = _local_tag_meta(repo)
     out: list[dict] = []
+    # ★ **候选集全集**（#223）：`host_version` 的候选集 = 该仓**全部父仓根 tag**
+    #   ⇒ 必须 ensure 它们全在本地，否则候选集缺项 ⇒ max() 落到次新值
+    #   ⇒ **静默降级成旧值**（实测：缺 v0.8.2 ⇒ 返回 v0.8.1，零告警）。
+    #   这里用**远端** tag 列表做全集（权威读，读不到会抛而不是用本地顶替）。
+    try:
+        expected_roots = _remote_root_tags(repo)
+    except Exception as e:  # noqa: BLE001 — 远端读不到 ⇒ 判据不可信 ⇒ 不猜
+        print(f"⚠️ {repo}: 远端 tag 读不到（{e}）⇒ 无法确定 hostVersion 的候选集全集"
+              f" ⇒ 本地产物将缺 hostVersion 字段")
+        expected_roots = None
     for p, v in sorted(by_path.items()):
         # 已被撤回的嵌套模块（tag 还在、目录已删）**不登记**——矩阵说的是
         # 「现在可按需取用的东西」，登记一个已废弃的模块会让下游装到废弃品
@@ -338,9 +404,11 @@ def nested_versions(repo: str) -> list[dict]:
         # 而 ls-remote 只给 tag 名、给不出 commit ⇒ 必须读本地 git。
         # 本地 clone 若缺 tag（`git pull` 不带 --tags ⇒ 嵌套 tag 常常缺），
         # 推导会**静默失败**（返回 None）⇒ 产物丢掉 hostVersion 字段。
-        _ensure_tags(repo, [nested_tag])
+        # ⚠️ wanted 必须含**父仓根 tag 全集**（#223）：候选集 = 父仓根 tag，
+        # 只 ensure 嵌套 tag ⇒ 父仓根 tag 仍可能缺 ⇒ 候选集缺项 ⇒ 静默降级。
+        _ensure_tags(repo, [nested_tag] + (expected_roots or []))
         meta = _local_tag_meta(repo)
-        hv = host_version(repo, nested_tag, meta)
+        hv = host_version(repo, nested_tag, meta, expected_roots=expected_roots)
         if hv:
             item["hostVersion"] = hv
         out.append(item)
