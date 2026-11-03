@@ -65,6 +65,53 @@ def check(cond: bool, msg: str):
         issues.append(msg)
 
 
+# ---------- 退出码契约（CI 门禁按**退出码**判，不按报告文本判） ----------
+#
+#   0 = 通过（无漂移；报告里有「✓ 矩阵审计通过」）
+#   1 = **有漂移**（issues 非空；报告里有 ❌ 行）
+#   2 = **基础设施失败**（脚本崩了 / 门禁不可用）——**不是**「零漂移」
+#
+# 为什么必须把 2 单列（实测 2026-11-03）：Python 对**未捕获异常**的退出码
+# 就是 **1**，而 1 在本脚本里表示「有漂移」⇒ 两者撞码 ⇒ CI 分不清
+# 「真漂移」与「脚本崩了」。旧门禁更糟：audit.py 一崩，报告就是 0 字节 ⇒
+# `grep -c '❌'` 得 0 ⇒ 「Fail on drift」步骤不触发 ⇒ **PR 门禁判成
+# 零漂移全绿**（假绿）。⇒ 未捕获异常统一映射到 2，并打出定位信息。
+def _audit_crash_handler(exc_type, exc, tb):
+    """未捕获异常 ⇒ 基础设施失败（退出码 2），**不是**「零漂移」。
+
+ 崩溃前已积累的 issues 也要打出来：否则报告是空的 ⇒ 门禁虽然靠退出码
+ 判红了，但人看不出「在崩之前已经发现了什么」。
+    """
+    import traceback
+    traceback.print_exception(exc_type, exc, tb)
+    try:
+        if issues:
+            print(f"审计中断前已发现 {len(issues)} 项漂移：")
+            for _i in issues:
+                print(f"  ❌ {_i}")
+        print(f"❌ 审计因异常中断（{exc_type.__name__}: {exc}）"
+              f"——基础设施失败，不是「零漂移」")
+    except Exception:  # noqa: BLE001 - 报告失败也不能吞掉退出码
+        pass
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os._exit(2)
+
+
+sys.excepthook = _audit_crash_handler
+
+
+def gate_unavailable(what: str, e: BaseException) -> str:
+    """门禁不可用 ⇒ **判红**（口径与 gen_matrix_go.classify_check 一致）。
+
+    为什么（实测 2026-11-03）：这三道门禁的**异常路径**此前只 ⚠ 不判红
+    ⇒ 该道门禁**整条消失**（读不到 = 没结论），而报告照样印
+    「✓ 矩阵审计通过」——「判不了」被当成「没问题」（#79 的同一条纪律：
+    判不了 ≠ 通过）。
+    """
+    return f"{what}不可用：{e}——该门禁**未核对**（判不了 ≠ 通过）"
+
+
 def _read_remote(repo: str) -> str | None:
     """真正去读某仓的远端最新 tag（真读网络的那一步）。"""
     return latest_tag(repo, BASE, remote=REMOTE_TAGS)
@@ -257,8 +304,20 @@ def check_breaking_oracle():
         keys = [_oracle_norm(it.get("line", "")) for it in items]
         vers = [it.get("version", "") for it in items]
         sources = [(root / "CHANGELOG.md", "")]
-        for gomod in sorted(root.glob("*/go.mod")):
-            sources.append((gomod.parent / "CHANGELOG.md", f"{gomod.parent.name}/"))
+        # ⚠️ **必须扫到任意深度**（实测 2026-11-03）：旧写法 `*/go.mod` 只扫**一层**
+        # ⇒ 深度 4 的 kitexotel（observability/tracing/instrumentation/kitexotel）
+        # 的**独立 CHANGELOG** 既不在解析器（gen_versions 同样只扫一层）里、
+        # 也不在本 oracle 里 ⇒ 两边**同款深度口径** ⇒ 共同失明
+        # （违背本文件「判据不复用被检对象逻辑」的纪律）。
+        # 前缀 = **相对仓根的完整子路径**（与嵌套 tag 前缀同形，如
+        # `observability/tracing/instrumentation/kitexotel/v0.7.7`）。
+        for gomod in sorted(root.glob("**/go.mod")):
+            if gomod.parent == root:
+                continue          # 仓根本身不是嵌套模块
+            if ".git" in gomod.parts or "vendor" in gomod.parts:
+                continue          # 依赖仓的 vendor 不是本仓的嵌套模块
+            _sub = gomod.parent.relative_to(root).as_posix()
+            sources.append((gomod.parent / "CHANGELOG.md", f"{_sub}/"))
         for path, _prefix in sources:
             if not path.exists():
                 continue
@@ -389,7 +448,16 @@ if REMOTE_TAGS:
 # ---------- 模块仓 ----------
 for _i, repo in enumerate(MODULES, 1):
     progress(f"阶段 2/7 逐仓检查 {_i}/{len(MODULES)} {repo}")
-    d = repo_dir(repo, BASE)
+    # ⚠️ **读不到仓 ⇒ 判红**（实测 2026-11-03）：旧写法让 FileNotFoundError
+    # 冒泡 ⇒ 脚本崩在**第一仓** ⇒ 报告 0 字节 ⇒ CI 的 `grep -c '❌'` 得 0
+    # ⇒ 「Fail on drift」步骤不触发 ⇒ **PR 门禁判成零漂移全绿**（假绿）。
+    # 现在：读不到 = 该仓**未被核对** ⇒ 记一条漂移（口径与 #79 一致：
+    # 「判不了」≠「没问题」），并继续跑后面的门禁。
+    try:
+        d = repo_dir(repo, BASE)
+    except FileNotFoundError as e:
+        check(False, f"{repo}: 仓检出失败（{e}）——该仓未被核对，不能当通过")
+        continue
     # 0) Go 地板三层口径 + go.mod/CI 成对
     check_go_floor_pairing(repo, d)
     # 1) module 行
@@ -516,7 +584,9 @@ try:
                 if len(_api_warn) > 6:
                     print(f"      · …… 另 {len(_api_warn) - 6} 条同类")
         except Exception as e:  # noqa: BLE001
-            print(f"  ⚠ llms.txt 标识符判据不可用：{e}")
+            # ⚠️ **不可用 ⇒ 判红**（实测 2026-11-03）：旧写法只 ⚠ ⇒ 这道门禁
+            # **整条消失**（读不到 = 没结论），而报告照样印「✓ 矩阵审计通过」。
+            issues.append(gate_unavailable("llms.txt 标识符判据", e))
         # oracle C：已发布 versions.json 的 nested 对应关系必须与推导一致
         if _nested_derived:
             _vf = site / "docs" / "public" / "versions.json"
@@ -999,8 +1069,10 @@ try:
             print(f"      · {s}")
         if len(rel_skipped) > 5:
             print(f"      · …… 另 {len(rel_skipped) - 5} 仓同类")
-except Exception as e:  # noqa: BLE001 对账不可用不阻塞其余门禁
-    print(f"  ⚠ release 对账不可用：{e}")
+except Exception as e:  # noqa: BLE001
+    # ⚠️ **不可用 ⇒ 判红**（实测 2026-11-03）：旧写法只 ⚠ ⇒ 这道门禁**整条消失**
+    # （读不到 = 没结论），而报告照样印「✓ 矩阵审计通过」——假绿。
+    issues.append(gate_unavailable("release 对账", e))
 
 # oekit BOM（github.com/oekit/oekit）新鲜度：快照必须与各仓远端 tag 一致，
 # 否则 `go get github.com/oekit/oekit@latest` 拉到的是旧组合。
@@ -1017,7 +1089,8 @@ try:
     if _kind != "ok":
         issues.append(_msg)
 except Exception as e:  # noqa: BLE001
-    print(f"  ⚠ BOM 检查跳过：{e}")
+    # ⚠️ **不可用 ⇒ 判红**（口径与 classify_check 一致：判不了 ≠ 通过）
+    issues.append(gate_unavailable("BOM 检查", e))
 
 # ---------- 报告 ----------
 progress("阶段 7/7 出报告")

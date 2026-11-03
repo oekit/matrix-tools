@@ -365,6 +365,111 @@ def _apply_note_mutation():
     return restore
 
 
+def release_reconciliation_assertions() -> list[str]:
+    """缺陷3（实测 2026-11-03）：**Release 创建失败仍打印「✓ train 完成」并 exit 0**
+    ⇒ 「tag 已推但 Release 没建」在自动化口径下是**绿的**（发版链假绿）。
+
+    旧实现：`create_releases` 失败只 ⚠（且**不返回失败数**）⇒ `main()` 随后
+    **无条件**打印「✓ train 完成：N 个 tag 已推送」并 exit 0。
+
+    三条判据（缺一条就是缺陷）：
+      ① `create_releases` 必须**统计并返回失败数**（>0）；
+      ② 收尾必须走 `report_train_result`：有失败 ⇒ **退出码非 0** 且
+         **不许**打印「✓ train 完成」；无失败 ⇒ 照常打印并正常退出；
+      ③ `main` 里**不许**再直接打印「✓ train 完成」（旧写法无条件打印）。
+
+    ★ 无副作用、不联网：用**假 gh**（临时目录里的桩脚本）替掉真 gh。
+    """
+    failures: list[str] = []
+    import types as _types
+
+    def _fake_gh(td: str, rc: int) -> None:
+        bindir = Path(td) / "bin"
+        bindir.mkdir(parents=True, exist_ok=True)
+        gh = bindir / "gh"
+        gh.write_text(f"#!/bin/sh\necho 'gh: could not create release: HTTP 502' >&2\nexit {rc}\n",
+                      encoding="utf-8")
+        gh.chmod(0o755)
+        os.environ["PATH"] = str(bindir) + os.pathsep + os.environ.get("PATH", "")
+
+    def _call_create_releases(gh_rc: int) -> object:
+        fake_gr = _types.ModuleType("gen_releases")
+        fake_gr.build_notes = lambda root, tag, repo: "notes"   # noqa: E731 - 桩
+        saved_gr = sys.modules.get("gen_releases")
+        sys.modules["gen_releases"] = fake_gr
+        old_path = os.environ.get("PATH", "")
+        try:
+            with tempfile.TemporaryDirectory() as td:
+                _fake_gh(td, gh_rc)
+                root = Path(td) / "repo"
+                root.mkdir()
+                return release_train.create_releases(
+                    "demo", root, [("main", root, "v0.1.58")])
+        finally:
+            os.environ["PATH"] = old_path
+            if saved_gr is not None:
+                sys.modules["gen_releases"] = saved_gr
+            else:
+                sys.modules.pop("gen_releases", None)
+
+    # ① gh 失败 ⇒ 必须统计出失败数（=1）
+    failed = _call_create_releases(1)
+    if failed != 1:
+        failures.append(f"用例6a：gh 创建失败时 create_releases 必须返回失败数 1（实得 {failed!r}）"
+                        "——旧实现失败只 ⚠ 不计数 ⇒ main 照印「✓ train 完成」且 exit 0（假绿）")
+
+    # ② gh 成功 ⇒ 失败数必须是 0（不许把成功也判成失败）
+    ok = _call_create_releases(0)
+    if ok != 0:
+        failures.append(f"用例6b：gh 创建成功时 create_releases 必须返回 0（实得 {ok!r}）")
+
+    # ③ 有失败 ⇒ 退出码非 0，且**不许**打印「✓ train 完成」
+    buf = io.StringIO()
+    code = None
+    raised = False
+    with redirect_stdout(buf):
+        try:
+            release_train.report_train_result([("main", None, "v0.1.58")], 1)
+        except SystemExit as e:
+            raised = True
+            code = e.code
+    out = buf.getvalue()
+    if not raised or code not in (1, 2):
+        failures.append(f"用例6c：Release 创建失败时收尾必须以**非 0 退出码**结束"
+                        f"（实得 raised={raised} code={code!r}）——假绿的核心形态")
+    if "✓ train 完成" in out:
+        failures.append(f"用例6c：Release 创建失败时**不许**打印「✓ train 完成」：{out!r}")
+
+    # ④ 无失败 ⇒ 打印「✓ train 完成」且**不**退出（不许误伤正常发版）
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        try:
+            release_train.report_train_result([("main", None, "v0.1.58")], 0)
+        except SystemExit as e:
+            failures.append(f"用例6d：没有 Release 失败时不得退出（实得 code={e.code!r}）")
+    if "✓ train 完成" not in buf.getvalue():
+        failures.append(f"用例6d：无失败时必须打印「✓ train 完成」：{buf.getvalue()!r}")
+
+    # ⑤ 结构：main 必须走 report_train_result，且「✓ train 完成」只在它里面
+    tree = ast.parse(Path(release_train.__file__).read_text(encoding="utf-8"))
+    main_fn = next((n for n in ast.walk(tree)
+                    if isinstance(n, ast.FunctionDef) and n.name == "main"), None)
+    if main_fn is None:
+        failures.append("用例6e：release_train.py 里找不到 main()")
+        return failures
+    calls_report = any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
+                       and n.func.id == "report_train_result"
+                       for n in ast.walk(main_fn))
+    if not calls_report:
+        failures.append("用例6e：main 必须把 Release 失败数交给 report_train_result 判红")
+    has_literal = any(isinstance(n, ast.Constant) and isinstance(n.value, str)
+                      and "✓ train 完成" in n.value for n in ast.walk(main_fn))
+    if has_literal:
+        failures.append("用例6e：main 里不许再直接打印「✓ train 完成」"
+                        "（旧写法无条件打印 ⇒ Release 没建也是绿的）")
+    return failures
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -514,6 +619,7 @@ def main() -> int:
     failures.extend(issue_binding_assertions())
     failures.extend(nested_binding_assertions())
     failures.extend(nested_note_assertions())
+    failures.extend(release_reconciliation_assertions())
 
     if failures:
         print("✗ release_train CHANGELOG 环节自测未过：")
@@ -579,6 +685,39 @@ def main() -> int:
                 print("   -", f)
         raise SystemExit(1)
     print("✓ 变异精确性：只让用例5 转红，其余用例保持原状")
+
+
+    # 变异自证（缺陷3）：**Release 创建失败必须判红** ⇒ 两条变异都要转红
+    #   ⚠️ 变异必须在断言运行期间保持生效 ⇒ 断言跑完再恢复。
+    missed3: list[str] = []
+    saved_cr = release_train.create_releases
+    saved_rt = release_train.report_train_result
+    try:
+        # 变异A：create_releases 退回旧行为（失败只告警，**不返回失败数**）
+        release_train.create_releases = lambda repo, root, created: None   # noqa: E731
+        f = release_reconciliation_assertions()
+        if not f:
+            missed3.append("create_releases 不统计失败数")
+            print("✗ 变异「create_releases 不统计失败数」没有被抓住——用例6 没有牙齿")
+        else:
+            print(f"✓ 变异「create_releases 不统计失败数」被抓住（{len(f)} 条断言转红）")
+
+        # 变异B：收尾退回旧行为（**无条件**打印「✓ train 完成」，不判红）
+        release_train.create_releases = saved_cr
+        release_train.report_train_result = (           # noqa: E731
+            lambda created, rel_failed: print(f"\n✓ train 完成：{len(created)} 个 tag 已推送"))
+        f = release_reconciliation_assertions()
+        if not f:
+            missed3.append("收尾无条件打印「✓ train 完成」")
+            print("✗ 变异「收尾无条件打印「✓ train 完成」」没有被抓住——用例6 没有牙齿")
+        else:
+            print(f"✓ 变异「收尾无条件打印「✓ train 完成」」被抓住（{len(f)} 条断言转红）")
+    finally:
+        release_train.create_releases = saved_cr
+        release_train.report_train_result = saved_rt
+    if missed3:
+        raise SystemExit(1)
+    print("✓ Release 对账失败判红 变异自证 2/2 全部转红")
 
 
 if __name__ == "__main__":

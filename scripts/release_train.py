@@ -995,6 +995,7 @@ def main():
     import inflight
     inflight.claim(repo, "release_train " + " ".join(t for _, _, t in specs))
     created = []
+    rel_failed = 0
     try:
         for name, d, tag in specs:
             msg = f"{repo} {tag}"
@@ -1004,22 +1005,46 @@ def main():
         for name, d, tag in created:
             subprocess.run(["git", "-C", str(d), "push", "origin", tag], check=True)
             print(f"[push] {tag}")
-        create_releases(repo, root, created)
+        rel_failed = create_releases(repo, root, created)
     finally:
         inflight.release(repo)
+    report_train_result(created, rel_failed)
+
+
+def report_train_result(created: list, rel_failed: int) -> None:
+    """train 收尾：**有 Release 创建失败 ⇒ 判红**（退出码非 0），且**不许**
+    打印「✓ train 完成」。
+
+    为什么（实测 2026-11-03）：旧实现里 `create_releases` 失败只 ⚠、
+    `main()` 随后**无条件**打印「✓ train 完成：N 个 tag 已推送」并 exit 0
+    ⇒ 「tag 已推但 Release 没建」在自动化口径下是**绿的**（只靠事后手跑
+    `gen_releases.py --apply` 补齐）⇒ 发版链的假绿。
+    ⇒ 现在：Release 没建出来 = **本次发版没完成** ⇒ 红。
+    """
+    if rel_failed:
+        print(f"\n❌ {rel_failed} 个 GitHub Release 创建失败：tag 已推送但 Release 没建"
+              f"（跑 gen_releases.py --apply 补齐）——本次 train **不算完成**")
+        sys.exit(1)
     print(f"\n✓ train 完成：{len(created)} 个 tag 已推送")
 
 
-def create_releases(repo: str, root, created: list) -> None:
+def create_releases(repo: str, root, created: list) -> int:
     """tag → GitHub Release 对账（.github#8）：notes=CHANGELOG 同版本小节 + 该 tag
     go.mod 的矩阵依赖地板。嵌套模块 tag 恒 --latest=false，根模块 tag 成为 latest。
-    失败只告警不回滚（tag 已推送；gen_releases.py --apply 可幂等补齐）。"""
+
+    **返回失败个数**（>0 ⇒ 本次 train 不算完成 ⇒ 调用方必须判红）。
+    失败不回滚（tag 已推送，撤不回来；`gen_releases.py --apply` 可幂等补齐），
+    但**不许**当成功：旧实现失败只 ⚠、调用方随后照印「✓ train 完成」并 exit 0
+    ⇒ 「tag 已推但 Release 没建」在自动化口径下是**绿的**（实测 2026-11-03 的
+    假绿形态：假 gh exit 1 ⇒ 仍打印「✓ train 完成」且退出码 0）。
+    """
     import os
     import tempfile
 
     sys.path.insert(0, str(Path(__file__).parent))
     from gen_releases import build_notes  # noqa: E402
 
+    failed = 0
     for name, _d, tag in created:
         path = None
         try:
@@ -1034,12 +1059,14 @@ def create_releases(repo: str, root, created: list) -> None:
                 args.append("--latest=false")
             r = subprocess.run(["gh", *args], capture_output=True, text=True)
             if r.returncode != 0:
+                failed += 1
                 print(f"[release] ⚠ {tag}: {(r.stderr or r.stdout).strip()[:200]}（gen_releases.py --apply 可补齐）")
             else:
                 print(f"[release] {tag}")
         finally:
             if path:
                 os.unlink(path)
+    return failed
 
 
 if __name__ == "__main__":

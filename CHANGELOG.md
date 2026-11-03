@@ -4,6 +4,96 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.0] — 2026-11-03
+- **判据不可用即红**：审计/门禁在「读不到远端 / 推导不出 / 崩了」时从「静默放过」改为判红
+
+  **为什么这是 breaking**：此前多条门禁在判据失效时**照旧判绿** ⇒ 矩阵对下游说谎。
+  本版把「判不了」与「通过」严格分开 ⇒ 门禁变严 ⇒ 按 0.x 口径走 minor。
+
+  **① audit 崩溃不再等于「零漂移」**（`.github/workflows/audit.yml` + `scripts/audit.py`）
+  审计脚本异常退出时报告是空的 ⇒ CI 的 `grep -c '❌'` 数出 0 ⇒ 门禁判**绿**。
+  现在：审计自身崩溃 ⇒ 退出码 **2**（与「有漂移」的 1 区分）⇒ CI 判**红**；
+  CI 侧改为**判退出码**（0=通过 / 1=真漂移 / 2=基础设施失败）并加
+  `grep -q '✓ 矩阵审计通过'` 兜底；且「审计没跑完」时**不许**把上一轮的真实漂移 issue 关掉。
+
+  **② 三处门禁不可用从只告警改为判红**（`scripts/audit.py`）
+  release 对账不可用 / BOM 检查跳过 / llms.txt 标识符判据不可用 ⇒ 原先只 `⚠` 不阻断，
+  现在一律计入 issues（口径与既有的 `classify_check` 一致：**判不了 ≠ 通过**）。
+
+  **③ 发版单元门禁：远端读不到 ⇒ 不再整段跳过**（`scripts/verify_release_units.py`）
+  原实现里 `remote_roots is None`（远端 tag 读不到）就**跳过完备性核验**，
+  注释承诺的「不静默放过」与实现相反 ⇒ 现在一律 fail closed：
+  标 `hostUnverifiable` 且**不产出** hostVersion。
+
+  **④ 发版单元门禁：反向差集与 None 判定**（`scripts/verify_release_units.py`）
+  产物里有、推导里没有的嵌套模块（因本地 tag 读不到而被 continue 掉）曾被静默放过 ⇒
+  现在点名报「未能核验」；`hostVersion`/`latest` 推导为 None 且未标未能核验 ⇒ 判红。
+
+  **⑤ 消费面探针：根模块装不上不再静默放过**（`scripts/consumer_probe.py`）
+  24 个根模块里任何一个装不上（代理抖动/网络）时，探针仍打印「✅ 消费面承诺全部成立」⇒
+  现在根模块与嵌套模块同一判据：装不上 ⇒ 一律报。
+
+  **⑥ 地板声明检查：读不到 origin/main 时如实报「未扫描」**（`scripts/floor_claim_check.py`）
+  原实现静默返回空清单 ⇒ 嵌套面覆盖率 0 且无任何告警 ⇒ 现在该仓记入 `nested_unreadable`。
+
+  **⑦ 地板声明检查：以矩阵登记表为期望集合**（`scripts/floor_claim_check.py`）
+  扫描范围此前取决于工作区目录 ⇒ CI 里少 clone 一个仓 ⇒ 该仓断言一条都不查、报告照样干净
+  ⇒ 现在按 `matrix.MODULES` 逐仓输出「已扫 / 未扫描」，末尾结论在有未扫描仓时
+  降级为「未覆盖全体」。
+
+  **⑧ 发版链：Release 没建出来不许报成功**（`scripts/release_train.py`）
+  `gh release create` 失败时只打印 `⚠` ⇒ train 仍打印「✓ train 完成」且退出码 0
+  ⇒ 现在统计失败数，>0 ⇒ 退出码非 0 且不打印成功。
+
+  **依据**：全部为实测复现（每个缺陷都有独立反例夹具 + 变异自证：把实现改回旧写法，
+  对应自测**精确转红**，改回来即通过）。
+
+- **BOM 快照带 breaking 索引**：`oekit` 仓的 BOM 产物从「只钉版本」升级为「钉版本 + 声明每个模块自己的破坏性变更」（BREAKING）
+
+  **为什么是 breaking**：矩阵里有 **108 条** breaking 记录（19 个仓），而 BOM 产物
+  （`matrix.go`）里 breaking 信息**为零** ⇒ `go get github.com/oekit/oekit@latest` 的消费方
+  **无法知道这组版本里哪些模块 breaking 了** ⇒ 矩阵对下游说谎。
+  现在每个模块自带 `Breaking []Breaking`（嵌套模块只归自己，不再折叠进宿主），
+  并新增 `BreakingOf` / `HasBreaking` / `BreakingModules` 三个查询 API。
+
+  **迁移位**：本条对**下游 Go 消费方**是编译期破坏（见下条）；对工具链/站点口径是纯增量。
+
+- **BOM 的导出面降级为不可变**（BREAKING）：`oekit.Matrix` / `oekit.Versions` 由**导出的可变全局**改为**返回副本的函数**
+
+  **为什么是 breaking**：`Versions` 是包级导出 map、`VersionOf` 直接读它无锁 ⇒ 实测
+  `go run -race` 报 **DATA RACE**（`runtime.mapaccess2_faststr()` vs `oekit.VersionOf`）
+  ⇒ 消费方并发读写会 `fatal error: concurrent map read and map write`（**不可 recover，直接崩进程**）；
+  `Matrix` 同样可被消费方 `append`/改写元素。
+  ⇒ 现在只暴露 `Matrix()` / `Versions()`（返回副本）与 `VersionOf`（不变），并发读干净。
+
+  **迁移位**：`oekit.Versions["github.com/oekit/pkg"]` → `oekit.Versions()["github.com/oekit/pkg"]`；
+  `len(oekit.Matrix)` → `len(oekit.Matrix())`；无键字面量 `oekit.Module{...}` → 改用键名字面量
+  （结构体新增了 `Breaking` 字段）。
+
+- **fix(gen_matrix_go)**：嵌套模块的 Go 地板取错文件 ⇒ 对外报错的 go 地板**比真实低报**
+
+  此前 `go_floor()` 用 `git show {tag}:go.mod`，而嵌套 tag 形如 `obs/v0.2.14` ⇒ 取到的是
+  **宿主仓根目录**的 go.mod（`module github.com/oekit/bootstrap`, go 1.24.0），不是 `obs/go.mod`
+  （`module github.com/oekit/bootstrap/obs`, go 1.26.0）⇒ 下游用 Go 1.25 构建会在该模块处直接失败。
+  全量 35 条里**仅 bootstrap/obs、timertask/redis 两条不符**（其余 9 个嵌套恰好宿主与嵌套同版本，掩盖了 bug）。
+  现在按 tag 前缀读嵌套自己的 go.mod，并新增 **proxy `.mod` 复核**（不符 ⇒ 判红；读不到 ⇒ 记「未核对」不判红，
+  不拿网络抖动当漂移）。
+
+- **fix(gen_versions)**：嵌套 CHANGELOG 只扫一层 ⇒ **深度 4 的 kitexotel 独立 CHANGELOG 脱离判据**
+
+  `glob("*/go.mod")` 只给出一层（kitex 实测只给 `istio/go.mod`，`glob("**/go.mod")` 还给
+  `observability/tracing/instrumentation/kitexotel/go.mod`）⇒ 解析器与「独立 oracle」同款深度口径、
+  **共同失明**（违背 audit.py 自己写的「判据不复用被检对象逻辑」纪律）。
+  现在改全深度 + 前缀用**相对仓根的完整子路径**（与嵌套 tag 前缀同形），且站点 **nested 条目自带 breakingIndex**
+  （此前 nested 完全没有这个键 ⇒ 嵌套模块的 breaking 被折叠进宿主，下游定位不到具体模块）。
+
+- **fix(gen_versions)**：仓/依赖读不到时该模块**从产物整个消失**且无任何告警 ⇒ 现在写 stderr 明确告警
+  （点名仓库 + 原因 + 影响面），不再静默 `continue` / 静默 `deps=[]`。
+
+  **依据**：全部为实测复现（每个修复都有独立反例夹具 + 变异自证：把实现改回旧写法，
+  对应自测**精确转红**，改回来即通过）。BOM 产物实测：breaking 从 **0 条 → 108 条**，
+  `bootstrap/obs` 与 `timertask/redis` 的 Go 地板 `1.24.0 → 1.26.0`。
+
 ## [v0.1.58] — 2026-11-03
 - 规范：把「嵌套模块发版」的**四条**约束写进 README 的「发版链（顺序不可反）」小节
 

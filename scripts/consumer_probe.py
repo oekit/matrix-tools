@@ -29,6 +29,10 @@
    数据推翻：那样查等于把嵌套模块的存在意义当成违规。）
 3. **兄弟隔离**：消费某个嵌套单元时，不该把同仓的另一个嵌套单元拖进来。
 4. **一次拉齐**：消费伞仓 `oekit` 时，全部 32 个发版单元必须同时在模块图里。
+5. **装得上**（其余判据的**前置条件**）：消费方 `go get <unit>@latest` 必须成功。
+   装不上（代理抖动 / 网络 / tag 缺失）时**所有**隔离判据都没有结论 ⇒ 必须**报出来**
+   ——**读不到 ≠ 干净**。旧实现里这条只挂在嵌套模块上 ⇒ 24 个**根模块**任何一个
+   装不上，脚本照样打印「✅ 消费面承诺全部成立」（假绿）。
 
 ## 期望值从哪来
 
@@ -202,10 +206,15 @@ def check_parent_isolation(child_unit: str, parent_res: dict, base: str) -> list
 
 
 def check_sibling_isolation(unit: str, res: dict) -> list[str]:
-    """兄弟隔离：消费某个嵌套单元时，不该把同仓的另一个嵌套单元拖进来。"""
+    """兄弟隔离：消费某个嵌套单元时，不该把同仓的另一个嵌套单元拖进来。
+
+    ⚠️ 「装不上」**不由本函数判**（统一由 `check_installable` 判）：装不上时消费方
+       模块图是空的，兄弟泄漏**无从谈起**（无结论 ≠ 通过）⇒ 归到统一判据报，
+       免得同一个故障在两条判据里各报一次。
+    """
     problems: list[str] = []
     if not res.get("ok"):
-        return [f"{unit}: 消费方装不上（{res.get('error', '')[:160]}）"]
+        return []
     paths = _paths(res)
     parent = unit.split("/")[0]
     for sib in _nested_units():
@@ -231,16 +240,58 @@ def check_bom_coverage(bom_res: dict) -> list[str]:
     return []
 
 
+def check_installable(unit: str, res: dict) -> list[str]:
+    """装得上：消费方 `go get <unit>@latest` 必须成功。
+
+    ★ **口径纪律：读不到 ≠ 干净**。装不上（代理抖动 / 网络 / tag 缺失）时，
+      **所有**隔离判据都没有结论 ⇒ 必须**报出来**，不能当成「没问题」。
+
+      ⚠️ 旧实现里这条判据**只挂在嵌套模块上**（经 `check_sibling_isolation` 的
+         `if not res.get("ok")` 分支）⇒ **24 个根模块**任何一个装不上时，
+         `check_zero_third_party` 里那句「装不上已在别处报」是**假话**
+         ⇒ consumer_probe 照样打印「✅ 消费面承诺全部成立」（假绿）。
+      ⇒ 现在装不上对**所有**单元一视同仁（根模块与嵌套模块一致）。
+    """
+    if not res.get("ok"):
+        return [f"{unit}: 消费方装不上（{(res.get('error') or '未测量')[:160]}）"]
+    return []
+
+
 def check_zero_third_party(unit: str, res: dict) -> list[str]:
     """零捆绑：公开承诺零第三方的仓，消费方模块图里第三方模块数必须为 0。"""
     if unit not in ZERO_THIRD_PARTY:
         return []
     if not res.get("ok"):
-        return []  # 装不上已在别处报
+        return []  # 装不上由统一判据 check_installable 报（这里不重复报）
     tp = res.get("third_party") or []
     if tp:
         return [f"{unit}: 宣称零第三方依赖，但消费方模块图里出现了 {len(tp)} 个第三方模块：{tp[:5]}"]
     return []
+
+
+def collect_problems(units: list[str], by_unit: dict, base: str) -> list[str]:
+    """把各条判据的结论汇成 problems 列表（**main 与自测走同一条路径**）。
+
+    ★ 抽成函数不是为了好看：自测要能**复刻 main 的分派**并断言它的结论
+      （旧实现的分派对根模块的「装不上」完全无感 ⇒ problems = [] ⇒ 报绿）。
+      判据写在 main 里 ⇒ 自测只能测判据函数、测不到**分派** ⇒ 分派漏了判据没人知道。
+
+    伞仓（oekit）的「装不上」由 `check_bom_coverage` 报（它的口径不同：装不上时
+    要报「少了哪些发版单元」，不能只说装不上）⇒ 这里跳过它，避免同一个故障报两次。
+    """
+    problems: list[str] = []
+    for u in units:
+        res = by_unit[u]
+        # ★ 统一判据：**装不上**对**所有**单元一视同仁（根模块与嵌套模块一致）。
+        if u != BOM_REPO:
+            problems += check_installable(u, res)
+        problems += check_sibling_isolation(u, res) if "/" in u else []
+        problems += check_zero_third_party(u, res)
+        if "/" in u:
+            parent = u.split("/")[0]
+            problems += check_parent_isolation(u, by_unit.get(parent, {}), base)
+    problems += check_bom_coverage(by_unit.get(BOM_REPO, {"ok": False, "error": "未测量"}))
+    return problems
 
 
 # ---------- 测量 ----------
@@ -356,8 +407,44 @@ def _selftest() -> int:
     assert "github.com/nacos-group/nacos-sdk-go/v2/config" not in imp, \
         f"深层嵌套模块的 import 被算成父仓的了：{imp}"
 
+    # ⑨ ★ **装不上**必须被抓住 —— 对**所有**单元一视同仁（根模块与嵌套模块一致）。
+    #    ⚠️ 旧实现的分派：根模块只跑 check_zero_third_party（装不上时返回 []）
+    #      ⇒ 24 个根模块任何一个装不上，problems 仍是 [] ⇒ 报「✅ 全部成立」（假绿）。
+    #    ⛔ 这组断言就是反证样本：把分派退回旧写法（去掉 check_installable），
+    #      它立刻变红（见交付记录里的变异自证）。
+    full_ok = {"ok": True, "error": "", "paths": sorted(
+        {f"github.com/oekit/{m}" for m in MODULES}
+        | {f"github.com/oekit/{n['repo']}/{n['path']}" for n in NESTED_MODULES}
+        | {f"github.com/oekit/{BOM_REPO}"}),
+        "third_party": [], "own": [], "modules": []}
+    ok_nested = {"ok": True, "error": "", "paths": ["github.com/oekit/bootstrap/nacos"],
+                 "third_party": [], "own": [], "modules": []}
+    broken = {"ok": False, "error": "proxy timeout", "paths": [], "third_party": [],
+              "own": [], "modules": []}
+    # 根模块装不上 ⇒ 必须有且只有一条 problems（旧的 main 分派下这里是 []）
+    p_root = collect_problems(["pkg", "oekit"],
+                              {"pkg": broken, "oekit": full_ok}, "/nonexistent")
+    assert len(p_root) == 1 and "pkg" in p_root[0] and "装不上" in p_root[0], \
+        f"根模块装不上必须被报出（旧实现这里 problems=[]）：{p_root}"
+    # 嵌套模块装不上 ⇒ 同样必须被报（不许因改判据而回退）
+    p_nested = collect_problems(["bootstrap/nacos", "oekit"],
+                                {"bootstrap/nacos": broken, "oekit": full_ok}, "/nonexistent")
+    assert len(p_nested) == 1 and "bootstrap/nacos" in p_nested[0] and "装不上" in p_nested[0], \
+        f"嵌套模块装不上必须被报出：{p_nested}"
+    # 全部装得上 ⇒ 不得有任何「装不上」结论（判据不许误报）
+    p_ok = collect_problems(
+        ["pkg", "bootstrap/nacos", "oekit"],
+        {"pkg": full_ok, "bootstrap/nacos": ok_nested, "oekit": full_ok}, "/nonexistent")
+    assert not p_ok, f"装得上时不该有问题（误报）：{p_ok}"
+    # 判据函数本身：装不上 ⇒ 报；装得上 ⇒ 不报
+    assert check_installable("pkg", broken), "根模块装不上必须报"
+    assert check_installable("bootstrap/nacos", broken), "嵌套模块装不上必须报"
+    assert not check_installable("pkg", {"ok": True, "error": ""}), "装得上不该报"
+    assert not check_zero_third_party("pkg", broken), \
+        "装不上不归零捆绑判据管（统一判据报，别重复报）"
+
     print("✅ consumer_probe 判据自测通过（父←子泄漏 / 兄弟泄漏 / 零捆绑 / 一次拉齐 / "
-          "子包粒度 / 深层嵌套）")
+          "子包粒度 / 深层嵌套 / 装不上）")
     return 0
 
 
@@ -434,15 +521,7 @@ def main() -> int:
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-    problems: list[str] = []
-    for u in units:
-        res = by_unit[u]
-        problems += check_sibling_isolation(u, res) if "/" in u else []
-        problems += check_zero_third_party(u, res)
-        if "/" in u:
-            parent = u.split("/")[0]
-            problems += check_parent_isolation(u, by_unit.get(parent, {}), base)
-    problems += check_bom_coverage(by_unit.get(BOM_REPO, {"ok": False, "error": "未测量"}))
+    problems = collect_problems(units, by_unit, base)
 
     print()
     if problems:
@@ -451,7 +530,7 @@ def main() -> int:
             print(f"  · {p}")
     else:
         print(f"✅ 消费面承诺全部成立（{len(results)} 个发版单元："
-              f"父←子隔离 + 兄弟隔离 + 零捆绑 + 一次拉齐）")
+              f"装得上 + 父←子隔离 + 兄弟隔离 + 零捆绑 + 一次拉齐）")
     if args.json:
         Path(args.json).write_text(json.dumps(
             {"results": [{k: v for k, v in r.items() if k != "modules"} for r in results],

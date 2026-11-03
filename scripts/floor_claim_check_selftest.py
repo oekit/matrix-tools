@@ -26,6 +26,11 @@
   M13 ★ **同一串字、在两个版本节 ⇒ 真伪必须不同**（真伪绑「文本自己声明的区间」）
   M13b ★ 同一串字 ⇒ 抽出的区间必须各自不同
   M13c ★ **端到端** scan()：同一串字两节 ⇒ 提取 2 条、一成立一为假
+覆盖面（★ 「读不到 ≠ 干净」「扫了 N 个 ⇒ N 有基准」）：
+  M14a ★ 嵌套面读不到 origin/main ⇒ nested_changelogs 必须**如实带出**错误
+  M14  ★ 嵌套面读不到 ⇒ scan() 必须把它记进 nested_unreadable（不许沉默）
+  M15  ★ 期望集合 = 矩阵登记表 ⇒ 没检出 / 没有 CHANGELOG.md 的仓必须被点名
+  M15b ★ 报告文本里必须出现「未检出 / 未扫描」（不许沉默）
 提取层（纯函数）：
   M5  断言词缺失 ⇒ 提取 0 条（不得静默判绿）
   M6  措辞变体（「字节级未变」）⇒ 提取 1 条
@@ -47,6 +52,8 @@
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import shutil
 import subprocess
 import sys
@@ -254,6 +261,8 @@ def run(live: bool = False) -> int:
     #     而被算成「无断言」）—— 复核班实测发现的假干净（旧实现读文件级计数）
     ok &= run_scan_aggregate()
     ok &= run_end_to_end_same_string()
+    ok &= run_nested_unreadable()
+    ok &= run_expected_set()
 
     if live:
         ok &= run_live()
@@ -361,13 +370,108 @@ def run_end_to_end_same_string() -> bool:
     return ok
 
 
+def run_nested_unreadable() -> bool:
+    """M14：嵌套面**读不到**（没有 origin/main）必须被记进 nested_unreadable。
+
+    ⚠️ 旧实现：`nested_changelogs` 在 `git ls-tree origin/main` 失败时 `return []`
+       ⇒ 嵌套面覆盖率 0 **且不留任何记录**（scan() 的 unreadable 记账在
+       「文件读取循环」里，列表为空 ⇒ 循环不执行 ⇒ **一条 unreadable 都没有**）
+       ⇒ 报告照样干净（假干净）—— 正好把本工具「读不到 ≠ 干净」的纪律漏在门口。
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        repo = ws / "repo-noref"
+        repo.mkdir()
+        git(repo, "init", "-q", "-b", "main")
+        git(repo, "config", "user.email", "selftest@example.invalid")
+        git(repo, "config", "user.name", "selftest")
+        (repo / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.0]\n\n- fix: 与地板断言无关\n", encoding="utf-8")
+        git(repo, "add", "-A")
+        git(repo, "commit", "-q", "-m init")
+        # 故意**不建 origin/main**（本地仓没有远端引用）⇒ ls-tree origin/main 必失败
+        raw = fcc.nested_changelogs(repo)
+        items, err = raw if isinstance(raw, tuple) else (list(raw), "")
+        good = (items == [] and err != "")
+        ok &= _record("M14a", good)
+        print(f"  M14a{_mark(good)} 嵌套面读不到 origin/main ⇒ 必须**如实带出**"
+              f"（清单 {len(items)} 份 / 错误 {err[:70]}）")
+        old_ws = fcc.WORKSPACE
+        fcc.WORKSPACE = ws
+        try:
+            res = fcc.scan(include_releases=False)
+        finally:
+            fcc.WORKSPACE = old_ws
+        hit = [u for u in res["nested_unreadable"] if u.startswith("repo-noref")]
+        good2 = len(hit) == 1
+        ok &= _record("M14", good2)
+        print(f"  M14 {_mark(good2)} scan() 必须把该仓记进 nested_unreadable"
+              f"（读不到 ≠ 干净 ⇒ 单列）⇒ 实得 {res['nested_unreadable']}")
+    return ok
+
+
+def run_expected_set() -> bool:
+    """M15：扫描范围必须以**矩阵登记表**为期望集合 ⇒ 没检出的仓必须被点名。
+
+    ⚠️ 旧实现：`repo_dirs()` 只按**目录特征**扫（有 .git + 有 CHANGELOG.md）
+       ⇒ 「扫描 N 个仓」这个 N 完全取决于工作区目录 ⇒ CI 里少 clone 一个仓
+       ⇒ 那个仓的断言**一条都不查**，报告照样干净（假干净）。
+    """
+    ok = True
+    with tempfile.TemporaryDirectory() as td:
+        ws = Path(td)
+        # 只检出登记表里的一个仓（pkg 在 matrix.MODULES 里）
+        pkg = ws / "pkg"
+        (pkg / ".git").mkdir(parents=True)
+        (pkg / "CHANGELOG.md").write_text(
+            "# Changelog\n\n## [v0.1.0]\n\n- fix: 与地板断言无关\n", encoding="utf-8")
+        # 另一个登记仓：**检出了但没有 CHANGELOG.md** ⇒ 同样必须被点名
+        (ws / "logx" / ".git").mkdir(parents=True)
+        old_ws = fcc.WORKSPACE
+        fcc.WORKSPACE = ws
+        try:
+            res = fcc.scan(include_releases=False)
+        finally:
+            fcc.WORKSPACE = old_ws
+        unscanned = {u["repo"]: u["reason"] for u in res["unscanned_repos"]}
+        good = ("pkg" not in unscanned
+                and "logx" in unscanned
+                and "CHANGELOG" in unscanned.get("logx", "")
+                and "pkg" in res["expected_repos"]
+                and len(res["expected_repos"]) >= len(fcc.MODULES))
+        ok &= _record("M15", good)
+        print(f"  M15 {_mark(good)} ★期望集合=矩阵登记表（{len(res['expected_repos'])} 个）："
+              f"pkg 已扫（不该进未扫描清单）、logx 检出但无 CHANGELOG.md ⇒ 必须被点名"
+              f"（实得 logx={unscanned.get('logx')}、未扫描 {len(unscanned)} 个）")
+        # 报告**文本**里必须出现「未检出 / 未扫描」⇒ 不许沉默
+        buf = io.StringIO()
+        old_argv = sys.argv
+        sys.argv = ["floor_claim_check.py", "--no-releases"]
+        fcc.WORKSPACE = ws
+        try:
+            with contextlib.redirect_stdout(buf):
+                fcc.main()
+        finally:
+            sys.argv = old_argv
+            fcc.WORKSPACE = old_ws
+        out = buf.getvalue()
+        named = ("未检出" in out) or ("未扫描" in out)
+        good2 = named and ("logx" in out)
+        ok &= _record("M15b", good2)
+        print(f"  M15b{_mark(good2)} 报告文本必须点名未扫描的仓（不许沉默）"
+              f"⇒ 含「未检出/未扫描」={named}、含 logx={'logx' in out}")
+    return ok
+
+
 def run_live() -> bool:
     """工作区依赖的用例（本地跑，不进 CI）：覆盖面 / 节边界 / Release 正文。"""
     ok = True
     print("== 覆盖面变体（依赖工作区，--live）==")
     nested_all = []
     for rd in fcc.repo_dirs():
-        for rel, _ in fcc.nested_changelogs(rd):
+        items, _err = fcc.nested_changelogs(rd)
+        for rel, _ in items:
             nested_all.append((rd.name, rel))
     good = len(nested_all) == 7
     ok &= _record("L1", good)
@@ -423,6 +527,29 @@ def _mutate_verify_always_identical():
     return patched
 
 
+def _mutate_nested_swallows_error():
+    """M14 靶子：**吞掉** origin/main 的读不到（= 旧实现的 `if rc != 0: return []`）。
+
+    ⇒ 嵌套面覆盖率 0 **且不留任何记录** ⇒ M14a / M14 必须转红。
+    """
+    orig = fcc.nested_changelogs
+
+    def patched(repo_dir):
+        items, _err = orig(repo_dir)
+        return items, ""      # ★ 错误被吞掉 ⇒ 报告里不再出现「读不到」
+    return patched
+
+
+def _mutate_expected_set_ignores_registry():
+    """M15 靶子：**期望集合**退化成空（= 旧实现：只按目录特征扫，没有登记表）。
+
+    ⇒ 「未检出的仓」无从点名 ⇒ M15 / M15b 必须转红。
+    """
+    def patched():
+        return []
+    return patched
+
+
 MUTATIONS = [
     # ⚠️ **预期转红集合必须按「该变异真的破坏了谁」写死**，不能只写自己那条：
     #   多红是**正确行为**（变异确实同时破坏了那些用例）⇒ 漏写反而会被框架判成
@@ -430,34 +557,36 @@ MUTATIONS = [
     # ① 提取层丢掉 old 区间 ⇒ M7 / M8（断言 old 区间）+ M13b（抽各自区间）
     #    + M13c（端到端 scan() 也走提取层）⇒ 全红。
     ("提取层丢掉文本声明的 old 区间（同一串字两节变成同一条）",
-     _mutate_extract_ignores_old_range, {"M7", "M8", "M13b", "M13c"}),
+     "extract_claims", _mutate_extract_ignores_old_range, {"M7", "M8", "M13b", "M13c"}),
     # ② 核验层忽略区间（永远拿同一个 tag 比）⇒ 所有**走 verify_claim** 的用例都受影响：
     #    C0 仍绿（它本就要 IDENTICAL）⇒ M1 / M2 / M3（判定翻转）+ M13 / M13c。
     ("核验层忽略文本声明的区间（永远拿同一个 tag 比）",
-     _mutate_verify_ignores_range, {"M1", "M2", "M3", "M13", "M13c"}),
+     "verify_claim", _mutate_verify_ignores_range, {"M1", "M2", "M3", "M13", "M13c"}),
     # ③ 核验层永远判成立 ⇒ 凡期望非 IDENTICAL 的都翻转 ⇒ M1 / M2 / M3 / M4
     #    （M4 期望 UNVERIFIABLE）+ M13 / M13c；C0 仍绿（本就期望 IDENTICAL）。
     ("核验层永远判成立（同一串字两节都判真）",
-     _mutate_verify_always_identical, {"M1", "M2", "M3", "M4", "M13", "M13c"}),
+     "verify_claim", _mutate_verify_always_identical, {"M1", "M2", "M3", "M4", "M13", "M13c"}),
+    # ④ ★ 嵌套面读不到被吞掉（旧实现）⇒ 嵌套面覆盖率 0 且无任何记录 ⇒ M14a / M14。
+    ("嵌套面读不到 origin/main 被吞掉（旧实现：静默返回空清单）",
+     "nested_changelogs", _mutate_nested_swallows_error, {"M14a", "M14"}),
+    # ⑤ ★ 期望集合退化成空（旧实现：没有矩阵登记表）⇒ 未检出的仓无从点名
+    #    ⇒ M15 / M15b。
+    ("期望集合退化成空（旧实现：没有矩阵登记表，扫描范围=工作区目录）",
+     "expected_repo_names", _mutate_expected_set_ignores_registry, {"M15", "M15b"}),
 ]
 
 
 def run_mutations() -> int:
     """跑变异自证：注入每个变异体 ⇒ 比对「精确转红集合」。"""
     ok = True
-    for i, (name, mutate, expect) in enumerate(MUTATIONS):
+    for i, (name, attr, mutate, expect) in enumerate(MUTATIONS):
         _RESULTS.clear()
-        saved_extract = fcc.extract_claims
-        saved_verify = fcc.verify_claim
+        saved = getattr(fcc, attr)
         try:
-            if mutate is _mutate_extract_ignores_old_range:
-                fcc.extract_claims = mutate()
-            else:
-                fcc.verify_claim = mutate()
+            setattr(fcc, attr, mutate())
             run(live=False)
         finally:
-            fcc.extract_claims = saved_extract
-            fcc.verify_claim = saved_verify
+            setattr(fcc, attr, saved)
         got = {cid for cid, good in _RESULTS.items() if not good}
         if not got:
             print(f"✗ 变异「{name}」没有被抓住——这份断言没有牙齿")
@@ -474,6 +603,7 @@ def run_mutations() -> int:
     if ok:
         print(f"✓ 变异自证 {len(MUTATIONS)}/{len(MUTATIONS)} 全部**精确**转红")
     return 0 if ok else 1
+
 
 def main() -> int:
     global _MUTATE_MODE

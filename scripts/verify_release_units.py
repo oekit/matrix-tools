@@ -51,6 +51,23 @@ matrix-tools/scripts/ 下无任何写 llms.txt 的脚本，其历史全是手写
   有一行 `go get github.com/oekit/oekit@latest`。不依赖渲染结果。
 - **oracle B（一致性）**：渲染规范「## 嵌套模块」段，与站点里的该段逐字节比对。
   抓的是格式漂移（少个安装行、描述改了、链接写错）。
+- **oracle C（已发布产物的对应关系）**：已发布 `versions.json` 的 nested 条目
+  必须与门禁自己的推导一致（版本 + hostVersion，双向差集）。
+
+## 「判不了 ≠ 通过」（2026-11-03 实测修）
+
+门禁自己的纪律是「**读不到 ⇒ 判据不可用 ⇒ 不静默放过**」，但实现曾经是反的
+⇒ **判据失效时门禁照绿** ⇒ 对下游说谎。三处已修（各有自测 + 变异自证）：
+
+1. **远端读不到**（`matrix.remote_tags` 抛 `RemoteReadError`）⇒ 父仓根 tag
+   候选集的**完整性未知** ⇒ 推导**不产出** `hostVersion` 且标
+   `hostUnverifiable=True`。旧实现 `if remote_roots is not None:` ⇒ 远端读不到时
+   **整段完备性核验被跳过** ⇒ 照旧产出 hostVersion 且**不标**未能核验。
+2. **产物里有、推导里没有**的嵌套模块 ⇒ 报「**未能核验**」。旧实现只做正向差集
+   ⇒ 某模块因「本地 tag 读不到 / 无嵌套 tag」被推导侧跳过时，它在产物里的版本
+   可以是**任意错值**而门禁照样绿。
+3. **`hostVersion` 推导为 None 且未标「未能核验」** ⇒ 判红。旧实现
+   `if d["hostVersion"] and ...` ⇒ 推导不出值就**整条静默跳过**。
 
 用法:
     verify_release_units.py --site <站点仓目录> [--repos-dir <各仓父目录>]
@@ -201,6 +218,20 @@ def _ensure_local_tags(repo_path: Path, repo: str, base: str | None) -> None:
         pass
 
 
+def _unverifiable_entry(m: dict) -> dict:
+    """「**未能核验**」条目——推不出事实时的登记形态（**不许从 derived 里消失**）。
+
+    ★ 为什么要有这个形态（缺陷 2 的根因）：旧实现对「本地读不到 tag / 无嵌套 tag」
+    的模块直接 `continue` ⇒ 它**从 derived 里彻底消失** ⇒ oracle C 的正向差集
+    看不见它 ⇒ 它在产物里的版本可以是**任意错值**而门禁照样绿（假绿）。
+
+    ⇒ 现在推不出来也**登记一条**（`latest=None` + `hostUnverifiable=True`）
+    ⇒ oracle C 据此点名判红（「判不了 ≠ 通过」）。
+    """
+    return {"latest": None, "hostVersion": None, "module": m["module"],
+            "hostUnverifiable": True}
+
+
 def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
     """嵌套模块的「当前版本 + 对应父仓版本」——**门禁自己的推导**。
 
@@ -214,6 +245,15 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
     ⇒ 此时**不产出推导值**（`hostVersion=None`）并标 `hostUnverifiable=True`
     ⇒ oracle C 据此判红，而不是拿一个可能错的旧值去跟产物比
     （**两边一起错 ⇒ 假绿**）。
+
+    ★ **判据不可用 ≠ 通过**（缺陷 1）：**远端读不到**（`remote_tags` 抛
+    `RemoteReadError`）时，候选集的**完整性未知** ⇒ 推导值同样可能偏旧
+    ⇒ 一律 fail closed：`hostVersion=None` + `hostUnverifiable=True`。
+    旧实现 `if remote_roots is not None:` ⇒ 远端读不到时**整段完备性核验
+    被跳过** ⇒ 照旧产出 hostVersion 且**不标**未能核验 ⇒ 判据失效时门禁照绿。
+
+    ★ **推不出来 ≠ 不存在**（缺陷 2）：推不出事实的模块**照样登记一条**
+    「未能核验」条目（见 `_unverifiable_entry`），**不许**从 derived 里消失。
     """
     if repos_dir is None:
         return {}
@@ -223,6 +263,8 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
         repo_path = repos_dir / repo
         dates = _tag_dates(repos_dir, repo)
         if not dates:
+            # ★ 推不出来 ≠ 不存在：登记「未能核验」而不是让模块消失。
+            out[f"{repo}/{path}"] = _unverifiable_entry(m)
             continue
         # ★ **补齐输入**（#223）：本地缺 tag ⇒ 先 fetch 再推导。
         remote_roots = _remote_root_tags(repo, str(repos_dir))
@@ -232,10 +274,12 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
                 _ensure_local_tags(repo_path, repo, str(repos_dir))
                 dates = _tag_dates(repos_dir, repo)
                 if not dates:
+                    out[f"{repo}/{path}"] = _unverifiable_entry(m)
                     continue
         nested = {n: d for n, d in dates.items()
                   if n.startswith(path + "/") and re.fullmatch(r"v\d+\.\d+\.\d+", n[len(path) + 1:])}
         if not nested:
+            out[f"{repo}/{path}"] = _unverifiable_entry(m)
             continue
         latest_tag = max(nested, key=lambda n: _semver_key(n[len(path) + 1:]))
         latest = latest_tag[len(path) + 1:]
@@ -246,7 +290,12 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
         # ★ **完备性核验**（#223）：fetch 之后本地仍缺远端根 tag ⇒ 候选集缺项
         #   ⇒ 推导值可能偏旧 ⇒ **不产出**（fail closed），并标「未能核验」。
         unverifiable = False
-        if remote_roots is not None:
+        if remote_roots is None:
+            # ★ **远端读不到 ⇒ 判据不可用 ⇒ 不静默放过**（缺陷 1）：
+            #   候选集完整性**未知** ⇒ 推导值可能偏旧 ⇒ 不产出（fail closed）。
+            host = None
+            unverifiable = True
+        else:
             still_missing = sorted(set(remote_roots) - _local_root_tags(dates))
             if still_missing:
                 host = None
@@ -264,9 +313,12 @@ def check_nested_version_correspondence(published: dict, derived: dict[str, dict
     查**产物**（已发布的机器可读矩阵），不查生成器输出——生成器输出与产物
     一致只说明「生成器自洽」，这里要验的是「产物说的对应关系是对的」。
 
-    双向：
-      ① 声明的 7 个嵌套模块 → 必须都在产物里，且版本与 hostVersion 一致；
-      ② 产物里登记的嵌套模块 → 目录必须**还活着**（已撤回的模块不该被登记）。
+    三个方向（**差集必须双向 + 「判不了 ≠ 通过」**）：
+      ① 正向：derived 里的每个嵌套模块 → 必须都在产物里，且版本与 hostVersion 一致；
+      ② 反向：产物里登记的嵌套模块 → 门禁必须**推得出**它；推不出 ⇒ 报「未能核验」，
+         **不许静默放过**（旧实现只做正向差集 ⇒ 某模块因「本地 tag 读不到 / 无嵌套 tag」
+         被推导侧跳过时，它在产物里的版本可以是**任意错值**而门禁照样绿）；
+      ③ 产物里登记的嵌套模块 → 目录必须**还活着**（已撤回的模块不该被登记）。
     """
     problems: list[str] = []
     nested_by_repo: dict[str, dict] = {}
@@ -278,20 +330,48 @@ def check_nested_version_correspondence(published: dict, derived: dict[str, dict
         if not got:
             problems.append(f"已发布 versions.json 缺嵌套模块 {name} 的条目")
             continue
+        # ★ **推不出来 ≠ 通过**（缺陷 3 的同族形态）：推导不出最新版本 ⇒ 判红，
+        #   不许因为「没有值可比」就整条静默跳过。
+        if d.get("latest") is None:
+            problems.append(f"{name}: 嵌套模块版本 **未能核验**（门禁推导不出该模块的最新 tag："
+                            f"本地读不到 tag / 无嵌套 tag）——判不了 ≠ 通过")
+            continue
         if got.get("latest") != d["latest"]:
             problems.append(f"{name}: 已发布版本 {got.get('latest')} ≠ 实际最新 {d['latest']}")
-        # ★ **未能核验 ⇒ 判红**（#223）：推导输入不完整（本地缺父仓根 tag）
+        # ★ **未能核验 ⇒ 判红**（#223）：推导输入不完整（本地缺父仓根 tag，
+        #   或**远端 tag 读不到** ⇒ 候选集完整性未知）
         #   ⇒ 推导值可能偏旧 ⇒ **不能**拿它跟产物比就放过。
         #   旧实现这里 `if d["hostVersion"] and ...` ⇒ 推导不出值时**整条静默跳过**
         #   ⇒ 产物里的错值与推导出的错值一致时**假绿**。
         if d.get("hostUnverifiable"):
-            problems.append(f"{name}: hostVersion **未能核验**（本地 clone 缺父仓根 tag，"
-                            f"推导输入不完整 ⇒ 推导值可能偏旧）——"
+            problems.append(f"{name}: hostVersion **未能核验**（推导输入不完整：本地 clone 缺父仓根 tag，"
+                            f"或远端 tag 读不到 ⇒ 候选集完整性未知 ⇒ 推导值可能偏旧）——"
                             f"请 `git fetch --tags` 后重跑（不能当通过）")
             continue
-        if d["hostVersion"] and got.get("hostVersion") != d["hostVersion"]:
+        # ★ **hostVersion 为 None 且未标「未能核验」⇒ 判红**（缺陷 3）：
+        #   推导不出值有两种可能：① 输入不完整（已由上面标 hostUnverifiable）
+        #   ② 输入完整但**候选集为空**（没有不晚于该嵌套 tag 的父仓根 tag）。
+        #   旧实现 `if d["hostVersion"] and ...` 把这两种**一起静默跳过**
+        #   ⇒ 产物里的错值（哪怕离谱到 v9.9.9）也不判红 ⇒ 判据失效时门禁照绿。
+        if d.get("hostVersion") is None:
+            problems.append(f"{name}: hostVersion **未能核验**（推导值为 None 且未标「未能核验」："
+                            f"没有不晚于该嵌套 tag 的父仓根 tag）——判不了 ≠ 通过")
+            continue
+        if got.get("hostVersion") != d["hostVersion"]:
             problems.append(f"{name}: 已发布 hostVersion {got.get('hostVersion')!r} "
                             f"≠ 推导值 {d['hostVersion']!r}（对应父仓版本漂移）")
+    # ★ **反向差集**（缺陷 2）：产物里有、derived 里没有 ⇒ **未能核验**，不许静默放过。
+    declared = {f"{m['repo']}/{m['path']}" for m in NESTED_MODULES}
+    for name in sorted(nested_by_repo):
+        if name in derived:
+            continue
+        if name in declared:
+            problems.append(f"{name}: 已发布 versions.json 登记了该嵌套模块，"
+                            f"但门禁**推导不出**它（本地 tag 读不到 / 无嵌套 tag）"
+                            f"⇒ **未能核验**——判不了 ≠ 通过")
+        else:
+            problems.append(f"{name}: 已发布 versions.json 登记了矩阵登记表里**没有**的嵌套模块"
+                            f"⇒ **未能核验**（门禁无从核对）——矩阵不该登记未声明的模块")
     if repos_dir is not None:
         for name, item in sorted(nested_by_repo.items()):
             repo, path = name.split("/", 1)
@@ -463,18 +543,20 @@ def main() -> int:
     problems += check_section_consistency(text, derived)
 
     # oracle C：已发布 versions.json 的 nested 对应关系（与生成器不同源推导）
+    # ★ **判据不可用 ≠ 通过**（缺陷 2）：`derived` 为空（一个嵌套模块都推导不出来）
+    #   时**照样**跑 oracle C —— 否则「推导不出来」=「整条判据消失」，
+    #   产物里的嵌套版本可以是任意错值而门禁照样绿。
     vfile = site / "docs" / "public" / "versions.json"
-    if derived:
-        if not vfile.is_file():
-            problems.append(f"缺 {vfile}（嵌套模块的版本对应关系在机器可读矩阵里）")
+    if not vfile.is_file():
+        problems.append(f"缺 {vfile}（嵌套模块的版本对应关系在机器可读矩阵里）")
+    else:
+        import json as _json
+        try:
+            published = _json.loads(vfile.read_text(encoding="utf-8"))
+        except Exception as e:  # noqa: BLE001
+            problems.append(f"已发布 versions.json 解析失败：{e}")
         else:
-            import json as _json
-            try:
-                published = _json.loads(vfile.read_text(encoding="utf-8"))
-            except Exception as e:  # noqa: BLE001
-                problems.append(f"已发布 versions.json 解析失败：{e}")
-            else:
-                problems += check_nested_version_correspondence(published, derived, repos_dir)
+            problems += check_nested_version_correspondence(published, derived, repos_dir)
 
     root, nested, bom, total = release_unit_count()
     detail = f"{root} 根 + {nested} 嵌套 + {bom} 伞仓"

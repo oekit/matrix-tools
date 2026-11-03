@@ -82,7 +82,16 @@ VERSION_HEAD_RE = re.compile(r"^##\s*\[([^\]]+)\]")
 VERSION_HEAD_PLAIN_RE = re.compile(r"^##\s+(v\d+\.\d+\.\d+)\b")
 SECTION_HEAD_RE = re.compile(r"^###\s*(.*)$")
 ITEM_RE = re.compile(r"^(\s*)-\s+(.*)$")
-SEMVER_PATH_RE = re.compile(r"[A-Za-z0-9_.-]*/?v\d+\.\d+\.\d+")
+# 版本头里的「子路径/版本」：**保留完整子路径**（不截到最后一段）。
+#
+# 旧写法 `[A-Za-z0-9_.-]*/?v\d+\.\d+\.\d+` 只吃**最后一段** ⇒
+# `## [observability/tracing/instrumentation/kitexotel/v0.1.0]` 被归一成
+# "kitexotel/v0.1.0" ⇒ 与嵌套 tag 前缀
+# `observability/tracing/instrumentation/kitexotel/v0.7.7` **对不上** ⇒
+# 嵌套模块的 breaking 定位不到具体模块（下游只看到宿主仓里一条看不懂的标签）。
+# ⇒ 版本头的路径前缀 = **相对仓根的完整子路径**（与嵌套 tag 前缀同形）。
+SEMVER_PATH_RE = re.compile(
+    r"(?:[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+)*/)?v\d+\.\d+\.\d+")
 # 段标题以 `!` 结尾 = conventional commits 的破坏性标记（feat!/refactor!/fix!）
 BREAK_SECTION_BANG_RE = re.compile(r"!\s*$")
 # 条目加粗前缀：`**核心包提升到模块根**` / `**主包提升至模块根**` / `**SPI 包提升至模块根**`
@@ -367,7 +376,18 @@ def host_version(repo: str, nested_tag: str, meta: dict[str, tuple[str, int]],
     return max(cands)[2]
 
 
-def nested_versions(repo: str) -> list[dict]:
+def nested_versions(repo: str, breaking_by_module: dict[str, list[dict]] | None = None) -> list[dict]:
+    """嵌套模块条目：[{path, latest, hostVersion?, breakingIndex}]。
+
+    ⚠️ `breakingIndex` = **该嵌套模块自己**的破坏性变更（改造C）：
+    嵌套模块的 breaking 此前**只**折叠在宿主仓的 breakingIndex 里（且版本号
+    带斜杠标签）⇒ 下游定位不到具体模块。现在嵌套条目**自带** breakingIndex，
+    版本号形态 = 「相对仓根的完整子路径/版本」（如
+    `observability/tracing/instrumentation/kitexotel/v0.1.0`）⇒ 与嵌套
+    tag 前缀同形，与 BOM 的 Module.Path 一一对应。
+    """
+    if breaking_by_module is None:
+        breaking_by_module = breaking_index_by_module(repo)
     by_path: dict[str, str] = {}
     for tag in _remote_tags(repo):
         # 格式: hlog/v0.1.1；多层嵌套也成立（Go 的子目录模块 tag 规则要求
@@ -398,7 +418,8 @@ def nested_versions(repo: str) -> list[dict]:
         # （实测：data/all 已由 data v0.5.0 声明 retract，目录已不存在）。
         if not (repo_dir(repo, BASE) / p).is_dir():
             continue
-        item: dict = {"path": p, "latest": v}
+        item: dict = {"path": p, "latest": v,
+                      "breakingIndex": list(breaking_by_module.get(p, []))}
         nested_tag = f"{p}/{v}"
         # **先确保本地有这些 tag**：hostVersion 靠 **commit 祖先关系**推导，
         # 而 ls-remote 只给 tag 名、给不出 commit ⇒ 必须读本地 git。
@@ -687,30 +708,109 @@ def _scan_changelog(path: Path, prefix: str = "", repo: str = "") -> list[dict]:
     return items
 
 
+def _nested_module_dirs(root: Path) -> list[tuple[Path, str]]:
+    """仓内**全部深度**的嵌套模块目录 → [(目录, 相对仓根的完整子路径)]。
+
+    ⚠️ **必须扫任意深度**（实测 2026-11-03）：旧写法 `root.glob("*/go.mod")`
+    只扫**一层** ⇒ 深度 4 的 kitexotel
+    （`observability/tracing/instrumentation/kitexotel`）**没有自己的
+    go.mod 被认成嵌套模块** ⇒ 它的**独立 CHANGELOG 脱离判据**（它的破坏性
+    变更一条都进不了索引）。
+
+    ⚠️ 子路径必须是**相对仓根的完整子路径**（不是 `sub.name` 最后一段）：
+    嵌套 tag 的前缀是完整子路径（`observability/tracing/instrumentation/
+    kitexotel/v0.7.7`）⇒ 用最后一段做前缀会与 tag 对不上，breaking 落不到
+    正确标签上。
+
+    排除 `.git` / `vendor`：依赖仓的 vendor 不是本仓的嵌套模块。
+    """
+    out: list[tuple[Path, str]] = []
+    for gomod in sorted(root.glob("**/go.mod")):
+        if gomod.parent == root:
+            continue          # 仓根本身不是嵌套模块
+        if ".git" in gomod.parts or "vendor" in gomod.parts:
+            continue
+        out.append((gomod.parent, gomod.parent.relative_to(root).as_posix()))
+    return out
+
+
+def _dedupe_breaking(items: list[dict]) -> list[dict]:
+    """按 (version, line) 去重（保序）。
+
+    为什么需要：同一条破坏性变更可能**同时**出现在宿主仓 CHANGELOG 的嵌套段
+    与嵌套模块自己的 CHANGELOG 里（两份 CHANGELOG 镜像同一段内容）⇒
+    不去重 ⇒ 同一次破坏性变更在索引里出现两次（下游看到重复条目）。
+    """
+    seen: set[tuple[str, str]] = set()
+    out: list[dict] = []
+    for it in items:
+        key = (it.get("version", ""), it.get("line", ""))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(it)
+    return out
+
+
+def _split_by_module(items: list[dict]) -> dict[str, list[dict]]:
+    """breaking 条目按**模块**拆分：{"": 根模块条目, "<相对子路径>": 嵌套条目}。
+
+    归属判据 = **版本号的前缀**（= 该模块相对仓根的子路径）：嵌套条目的
+    版本号形如 `obs/v0.2.14`，前缀 `obs` ⇒ 归属嵌套模块 `obs`；
+    根模块条目没有前缀 ⇒ 归属 ""（宿主仓根模块）。
+
+    ⚠️ 复合版本号（`a/v1.0.0 + b/v2.0.0`，罕见）按**首段**归属，并在
+    注释里记一笔——当前数据里不存在这种形态（实测 0 条）。
+    """
+    out: dict[str, list[dict]] = {}
+    for it in items:
+        v = str(it.get("version", ""))
+        head = v.split(" + ")[0]
+        prefix = head.rsplit("/", 1)[0] if "/" in head else ""
+        out.setdefault(prefix, []).append(it)
+    return out
+
+
 def breaking_index(repo: str) -> list[dict]:
     """扫 CHANGELOG.md，收集 breaking 事件 → {version, line}。
 
-    范围 = 根模块 CHANGELOG + 各嵌套模块的 CHANGELOG（子目录含 go.mod 者）。
-    嵌套模块的版本号带路径前缀（如 `redis/v0.2.0`）——嵌套模块的破坏性变更
-    同样是下游必断的（如 timertask v0.2.0 把 Redis 后端迁至嵌套模块），
-    只扫根 CHANGELOG 会漏掉它们。
+    范围 = 根模块 CHANGELOG + 各嵌套模块的 CHANGELOG（**任意深度**的子目录
+    含 go.mod 者）。嵌套模块的版本号带**相对仓根的完整子路径**前缀
+    （如 `redis/v0.2.0`、`observability/tracing/instrumentation/kitexotel/
+    v0.1.0`）——嵌套模块的破坏性变更同样是下游必断的（如 timertask v0.2.0
+    把 Redis 后端迁至嵌套模块），只扫根 CHANGELOG 会漏掉它们。
+
+    ⚠️ 本函数是**全量集合**（根模块 + 嵌套模块）——audit 的双向门禁
+    （`check_breaking_index`：逐条比对「产物 vs 解析器输出」）与 breaking
+    oracle（要求**每个** CHANGELOG 段的破坏性标记都被索引覆盖）都按这个
+    口径。**按模块拆分**请用 :func:`breaking_index_by_module`。
     """
     root = repo_dir(repo, BASE)
     items = _scan_changelog(root / "CHANGELOG.md", repo=repo)
-    for gomod in sorted(root.glob("*/go.mod")):
-        sub = gomod.parent
-        # 嵌套模块的路径标识是 `github.com/oekit/<root>/<sub>`，归属判据认根仓名
-        items.extend(_scan_changelog(sub / "CHANGELOG.md", prefix=f"{sub.name}/", repo=repo))
-    return items
+    for sub, rel in _nested_module_dirs(root):
+        # 嵌套模块的路径标识是 `github.com/oekit/<root>/<rel>`，归属判据认根仓名；
+        # 前缀用**完整子路径**（与嵌套 tag 前缀同形）
+        items.extend(_scan_changelog(sub / "CHANGELOG.md", prefix=f"{rel}/", repo=repo))
+    return _dedupe_breaking(items)
+
+
+def breaking_index_by_module(repo: str) -> dict[str, list[dict]]:
+    """breaking 条目**按模块**拆分：{"": 根模块, "<相对子路径>": 嵌套模块}。
+
+    键是**相对仓根的子路径**（根模块用空串）⇒ 调用方自己拼完整模块路径
+    （`github.com/oekit/<repo>` / `github.com/oekit/<repo>/<子路径>`）。
+    """
+    return _split_by_module(breaking_index(repo))
 
 
 def breaking_suspects(repo: str) -> list[dict]:
     """扫 CHANGELOG.md，收集「疑似破坏性但机器判不了」的条目（供 audit 提示）。"""
     root = repo_dir(repo, BASE)
     out = []
-    for path, prefix in [(root / "CHANGELOG.md", "")] + [
-        (g.parent / "CHANGELOG.md", f"{g.parent.name}/") for g in sorted(root.glob("*/go.mod"))
-    ]:
+    sources = [(root / "CHANGELOG.md", "")] + [
+        (sub / "CHANGELOG.md", f"{rel}/") for sub, rel in _nested_module_dirs(root)
+    ]
+    for path, prefix in sources:
         if not path.exists():
             continue
         _, suspects = parse_changelog_breaking(path.read_text(encoding="utf-8"), repo=repo)
@@ -720,26 +820,50 @@ def breaking_suspects(repo: str) -> list[dict]:
     return out
 
 
+def _warn_unreadable(repo: str, reason: str, impact: str) -> None:
+    """**读不到 ⇒ 明确告警**（改造D；写 stderr，别污染 --stdout 的 JSON）。
+
+    为什么要单独告警：旧实现 `except FileNotFoundError: continue` /
+    `if not d.exists(): continue` / `except Exception: deps = []` 三处
+    **静默**跳过 ⇒ 该模块**从产物整个消失**（或依赖静默变空）且**零告警**
+    ⇒ 读的人以为「矩阵里没这个模块」/「它没有依赖」，实际是「没读到」。
+    「读不到 ≠ 没有」（#79）——这条纪律在生成器侧同样成立。
+
+    告警文案必须点名**仓库 + 原因 + 影响面**（缺了哪个模块 / 哪个字段是空的）。
+    """
+    print(f"⚠️  {repo}: {reason} ⇒ {impact}——这是**未核对**，不是「没有」；"
+          f"请确认检出完整后重跑 gen_versions.py", file=sys.stderr)
+
+
 def build() -> dict:
     modules = []
     for r in MODULES:
         try:
             d = repo_dir(r, BASE)
-        except FileNotFoundError:
+        except FileNotFoundError as e:
+            _warn_unreadable(r, f"仓检出失败（{e}）", "该模块**不在**本次产物里")
             continue
         if not d.exists():
+            _warn_unreadable(r, f"仓目录不存在（{d}）", "该模块**不在**本次产物里")
             continue
         try:
             deps = sibling_deps(r, BASE)
-        except Exception:
+        except Exception as e:  # noqa: BLE001
+            # ⚠️ **读不到 ≠ 没有依赖**（改造D）：旧写法静默 `deps = []`
+            # ⇒ 产物里这个模块的依赖列**看起来就是「零依赖」** ⇒ 下游照它
+            # 升版会拉到不兼容组合，且**零告警**。
+            _warn_unreadable(r, f"依赖读取失败（{e}）",
+                              "matrixDeps 记为空（**读不到**，不是「零依赖」）")
             deps = []
+        items = breaking_index(r)
         modules.append(
             {
                 "module": r,
                 "latest": latest_version(r),
-                "nested": nested_versions(r),
+                "nested": nested_versions(r, breaking_by_module=_split_by_module(items)),
                 "matrixDeps": deps,
-                "breakingIndex": breaking_index(r),
+                # 全量集合（根 + 嵌套）：audit 的双向门禁按这个口径逐条比对
+                "breakingIndex": items,
             }
         )
     return {

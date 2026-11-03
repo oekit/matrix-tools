@@ -85,6 +85,11 @@ from pathlib import Path
 WORKSPACE = Path(os.environ.get("MATRIX_BASE")
                     or (Path(__file__).resolve().parent.parent.parent)).resolve()
 
+# 矩阵登记表（**期望集合**的事实源）——matrix.py 在**仓根**（scripts/ 的上级）
+# ⇒ 导入方式与 consumer_probe.py / preflight.py 同惯例。
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from matrix import MODULES  # noqa: E402
+
 # ── 断言识别 ──────────────────────────────────────────────────────────────
 # ① 依赖地板迁移：<dep> vA → vB（也接受 -> 和 ～）
 #    ⚠️ dep 与版本号之间允许**中文隔断**（实测存在「core 地板 v0.6.0 → v0.9.2」形态）
@@ -324,8 +329,40 @@ def repo_dirs() -> list[Path]:
     return out
 
 
-def nested_changelogs(repo_dir: Path) -> list[tuple[str, str]]:
+def expected_repo_names() -> list[str]:
+    """**期望**被扫描的仓清单（矩阵登记表）⇒ 「扫了 N 个仓」这个 N **有基准**。
+
+    ★ 为什么必须有「期望集合」（2026-11-03 巡检发现的缺陷 3）：旧实现只按
+      **工作区目录特征**扫（有 .git + 有 CHANGELOG.md 就算一个仓）⇒
+      **扫描范围取决于工作区里有什么**，而工作区取决于 CI 这次 clone 了几个仓：
+      少 clone 一个 ⇒ 那个仓的断言**一条都不查** ⇒ 报告照样干净（假干净）。
+      ⇒ 现在期望集合来自**矩阵登记表**（唯一事实源），缺哪个仓必须**点名**。
+
+    ⚠️ 口径：期望集合 = `matrix.MODULES`（24 个模块仓）。**伞仓 oekit（BOM）不在内**
+       —— 实测 BOM 仓**根本没有 CHANGELOG.md**（它是 BOM + README，不是版本节载体）
+       ⇒ 把它算进期望集合只会造出一条**永久的假告警**。工作区里登记表之外的仓
+       （matrix-tools 本仓、站点仓…）照扫，但在清单里单列为「登记表外」。
+    """
+    return list(MODULES)
+
+
+def resolve_repo_dir(name: str, base: Path | None = None) -> Path | None:
+    """按矩阵的布局约定找仓目录（`<base>/<name>`、`<base>/ekit-<name>`、`<base>/repos/<name>`）。
+
+    ⚠️ 找不到 ⇒ 返回 None。这**不等于**「这个仓没有这类断言」⇒ 调用方必须把它
+       记成「未检出 ⇒ 未扫描」，不能当成「干净」。
+    """
+    b = Path(base or WORKSPACE)
+    for cand in (b / name, b / f"ekit-{name}", b / "repos" / name):
+        if cand.is_dir():
+            return cand
+    return None
+
+
+def nested_changelogs(repo_dir: Path) -> tuple[list[tuple[str, str]], str]:
     """列出该仓**嵌套模块**的 CHANGELOG（相对仓根的路径）。
+
+    ⇒ 返回 **(清单, 错误说明)**：错误说明非空 ⇒ 清单**不完整**，读不到 ≠ 干净。
 
     ⚠️ 为什么要扫嵌套（2026-11-03 自查发现，缺口来自同伴对 `check_writeback.py`
        `--all` 的同类审计）：嵌套模块的版本节**住在自己的文件里**，根 CHANGELOG
@@ -333,14 +370,21 @@ def nested_changelogs(repo_dir: Path) -> list[tuple[str, str]]:
        （实测 `bootstrap/nacos` v0.3.7：根 = 父模块地板变更、嵌套 = `#33` 补记）
        ⇒ **不能靠「根已镜像」免掉嵌套侧**。
     ⇒ 只扫根 ⇒ 报「干净」时嵌套侧**根本没见过** = **假干净**（违反「读不到 ≠ 没有」）。
+
+    ★ **失败必须如实带出**（2026-11-03 巡检发现的缺陷 2）：旧实现
+      `if rc != 0: return []` ⇒ 读不到 origin/main 时**静默**返回空清单
+      ⇒ 嵌套面覆盖率 0 **且不留任何记录**（`scan()` 的 unreadable 记账在
+      「文件读取循环」里，列表为空 ⇒ 循环不执行 ⇒ **一条 unreadable 都没有**）
+      ⇒ 报告照样干净 ⇒ **正好把本工具自己的纪律「读不到 ≠ 干净」漏在门口**。
+      ⇒ 现在错误必须**带出来**，由调用方记进 `nested_unreadable`（单列，不并入绿）。
     """
     rc, out = _git(repo_dir, "ls-tree", "-r", "--name-only", "origin/main")
     if rc != 0:
-        return []
+        return [], f"origin/main 读不到（{out.strip()[:120]}）"
     return [
         (p, "") for p in out.splitlines()
         if p.endswith("CHANGELOG.md") and "/" in p
-    ]
+    ], ""
 
 
 def read_changelog_at(repo_dir: Path, rel: str) -> tuple[str, str]:
@@ -414,7 +458,12 @@ def scan(repo_filter: str | None = None, include_releases: bool = True) -> dict:
         # ── 根 CHANGELOG ──
         files = [("CHANGELOG.md", read_changelog(repo_dir))]
         # ── 嵌套 CHANGELOG（**必须扫**，否则是假干净）──
-        for rel, _ in nested_changelogs(repo_dir):
+        #   ★ 读不到 origin/main ⇒ 嵌套面**整体**读不到 ⇒ 单列，不并入绿
+        #     （旧实现静默返回空清单 ⇒ 覆盖率 0 且一条记录都没有 = 假干净）。
+        nested_items, nested_err = nested_changelogs(repo_dir)
+        if nested_err:
+            nested_unreadable.append(f"{repo_dir.name}/*（{nested_err}）")
+        for rel, _ in nested_items:
             text, src = read_changelog_at(repo_dir, rel)
             if not text:
                 nested_unreadable.append(f"{repo_dir.name}/{rel}")
@@ -506,8 +555,44 @@ def scan(repo_filter: str | None = None, include_releases: bool = True) -> dict:
             repos_without_claims += 1
 
     scanned_repos = len(repos)
+
+    # ── 覆盖面：**期望集合**（矩阵登记表）vs **实扫集合** ──
+    #   ★ 旧实现只有「实扫集合」⇒ 「扫描 N 个仓」这个 N 完全由工作区目录决定
+    #     ⇒ CI 少 clone 一个仓 ⇒ 那个仓一条断言都没查，报告照样干净（缺陷 3）。
+    expected = expected_repo_names()
+    if repo_filter:
+        expected = [n for n in expected if n == repo_filter]
+    scanned_names = {r.name for r in repos}
+    repo_status: list[dict] = []
+    unscanned: list[dict] = []
+    for name in expected:
+        if name in scanned_names:
+            repo_status.append({"repo": name, "status": "scanned", "reason": "",
+                                "in_registry": True})
+            continue
+        d = resolve_repo_dir(name)
+        if d is None:
+            reason = "未检出"
+        elif not (d / ".git").exists():
+            reason = "未检出（无 .git）"
+        elif not (d / "CHANGELOG.md").exists():
+            reason = "无 CHANGELOG.md（未扫描）"
+        else:
+            reason = "检出但不在扫描目录布局内（未扫描）"
+        repo_status.append({"repo": name, "status": "unscanned", "reason": reason,
+                            "in_registry": True})
+        unscanned.append({"repo": name, "reason": reason})
+    # 工作区里有、但**不在登记表**里的仓（站点仓 / 工具仓…）⇒ 照扫，但单列
+    for r in repos:
+        if r.name not in expected:
+            repo_status.append({"repo": r.name, "status": "scanned",
+                                "reason": "登记表外（照扫）", "in_registry": False})
+
     return {
         "scanned_repos": scanned_repos,
+        "expected_repos": expected,
+        "repo_status": repo_status,
+        "unscanned_repos": unscanned,
         "scanned_files": scanned_files,
         "root_files": root_files,
         "nested_files": nested_files,
@@ -562,9 +647,23 @@ def main() -> int:
         print(json.dumps(res, ensure_ascii=False, indent=2))
     else:
         n_root = res['root_files']
-        print(f"扫描 {res['scanned_repos']} 个仓 · **{res['scanned_files']} 个来源面**"
+        print(f"扫描 {res['scanned_repos']} 个仓（**期望 {len(res['expected_repos'])} 个**"
+              f"：矩阵登记表）· **{res['scanned_files']} 个来源面**"
               f"（根 CHANGELOG {n_root} + 嵌套 CHANGELOG {res['nested_files']}"
               f" + **已发布 Release 正文 {res['release_files']}**）")
+        # ★ 未扫描的仓必须**点名**（读不到 ≠ 干净 ⇒ 单列，不并入绿）
+        if res.get("unscanned_repos"):
+            print(f"⚠️ **未扫描的仓 {len(res['unscanned_repos'])} 个**"
+                  f"（读不到 ≠ 干净 ⇒ 单列，不并入绿）：")
+            for u in res["unscanned_repos"]:
+                print(f"      · {u['repo']}：{u['reason']}")
+        print("仓级清单（已扫 / 未检出（未扫描））：")
+        for u in res["repo_status"]:
+            if u["status"] == "scanned":
+                mark = "✅ 已扫" if u["in_registry"] else "✅ 已扫（登记表外）"
+                print(f"  {mark} {u['repo']}")
+            else:
+                print(f"  ⛔ 未扫描 {u['repo']}（{u['reason']}）")
         if res.get("nested_unreadable"):
             print(f"⚠️ **读不到的嵌套 CHANGELOG {len(res['nested_unreadable'])} 份**"
                   f"（读不到 ≠ 干净 ⇒ 单列，不并入绿）：{res['nested_unreadable']}")
@@ -590,7 +689,10 @@ def main() -> int:
               f"（共 {res['total_claims']} 条；读不到 ≠ 成立）")
         print(f"覆盖面：{res['scanned_repos']} 仓 / {res['scanned_files']} 来源面"
               f"（根 {n_root} + 嵌套 {res['nested_files']} + Release 正文 {res['release_files']}）"
-              f"⇒ 结论覆盖全体，不是子集上的 0")
+              + ("⇒ 结论覆盖全体，不是子集上的 0"
+                 if not res["unscanned_repos"]
+                 else f"⇒ **未覆盖全体**：{len(res['unscanned_repos'])} 个仓未扫描"
+                      f"（结论只是**子集**上的 0，不是「没有这类断言」）"))
         # ★ 提取口径披露：不说清楚，读者会以为「N 条断言」= 全语料只有 N 条
         print("\n【提取口径（本工具只认这些，别把它当全语料）】")
         print(f"  断言词：{'、'.join(EXTRACTION_SCOPE['tool_words'])}")
