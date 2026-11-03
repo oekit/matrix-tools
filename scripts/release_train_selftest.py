@@ -231,6 +231,140 @@ def _mutate_always_unbound():
     release_train.unbound_issues = lambda section, issues: list(issues or [])
 
 
+def nested_note_assertions() -> list[str]:
+    """#214：只发嵌套模块时，提示里的「模块=版本」**不得丢首段**。
+
+    ★ **形态**（实测 2026-11-03）：``nested_only_gate`` 的 ``only`` 串有两个消费者 ——
+      ① 给人读的文案；② **给人照抄的修法示例命令行**（``spec`` 形态 ``name=ver``）。
+    ⇒ 旧实现 ``_t.split('/', 1)[1]`` 对**多段**嵌套模块是错的：
+      tag ``observability/tracing/instrumentation/kitexotel/v0.7.6``
+      ⇒ ``split('/', 1)[1]`` = ``tracing/instrumentation/kitexotel/v0.7.6``
+      ⇒ **丢了首段 ``observability/``** ⇒ 文案给出**不存在的模块名**，
+      且照抄示例命令会被 spec 解析的版本号格式校验**直接拒掉**（退出码 2）。
+
+    ⇒ 正确取法 = **只取版本号**（``rsplit('/', 1)[-1]``）⇒ 单段/多段都对。
+
+    ★ **判据不与被检对象共享逻辑**：期望值在这里**独立重算**（按 ``/`` 切分取最后一段），
+      不复用 ``nested_only_gate`` 内部的表达式 ⇒ 否则改错实现会连判据一起改对（假绿）。
+    """
+    failures: list[str] = []
+
+    # 夹具：三种形态 —— 单段嵌套 / 多段嵌套 / 多模块混排
+    cases = [
+        ("timertask", [("redis", "redis/v0.2.7")]),
+        ("kitex", [("observability/tracing/instrumentation/kitexotel",
+                    "observability/tracing/instrumentation/kitexotel/v0.7.6")]),
+        ("bootstrap", [("nacos", "nacos/v0.3.10"), ("obs", "obs/v0.2.14")]),
+    ]
+    for repo, mods in cases:
+        specs = [(name, None, tag) for name, tag in mods]
+        # 放行侧文案：require 全已发布 ⇒ 走「放行」分支
+        saved = release_train.check_requires_resolvable
+        release_train.check_requires_resolvable = lambda *a, **k: None
+        try:
+            ok, msg = release_train.nested_only_gate(repo, specs)
+        finally:
+            release_train.check_requires_resolvable = saved
+        if not ok:
+            failures.append(f"用例5（{repo}）：夹具应走放行分支，却判成拒绝：{msg[:120]!r}")
+            continue
+        for name, tag in mods:
+            # ★ 独立重算期望值：版本号 = tag 按 '/' 切分的最后一段
+            want_ver = tag.split("/")[-1]
+            want_pair = f"{name}={want_ver}"
+            if want_pair not in msg:
+                failures.append(
+                    f"用例5（{repo}）：提示里必须出现「{want_pair}」"
+                    f"（多段嵌套不得丢首段）���实际提示={msg.splitlines()[0]!r}")
+            # ★ 旧实现的错形态必须**不出现**（这是本次缺陷的指纹）
+            wrong = f"{name}={tag.split('/', 1)[1]}" if "/" in tag else None
+            if wrong and wrong != want_pair and wrong in msg:
+                failures.append(
+                    f"用例5（{repo}）：提示里出现旧实现的错形态「{wrong}」"
+                    f"（split('/',1) 丢首段）⇒ 实际提示={msg.splitlines()[0]!r}")
+
+        # ★ **照抄的命令行必须能被 spec 解析接受**（`name=ver`，ver 须为 vX.Y.Z）
+        saved = release_train.check_requires_resolvable
+        release_train.check_requires_resolvable = (
+            lambda repo_, name, d, planned, unresolved, tag_exists=None:
+            unresolved.append("github.com/oekit/foo v1.2.3（未发布）"))
+        try:
+            ok2, msg2 = release_train.nested_only_gate(repo, specs)
+        finally:
+            release_train.check_requires_resolvable = saved
+        if ok2:
+            failures.append(f"用例5（{repo}）：夹具应走拒绝分支，却判成放行")
+            continue
+        # 从文案里抠出示例命令行的 spec 段（形如 `name=ver`）
+        import re as _re
+        m = _re.search(r"例：(python3 scripts/release_train\.py .*?--apply)", msg2)
+        if not m:
+            failures.append(f"用例5（{repo}）：拒绝文案里必须带「修法示例命令行」：{msg2[:200]!r}")
+            continue
+        for tok in m.group(1).split():
+            if "=" not in tok or tok.startswith("main="):
+                continue
+            s_name, s_ver = tok.split("=", 1)
+            if not _re.fullmatch(r"v\d+\.\d+\.\d+", s_ver):
+                failures.append(
+                    f"用例5（{repo}）：示例命令行里的 spec「{tok}」"
+                    f"的版本号部分必须是 vX.Y.Z（照抄要被 spec 解析接受）")
+            if s_name != name and s_name not in [n for n, _t in mods]:
+                failures.append(
+                    f"用例5（{repo}）：示例命令行里的模块名「{s_name}」不是本次 train 的模块")
+    return failures
+
+
+def _apply_note_mutation():
+    """把 `only` / `only_specs` 退回**旧实现** ⇒ 返回 restore 回调。
+
+    ★ 旧实现有两处错（实测 2026-11-03）：
+      (a) `split('/', 1)[1]` ⇒ 多段嵌套**丢首段**；
+      (b) 同一个串**当下标分隔（文案）与命令行参数用** ⇒ 多模块时照抄示例
+          命令得到一个 token ⇒ 被 spec 格式校验拒掉。
+
+    ★★ **为什么返回 restore 回调、而不是「改完就改回」**（实测踩过）：
+      若在函数内部 `finally` 里立刻把源码改回 ⇒ **断言跑的时候代码已经复原**
+      ⇒ 变异**根本没生效** ⇒ 判据报绿 ⇒ 「变异自证」变成**假证明**。
+      ⇒ 必须让变异**在断言运行期间保持生效**，断言跑完再恢复。
+      ⇒ 且变异后的源码必须**语法正确**（否则 reload 抛 SyntaxError ⇒ 同样静默失效）
+        —— 故这里先 `ast.parse` 自检。
+
+    ★ 变异体只改**被测函数源码里的那两行**（不替换整个函数）⇒ 只破坏
+      「提示串的取值」这一处 ⇒ 断言必须**精确**转红。
+    """
+    import ast as _ast
+    import importlib
+    import re as _re
+    path = Path(__file__).resolve().parent / "release_train.py"
+    src = path.read_text(encoding="utf-8")
+    mutated = src
+    # (a)(b)：`only` 退回 split('/',1) ⇒ 多段丢首段
+    mutated = _re.sub(
+        r"^    only = \"、\"\.join\(f\"\{name\}=\{_t\.rsplit\('/', 1\)\[-1\]\}\" for name, _d, _t in specs\)$",
+        "    only = \"、\".join(f\"{name}={_t.split('/', 1)[1]}\" for name, _d, _t in specs)",
+        mutated, count=1, flags=_re.M)
+    # (b)：`only_specs` 退回「与 only 同一个串」（旧实现没有这一行 ⇒ 用 only）
+    mutated = _re.sub(
+        r"^    only_specs = \" \"\.join\(f\"\{name\}=\{_t\.rsplit\('/', 1\)\[-1\]\}\" for name, _d, _t in specs\)$",
+        "    only_specs = only",
+        mutated, count=1, flags=_re.M)
+    if mutated == src:
+        raise SystemExit("变异自证失败：没找到 `only` / `only_specs` 的 rsplit 实现（代码形态已变？）")
+    try:
+        _ast.parse(mutated)
+    except SyntaxError as _e:
+        raise SystemExit(f"变异自证失败：变异后的源码语法错误（变异体自身有问题）：{_e}")
+    path.write_text(mutated, encoding="utf-8")
+    importlib.reload(release_train)
+
+    def restore() -> None:
+        path.write_text(src, encoding="utf-8")
+        importlib.reload(release_train)
+
+    return restore
+
+
 def main() -> int:
     failures: list[str] = []
 
@@ -379,6 +513,7 @@ def main() -> int:
 
     failures.extend(issue_binding_assertions())
     failures.extend(nested_binding_assertions())
+    failures.extend(nested_note_assertions())
 
     if failures:
         print("✗ release_train CHANGELOG 环节自测未过：")
@@ -416,6 +551,34 @@ def main() -> int:
     if missed2:
         raise SystemExit(1)
     print("✓ 嵌套面绑定变异自证 2/2 全部转红")
+
+    # 变异自证（#214）：提示里的「模块=版本」必须**各有牙齿**
+    #   ⇒ 退回旧实现（split('/',1) 丢首段 + 多模块串不可照抄）⇒ 用例5 必须转红。
+    #   ⚠️ **变异必须在断言运行期间保持生效** ⇒ 用 restore 回调延后恢复
+    #     （实测踩过：在变异函数内部 finally 里立刻恢复 ⇒ 断言跑时代码已复原
+    #      ⇒ 变异「没生效」⇒ 判据报绿 ⇒ 变异自证变成**假证明**）。
+    #   ⚠️ **精确性要求**：本次变异只动 `only` 两行 ⇒ 只应让**用例5**转红；
+    #     若其它用例也红了 ⇒ 说明变异体改的范围比预期大（或用例5 与别处耦合）。
+    saved_failures = list(failures)
+    restore = _apply_note_mutation()
+    try:
+        mutated_failures = nested_note_assertions()
+    finally:
+        restore()
+    if not mutated_failures:
+        print("✗ 变异「only 退回 split('/',1)（多段嵌套丢首段）」没有被抓住——用例5 没有牙齿")
+        raise SystemExit(1)
+    print(f"✓ 变异「only 退回 split('/',1)（多段嵌套丢首段）」被抓住（{len(mutated_failures)} 条断言转红）")
+    # 精确性：变异**只**应影响用例5 ⇒ 用例5 的失败条数须 > 0，
+    #   且其余用例（1/2/3/4 系列）仍应全绿。
+    _rest = [f for f in failures if not f.startswith("用例5")]
+    if _rest != saved_failures:
+        print("✗ 变异体影响了用例5 以外的断言（变异范围过大，精确性不达标）")
+        for f in _rest:
+            if f not in saved_failures:
+                print("   -", f)
+        raise SystemExit(1)
+    print("✓ 变异精确性：只让用例5 转红，其余用例保持原状")
 
 
 if __name__ == "__main__":
