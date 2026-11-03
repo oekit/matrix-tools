@@ -57,6 +57,13 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
   （零欠账 6 个：core / logx / oekit / pkg / registry / timertask）⇒ 该指标**滚动**：
   **每发一次任何依赖的版就新增一批实例** ⇒ 清零后仍会重新出现 ⇒ 全 org 口径的「闭合」**不可达**
   ⇒ ⇒ **本波目标写成「按依赖链推进一轮 + 每轮重扫欠账清单」，别写「闭合」**。
+  ⇒ ★ **发布的拓扑序 = 叶子仓根模块 → 该仓嵌套模块 → 下游仓根产品**（通用形态；本波实测时序：
+  `registry` 根 v0.5.3 @21:18Z → `registry` 一对 @22:50Z → `bootstrap` 抬地板 @22:59Z
+  → `bootstrap` 一对 @23:10Z）⇒ **硬约束 =「依赖可解析」门禁**（`check_requires_resolvable`：
+  被 tag 模块 go.mod 的每条 `github.com/oekit/*` require 必须已发布或本 train 一起发）
+  ⇒ ⚠️ 门禁用 `parse_go_mod_requires` ⇒ **只认 require、不认 replace** ⇒ 嵌套模块 go.mod 里
+  那条**被 `replace ... => ../` 指向本地的父仓根版本仍然要查** ⇒ **父仓根版本没发布就不能发嵌套模块**
+  ⇒ 门禁 fail closed（下游同样解析失败：Go 忽略依赖里的 replace，#148）。
 
   **影响面**：只改 `README.md` 的「发版链（顺序不可反）」小节（新增两段约束说明）+ 本版本节。
   **不改任何判据、不改任何脚本行为、不改任何已发布内容。**
