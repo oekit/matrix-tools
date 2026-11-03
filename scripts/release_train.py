@@ -479,7 +479,23 @@ def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
     """
     if any(name == "main" for name, _d, _t in specs):
         return True, ""
-    only = "、".join(f"{name}={_t.split('/', 1)[1]}" for name, _d, _t in specs)
+    # ★ `only` 有**两个消费者**，取值必须**各取各的**（#214）：
+    #   ① 文案（人读）⇒ 要「模块名=版本号」，多个用「、」分隔；
+    #   ② **修法示例命令行**（人照抄）⇒ 必须是 `name=ver` 的 **spec 形态**，
+    #      多个用**空格**分隔（spec 解析是 `spec.split("=", 1)` 逐个解析的）。
+    # ⚠️ **旧实现有**两处**错**（实测 2026-11-03）：
+    #   (a) `_t.split('/', 1)[1]` 对**多段**嵌套模块丢首段：
+    #       tag `observability/tracing/instrumentation/kitexotel/v0.7.6`
+    #       ⇒ `split('/', 1)[1]` = `tracing/instrumentation/kitexotel/v0.7.6`
+    #       ⇒ 文案给出**不存在的模块名**（丢了 `observability/`）。
+    #       ⇒ 正确取法 = `rsplit('/', 1)[-1]`（**只取版本号**，单段/多段都对）。
+    #   (b) 旧实现**同一个串**同时当下标分隔（文案用「、」）和**命令行参数**用
+    #       ⇒ 多模块时照抄示例命令得到 `nacos=v0.3.10、obs=v0.2.14`
+    #       ⇒ **一个 token** ⇒ `ver` = `v0.3.10、obs=v0.2.14`
+    #       ⇒ 被 spec 的版本号格式校验**直接拒掉**（退出码 2）⇒ 示例**不可用**。
+    #       ⇒ 修法：**两个消费者各用一个串**（文案串 vs 命令行串）。
+    only = "、".join(f"{name}={_t.rsplit('/', 1)[-1]}" for name, _d, _t in specs)
+    only_specs = " ".join(f"{name}={_t.rsplit('/', 1)[-1]}" for name, _d, _t in specs)
     planned = {(repo, tag) for _n, _d, tag in specs}
     unresolved: list[str] = []
     for name, d, tag in specs:
@@ -492,7 +508,7 @@ def nested_only_gate(repo: str, specs, tag_exists=None) -> tuple[bool, str]:
             f"  ⇒ 未满足的 require：\n"
             + "".join(f"      - {u}\n" for u in unresolved)
             + f"  ⇒ 修法：把上面列出的仓一起放进本次 train（"
-            f"例：python3 scripts/release_train.py {repo} main=vX.Y.Z {only} "
+            f"例：python3 scripts/release_train.py {repo} main=vX.Y.Z {only_specs} "
             f"--apply --changelog \"...\"）\n"
             f"  ⇒ 若这些 require 其实**已发布**，那是远端读 tag 失败 ⇒ "
             f"**fail closed**（读不到 ≠ 已发布）⇒ 查网络/权限后重试。"
