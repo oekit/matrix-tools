@@ -153,6 +153,54 @@ def _semver_key(v: str) -> tuple:
     return tuple(int(x) for x in m.groups()) if m else (0, 0, 0)
 
 
+def _remote_root_tags(repo: str, base: str | None = None) -> list[str] | None:
+    """远端该仓的**父仓根 tag** 全集（`vX.Y.Z` 形态，无 "/"）。
+
+    ★ **这是门禁的「独立读取路径」**（matrix-tools#223）：生成器靠**本地 git 的
+    commit 祖先关系**推导 hostVersion，门禁靠**tag 日期序**推导——算法不同源。
+    但**输入**曾一度同为「本地 clone 的 tag 集」⇒ 本地缺父仓根 tag 时
+    **两边一起退化成旧值** ⇒ 假绿（#223 实测：错值比缺字段更隐蔽）。
+
+    ⇒ 这里补上第三个**独立来源**：**远端** tag 列表（`matrix.remote_tags`
+    走 canonical HTTPS / origin，读不到抛 RemoteReadError ⇒ 不拿本地顶替）。
+    远端根 tag 全集 = 候选集的**权威大小** ⇒ 本地缺一个 ⇒ 推导不完整 ⇒ 报警。
+
+    读不到远端 ⇒ 返回 None ⇒ 调用方按「判据不可用」处理（不静默放过）。
+    """
+    try:
+        from matrix import remote_tags  # noqa: PLC0415 — 延迟导入，避免循环依赖
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        tags = remote_tags(repo, base)
+    except Exception:  # noqa: BLE001 — 读不到 ≠ 没有（#79 口径）
+        return None
+    return sorted(t for t in tags
+                  if "/" not in t and re.fullmatch(r"v\d+\.\d+\.\d+", t))
+
+
+def _local_root_tags(dates: dict[str, int]) -> set[str]:
+    """本地 clone 里存在的父仓根 tag（`vX.Y.Z` 形态，无 "/"）。"""
+    return {n for n in dates if "/" not in n and re.fullmatch(r"v\d+\.\d+\.\d+", n)}
+
+
+def _ensure_local_tags(repo_path: Path, repo: str, base: str | None) -> None:
+    """本地 clone 缺 tag ⇒ `git fetch --tags` 补齐（门禁也要**完整输入**）。
+
+    为什么门禁也要 fetch（#223）：门禁的推导（tag 日期序）读**本地 clone** ⇒
+    本地缺父仓根 tag ⇒ 推导值偏旧 ⇒ 与产物里同样偏旧的已发布值**一致**
+    ⇒ **假绿**（两边一起错）。
+    ⇒ 门禁必须先把自己的输入补齐，再推导；补不齐才算「未能核验」。
+
+    只加 ref、不动工作树 ⇒ 对产物零副作用（#79 口径：绝不拿本地陈旧事实当事实）。
+    """
+    try:
+        subprocess.run(["git", "-C", str(repo_path), "fetch", "--tags", "--quiet", "origin"],
+                       capture_output=True, text=True, timeout=120)
+    except Exception:  # noqa: BLE001 — 拿不到就由调用方判「未能核验」
+        pass
+
+
 def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
     """嵌套模块的「当前版本 + 对应父仓版本」——**门禁自己的推导**。
 
@@ -160,15 +208,31 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
     该嵌套 tag 的那个里取最新的 ⇒ 嵌套发布所处的父仓版本区间。
 
     两种推导（生成器=commit 祖先 / 门禁=tag 日期）互为交叉验证。
+
+    ★ **完备性核验**（#223）：本地 clone 的父仓根 tag 集必须**覆盖远端**的
+    全集，否则本地候选集缺项 ⇒ 推导出来的「对应父仓版本」**可能偏旧**
+    ⇒ 此时**不产出推导值**（`hostVersion=None`）并标 `hostUnverifiable=True`
+    ⇒ oracle C 据此判红，而不是拿一个可能错的旧值去跟产物比
+    （**两边一起错 ⇒ 假绿**）。
     """
     if repos_dir is None:
         return {}
     out: dict[str, dict] = {}
     for m in NESTED_MODULES:
         repo, path = m["repo"], m["path"]
+        repo_path = repos_dir / repo
         dates = _tag_dates(repos_dir, repo)
         if not dates:
             continue
+        # ★ **补齐输入**（#223）：本地缺 tag ⇒ 先 fetch 再推导。
+        remote_roots = _remote_root_tags(repo, str(repos_dir))
+        if remote_roots is not None:
+            missing = sorted(set(remote_roots) - _local_root_tags(dates))
+            if missing:
+                _ensure_local_tags(repo_path, repo, str(repos_dir))
+                dates = _tag_dates(repos_dir, repo)
+                if not dates:
+                    continue
         nested = {n: d for n, d in dates.items()
                   if n.startswith(path + "/") and re.fullmatch(r"v\d+\.\d+\.\d+", n[len(path) + 1:])}
         if not nested:
@@ -179,8 +243,17 @@ def derive_nested_versions(repos_dir: Path | None) -> dict[str, dict]:
                  if "/" not in n and re.fullmatch(r"v\d+\.\d+\.\d+", n)}
         cands = [r for r, d in roots.items() if d <= nested[latest_tag]]
         host = max(cands, key=lambda r: (roots[r], _semver_key(r))) if cands else None
+        # ★ **完备性核验**（#223）：fetch 之后本地仍缺远端根 tag ⇒ 候选集缺项
+        #   ⇒ 推导值可能偏旧 ⇒ **不产出**（fail closed），并标「未能核验」。
+        unverifiable = False
+        if remote_roots is not None:
+            still_missing = sorted(set(remote_roots) - _local_root_tags(dates))
+            if still_missing:
+                host = None
+                unverifiable = True
         out[f"{repo}/{path}"] = {"latest": latest, "hostVersion": host,
-                                 "module": m["module"]}
+                                 "module": m["module"],
+                                 "hostUnverifiable": unverifiable}
     return out
 
 
@@ -207,6 +280,15 @@ def check_nested_version_correspondence(published: dict, derived: dict[str, dict
             continue
         if got.get("latest") != d["latest"]:
             problems.append(f"{name}: 已发布版本 {got.get('latest')} ≠ 实际最新 {d['latest']}")
+        # ★ **未能核验 ⇒ 判红**（#223）：推导输入不完整（本地缺父仓根 tag）
+        #   ⇒ 推导值可能偏旧 ⇒ **不能**拿它跟产物比就放过。
+        #   旧实现这里 `if d["hostVersion"] and ...` ⇒ 推导不出值时**整条静默跳过**
+        #   ⇒ 产物里的错值与推导出的错值一致时**假绿**。
+        if d.get("hostUnverifiable"):
+            problems.append(f"{name}: hostVersion **未能核验**（本地 clone 缺父仓根 tag，"
+                            f"推导输入不完整 ⇒ 推导值可能偏旧）——"
+                            f"请 `git fetch --tags` 后重跑（不能当通过）")
+            continue
         if d["hostVersion"] and got.get("hostVersion") != d["hostVersion"]:
             problems.append(f"{name}: 已发布 hostVersion {got.get('hostVersion')!r} "
                             f"≠ 推导值 {d['hostVersion']!r}（对应父仓版本漂移）")
