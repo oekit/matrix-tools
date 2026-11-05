@@ -140,6 +140,24 @@ def main() -> int:
         # E：读失败 ⇒ 退出码 2（判不了 ≠ 通过）
         run_case("E_read_fail", repo_files("others"), repo_tags("others"), gate.EXIT_UNAVAILABLE,
                  fails={("others", "v1.0.0", "CHANGELOG.md")})
+        # H：豁免名单——名单里的 tag 快照缺段不判红；不在名单的照样判。
+        orig_exempt = gate.HISTORIC_SNAPSHOT_EXEMPT
+        gate.HISTORIC_SNAPSHOT_EXEMPT = {"histsink:sink/v0.1.0"}
+        try:
+            h_files = {
+                ("histsink", "sink/v0.1.0", "CHANGELOG.md"): prev_snap("sink/v0.1.0", "v0.0.9"),
+                ("histsink", "sink/v0.1.0", "sink/CHANGELOG.md"): prev_snap("sink/v0.1.0", "v0.0.9"),
+            }
+            h_tags = {"histsink": ["sink/v0.1.0"]}
+            rc_h = gate.run(["histsink"], read_fn=make_read_fn(h_files), tags_fn=make_tags_fn(h_tags))
+            _record("H_exempt_skips", rc_h == gate.EXIT_OK,
+                    f"H: 豁免名单应跳过(exit={rc_h})")
+            h2_tags = {"histother": ["sink/v0.1.0"]}
+            rc_h2 = gate.run(["histother"], read_fn=make_read_fn(h_files), tags_fn=make_tags_fn(h2_tags))
+            _record("H_nonexempt_still_red", rc_h2 == gate.EXIT_DRIFT,
+                    f"H: 非名单仓照样判红(exit={rc_h2})")
+        finally:
+            gate.HISTORIC_SNAPSHOT_EXEMPT = orig_exempt
         # 段头正则的独立小判据：上一版段「关联问题单」里的版本号不许误命中
         text = "## [v0.12.5] - 2026-10-23\n\n- build: 地板对齐 v0.12.6 前置（勿混淆）\n"
         _record("R_regex_not_string", not gate.section_re("v0.12.6").search(text),

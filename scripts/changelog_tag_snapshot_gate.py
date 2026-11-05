@@ -50,6 +50,17 @@ from matrix import (  # noqa: E402
 
 EXIT_OK, EXIT_DRIFT, EXIT_UNAVAILABLE = 0, 1, 2
 
+# 历史逃逸豁免名单（#234 判出的存量，tag 不可删改 ⇒ 快照永久缺段）：
+#   - logx hertzlog/v0.1.0、sink/v0.1.0：嵌套 tag 初版，根面未写子模块段；
+#   - data all/v0.1.1：伞形 meta tag，根面顶部停在 v0.4.1。
+# 豁免键 = "<repo>:<tag>"。名单只许增不许删（删了对应的门禁判定会转红，
+# 而那个 tag 的快照内容是不可变的）——新条目须带 issue 链接注明缘由。
+HISTORIC_SNAPSHOT_EXEMPT = {
+    "logx:hertzlog/v0.1.0",
+    "logx:sink/v0.1.0",
+    "data:all/v0.1.1",
+}
+
 # 段头匹配：`## [v0.12.6]` / `## [toolgate/v0.12.6]`（允许行尾尾注）。
 def section_re(version: str) -> re.Pattern:
     return re.compile(r"^## \[(" + re.escape(version) + r")\]", re.M)
@@ -61,12 +72,13 @@ def read_snapshot_file(repo: str, ref: str, path: str) -> str | None:
     """读某仓某 ref（tag 快照）下的文件原文；404 ⇒ None（该 ref 无此文件）；
     其余读失败 ⇒ 抛异常（调用方计入 unavailable，不许当「无漂移」）。"""
     q = f"/repos/{ORG}/{repo}/contents/{path}?ref={ref}"
-    r = ghsafe.run_gh(["api", q])
-    if r.returncode != 0:
-        if r.is_not_found():
+    try:
+        out, _err = ghsafe.run_gh(["api", q])
+        data = json.loads(out)
+    except ghsafe.GhCommandError as e:
+        if e.is_not_found:
             return None
-        raise RuntimeError(f"{repo}@{ref}:{path}: gh api 失败 {r.returncode}: {r.stderr.strip()[:120]}")
-    data = json.loads(r.stdout)
+        raise RuntimeError(f"{repo}@{ref}:{path}: {e}") from e
     if data.get("encoding") != "base64":
         raise RuntimeError(f"{repo}@{ref}:{path}: 非预期 encoding {data.get('encoding')!r}")
     return base64.b64decode(data["content"]).decode("utf-8", errors="replace")
@@ -149,6 +161,9 @@ def run(repos: list[str], read_fn=read_snapshot_file, tags_fn=None) -> int:
         if not picked:
             continue  # 无 tag 的仓（如 .github/oekit.github.io）：无可钉版本，合法
         for tag in picked:
+            if f"{repo}:{tag}" in HISTORIC_SNAPSHOT_EXEMPT:
+                print(f"  · {repo}:{tag} 在历史逃逸豁免名单（快照不可变，见名单注释）")
+                continue
             try:
                 d = check_tag(repo, tag, read_fn)
             except Exception as e:  # noqa: BLE001
