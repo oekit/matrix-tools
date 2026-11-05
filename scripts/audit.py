@@ -1074,6 +1074,30 @@ except Exception as e:  # noqa: BLE001
     # （读不到 = 没结论），而报告照样印「✓ 矩阵审计通过」——假绿。
     issues.append(gate_unavailable("release 对账", e))
 
+# tag 快照 CHANGELOG 门禁（matrix-tools#234）：tag 打在 CHANGELOG 提交之前 ⇒
+# 快照顶部停在上一版 ⇒ 被钉版本无文档。main 分支看起来永远正常，逃逸只在
+# tag 快照这一面——2026-11-06 抽验 oagentkit 系四模块全中。
+progress("阶段 5.5/7 tag 快照 CHANGELOG（每仓最新顶层+嵌套 tag）")
+try:
+    r = subprocess.run(
+        [sys.executable, os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "changelog_tag_snapshot_gate.py")],
+        capture_output=True, text=True)
+    out = (r.stdout + r.stderr).strip()
+    if r.returncode == 0:
+        progress("tag 快照 CHANGELOG：全部含本版段")
+    else:
+        # 退出码契约由生产方定义：1=真漂移；2=读不到（判不了 ≠ 通过，#79）
+        for line in out.splitlines():
+            if line.strip():
+                issues.append(line if line.startswith("❌") or line.startswith("⚠")
+                              else f"tag-snapshot: {line}")
+        if r.returncode not in (1, 2):
+            issues.append(f"tag-snapshot: 门禁异常退出码 {r.returncode}")
+except Exception as e:  # noqa: BLE001
+    # ⚠️ **不可用 ⇒ 判红**（口径同 release 对账：判不了 ≠ 通过）
+    issues.append(gate_unavailable("tag 快照 CHANGELOG", e))
+
 # oekit BOM（github.com/oekit/oekit）新鲜度：快照必须与各仓远端 tag 一致，
 # 否则 `go get github.com/oekit/oekit@latest` 拉到的是旧组合。
 try:
