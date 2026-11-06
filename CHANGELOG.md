@@ -4,6 +4,13 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.2] — 2026-11-06
+- #234：新增 **tag 快照 CHANGELOG 门禁**（`changelog_tag_snapshot_gate.py` + audit 阶段 5.5 + selftest 双模式）——覆盖门禁此前只读 main 分支面：tag 打在 CHANGELOG 提交**之前**时，快照顶部停在上一版，被钉版本完全无文档，而 main 面看起来永远正常（后来补上了）⇒ 逃逸。2026-11-06 抽验实录：oagentkit 系四模块（toolgate v0.12.6 / queue v0.6.6 / tools v0.11.1 / llm v0.19.0）tag 快照 CHANGELOG 顶部段全停在上一版，oekit 系同批四仓均含自身版本段——漏检集中在 oagentkit 系，正是 org 侧覆盖缺口。判据：对每仓「最新顶层 tag + 每嵌套前缀最新 tag」读 **ref=tag 快照**（gh api contents，ghsafe 读层）；顶层 tag 须含 `## [vX.Y.Z]` 段头，嵌套 tag 走「根面 `[sub/vX.Y.Z]` 优先、嵌套文件回退（带前缀/裸版本头均算）」读法（对齐 changelog_section）。退出码契约 0/1/2：读不到=2（判不了 ≠ 通过，audit 侧 gate_unavailable 判红，#79 口径）。selftest：注入读取层 11 用例（逃逸主形态/嵌套三态/无文件/读失败=不可用/无 tag 合法/多前缀全核）+ --mutate 三变异精确转红（只查顶层、字串匹配放水、吞错 fail-open）
+
+首跑即判出 4 项真实漂移（3 项历史逃逸：logx hertzlog/v0.1.0、sink/v0.1.0、data all/v0.1.1——入 `HISTORIC_SNAPSHOT_EXEMPT` 豁免名单（tag 不可删改，名单只许增不许删）；**1 项是当轮发版事故**：nacos/v0.3.11 快照缺段（CHANGELOG 改动的 replace 锚文本与真实段头形态不符静默失效，bootstrap#78 补记收口）——门禁上线即抓住发版流程自己的逃逸，防复发价值当场兑现
+
+关联问题单：matrix-tools#234。
+
 ## [v0.2.1] — 2026-11-04
 - #231：台账写入器**记不进「无 issue 锚点」的发版** ⇒ 工具仓/umbrella 仓/纯重构类发版永远进不了账
 
