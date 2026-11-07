@@ -311,7 +311,7 @@ def next_version() -> str:
 def _go_str(s: str) -> str:
     """Python 字符串 → Go 字符串字面量（含引号/反斜杠/控制字符的转义）。
 
-    breaking 条目的原文里有中文、引号（\`WithNNS\`）、反斜杠 ⇒ 必须转义，
+    breaking 条目的原文里有中文、引号（backtick 包裹的 WithNNS）、反斜杠 ⇒ 必须转义，
     否则生成的 matrix.go 编译不过（gofmt 会报错，但错误信息难读）。
     JSON 的转义规则与 Go 字符串字面量兼容（\\" \\\\ \\n \\t \\uXXXX）⇒ 直接用。
     """

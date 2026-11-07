@@ -275,8 +275,15 @@ def _oracle_markers(text: str) -> list[tuple[str, str, str]]:
             if ORACLE_WORD_RE.search(title):
                 out.append(("section", ver, title))
             continue
-        # (b) 顶格独立成行的 `**BREAKING**: ...`——必须被逐条覆盖
-        if raw.startswith("**") and ORACLE_WORD_RE.search(s):
+        # (b) 顶格独立成行的 `**BREAKING**: ...`——必须被逐条覆盖。
+        # ★ 只认**破坏性词开头**的顶格粗体（`**BREAKING**` / `**不兼容**` /
+        #   `**破坏性**`），不认任意 `**...**` 粗体——2026-11-07 实测误报：
+        #   concurrency v0.27.0 的叙述标题「**`fanout.Option` 更名**：本仓
+        #   AGENTS.md 写着……0.x 阶段 minor 允许 breaking……」是同一段变更的
+        #   **正文复述**（bullet 条目已在 breakingIndex），旧规则因行内出现
+        #   "breaking" 一词把它当独立标记 ⇒ 要求同一段内容被覆盖两次，
+        #   而它的前 60 字符与条目不同 ⇒ 永远判未覆盖。
+        if re.match(r"^\*\*(BREAKING|不兼容|破坏性)", s):
             out.append(("standalone", ver, _oracle_norm(s)))
             continue
         # (c) 条目行内含破坏性关键词——必须被逐条覆盖
