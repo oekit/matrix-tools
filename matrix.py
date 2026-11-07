@@ -61,16 +61,18 @@ NESTED_MODULES = [
      "desc": "Kitex 的 OpenTelemetry tracing 接入——client/server suite + metainfo 透传（obs-opentelemetry 重依赖隔离在此，kitex 根仓回归零 apache/thrift）"},
     {"repo": "kitex", "path": "istio", "module": "github.com/oekit/kitex/istio",
      "desc": "Kitex 的 xDS / Proxyless / Istio 集成桥接——xDS 资源管理器 + 动态熔断（kitex-contrib/xds 重依赖隔离在此，kitex 根仓回归零 apache/thrift）"},
+    {"repo": "kitex", "path": "cmd/thrift2openapi", "module": "github.com/oekit/kitex/cmd/thrift2openapi",
+     "desc": "thrift IDL（api.* 注解体系）→ OpenAPI 3.0 文档生成器（thriftgo 真 parser，go install 即用）——替换各服务手搓 regex 解析脚本（kitex#124；thrift 解析器依赖隔离在此）"},
 ]
 
 # 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
 MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
-NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 11 个嵌套模块
+NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 12 个嵌套模块
 # 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
 # （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
 # 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决：伞仓计入；总数随嵌套模块增减）。
 BOM_RELEASE_UNIT = 1
-GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 36 个 Go module
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 37 个 Go module
 # 工作区里的 go.mod 总数 = 36（24 根 + 11 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
 
 ORG = "oekit"
