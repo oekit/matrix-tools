@@ -1032,6 +1032,136 @@ def check_nested_floors_of_other_repo():
 
 check_nested_floors_of_other_repo()
 
+# ---------- BOM 兼容地板门禁（oekit/oekit#163） ----------
+# 背景：oekit/oekit go.mod 顶部自称「矩阵兼容快照的地板 require（勿手改/勿 tidy）」，
+# 但此前没有任何工具强制各模块 ≥ 该地板——MVS 会静默抬升，各模块的编译/测试
+# 基线与消费方实际拿到的版本不一致（#163 实测：BOM 已到 pkg v0.35.2，而
+# data/redisx/timertask/httpx 的 require 停在 v0.31.0、middleware v0.32.0）。
+# 两道判据：
+#   1) 矩阵内：各模块仓**每个** go.mod 的 oekit require ≥ BOM 地板；
+#   2) 消费矩阵（oagentkit）：各仓 go.mod 的 oekit require ≥ BOM 地板
+#      （读远端 raw go.mod——不为此克隆 14 个仓；404 = 无 go.mod，跳过）。
+# 与既有地板门禁的分工：既有三道比「远端最新 tag」（每次发版都会红一次，
+# 提示跟上），本门禁比「BOM 快照地板」——BOM 是发布列车对齐的**兼容下限**，
+# 低于它 = 消费方按 BOM 组合时拿到该模块从未测过的依赖组合。
+
+# 2026-11-08 gh repo list oagentkit 快照（非归档 Go 仓）；oagentkit 新增仓后更新此清单
+OAGENTKIT_REPOS = [
+    "agent", "agentkit", "guardx", "llm", "mcpkit", "obs", "promptx",
+    "queue", "rag", "runtime", "skillkit", "textx", "toolgate", "tools",
+]
+
+
+def parse_bom_floors(gomod_text: str) -> dict[str, str]:
+    """从 BOM go.mod 文本提取地板 {oekit 后完整路径: version}。纯函数（自测用）。"""
+    out: dict[str, str] = {}
+    for m in re.finditer(r"^\tgithub\.com/oekit/(\S+) (v\d+\.\d+\.\d+)$", gomod_text, re.M):
+        out[m.group(1)] = m.group(2)
+    return out
+
+
+def _iter_oekit_requires(text: str):
+    """go.mod 文本里每条 oekit require → (完整 module, oekit 后路径, 版本)。
+
+    复用根模块/嵌套模块两个既有正则（两段式形态见上方 ⚠️ 注释）。
+    """
+    for m in _FLOOR_REQ_RE.finditer(text):
+        yield m.group(1), m.group(2), m.group(3)
+    for m in _NESTED_FLOOR_REQ_RE.finditer(text):
+        yield m.group(1), f"{m.group(2)}/{m.group(3)}", m.group(4)
+
+
+def scan_bom_floor_violations(floors: dict[str, str], gomod_texts: dict[str, str]) -> list[str]:
+    """{label: go.mod 文本} 中所有低于 BOM 地板的 oekit require。纯函数（自测用）。"""
+    out: list[str] = []
+    for label, text in sorted(gomod_texts.items()):
+        for full, path, ver in _iter_oekit_requires(text):
+            floor = floors.get(path)
+            if floor is None:
+                continue          # BOM 未收录（非矩阵模块）⇒ 不判
+            # 两个正则都只认三段式 v\d+.\d+.\d+ ⇒ parse_semver 必成功，无需判 None
+            if parse_semver(ver) < parse_semver(floor):   # 按元组数字比，v0.9.0 < v0.10.0
+                out.append(f"{label}: {full} {ver} 低于 BOM 地板 {floor}")
+    return out
+
+
+class _RawGoModUnavailable(Exception):
+    """远端 go.mod 读取失败（非 404）——门禁不可用，判红。"""
+
+
+def _fetch_raw_gomod(org: str, repo: str) -> str | None:
+    """读 {org}/{repo}@main 的 go.mod 文本；404 → None（无 go.mod，非漂移）。"""
+    import urllib.error
+    import urllib.request
+    url = f"https://raw.githubusercontent.com/{org}/{repo}/main/go.mod"
+    try:
+        with urllib.request.urlopen(url, timeout=15) as r:
+            return r.read().decode("utf-8", "replace")
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise _RawGoModUnavailable(f"HTTP {e.code}") from e
+    except (urllib.error.URLError, OSError) as e:
+        raise _RawGoModUnavailable(e) from e
+
+
+def check_bom_floor_gate():
+    """矩阵内 + oagentkit 消费方的 oekit require ≥ BOM 地板。"""
+    bom = Path(BASE) / "oekit" / "go.mod"
+    try:
+        floors = parse_bom_floors(bom.read_text())
+    except FileNotFoundError as e:
+        check(False, gate_unavailable("BOM 地板门禁", e))
+        return
+    if not floors:
+        check(False, "BOM 地板门禁不可用：oekit/oekit go.mod 解析出 0 条地板——地板形同虚设")
+        return
+    for repo in MODULES:
+        try:
+            root = repo_dir(repo, BASE)
+        except FileNotFoundError:
+            continue          # 仓检出失败已在阶段 2 记为漂移，不重复记
+        texts = {str(g.relative_to(root)): g.read_text()
+                 for g in sorted(root.glob("**/go.mod"))
+                 if ".git" not in g.parts and "vendor" not in g.parts}
+        for msg in scan_bom_floor_violations(floors, texts):
+            check(False, f"{repo}/{msg}（跑 align_floors.py --plan 抬升）")
+    for repo in OAGENTKIT_REPOS:
+        try:
+            text = _fetch_raw_gomod("oagentkit", repo)
+        except _RawGoModUnavailable as e:
+            check(False, gate_unavailable(f"oagentkit/{repo} go.mod", e))
+            continue
+        if text is None:
+            continue          # 文档/站点仓，无 go.mod
+        for msg in scan_bom_floor_violations(floors, {repo: text}):
+            check(False, f"oagentkit/{msg}（oagentkit 侧跑 bump_dep_floors 追平）")
+
+
+check_bom_floor_gate()
+
+# ---------- 测试覆盖报警（oekit#157 裁决：报警输出，不进门禁退出码） ----------
+# 裁决口径：测试文件数 / 生产文件数 < 0.5 → **报告里 ⚠ 一行**；不上 check()
+# （覆盖治理走提醒不走阻断——kitex-examples 这类示例仓靠阻断会永久红）。
+
+
+def warn_test_coverage():
+    for repo in MODULES:
+        try:
+            root = repo_dir(repo, BASE)
+        except FileNotFoundError:
+            continue
+        def _ok(p) -> bool:
+            return ".git" not in p.parts and "vendor" not in p.parts and "testdata" not in p.parts
+        prod = [p for p in root.rglob("*.go") if _ok(p) and not p.name.endswith("_test.go")]
+        test = [p for p in root.rglob("*_test.go") if _ok(p)]
+        if prod and len(test) < 0.5 * len(prod):
+            print(f"⚠ [覆盖报警] {repo}: 测试文件 {len(test)} / 生产文件 {len(prod)} < 0.5"
+                  f"（oekit#157，报警不进门禁）")
+
+
+warn_test_coverage()
+
 # ---------- dependabot 目录存在性门禁（matrix-tools#68，承接 data#39） ----------
 # 背景与判据的完整说明在 scripts/dependabot_dirs.py（单一事实源，附自测）。
 # 这里只做「取各仓 dependabot.yml → 交给判据 → 塞进 issues」。
