@@ -1095,10 +1095,32 @@ try:
         progress("tag 快照 CHANGELOG：全部含本版段")
     else:
         # 退出码契约由生产方定义：1=真漂移；2=读不到（判不了 ≠ 通过，#79）
+        #
+        # ★ **只有真漂移行才算漂移**（matrix-tools#247）：门禁的输出里，
+        #   「· xxx 在历史逃逸豁免名单」是**提示**（tag 快照不可变的历史存量，
+        #   门禁自己已判定为豁免），不是漂移。旧写法把**每一行非空输出**都
+        #   当 issues ⇒ 2026-11-08 实测：报告里的「23 项漂移」有 3 项是这类
+        #   豁免提示 ⇒ **报告在报不存在的问题**，真漂移也被噪音淹没。
+        #   口径与同文件「release 对账」的跳过提示一致（那边是 print 提示，
+        #   不进 issues）⇒ 提示归提示，漂移归漂移。
+        drift: list[str] = []
+        notes: list[str] = []
         for line in out.splitlines():
-            if line.strip():
-                issues.append(line if line.startswith("❌") or line.startswith("⚠")
-                              else f"tag-snapshot: {line}")
+            s = line.strip()
+            if not s:
+                continue
+            if s.startswith("·"):
+                notes.append(s)                      # 豁免提示：不是漂移
+            elif s.startswith("❌ tag 快照 CHANGELOG 漂移"):
+                notes.append(s)                      # 汇总头：细节行已逐条列出
+            elif s.startswith("❌"):
+                drift.append(s[1:].strip())
+            else:
+                drift.append(s)                      # ⚠ 判不了 ⇒ 也算红
+        for n in notes:
+            print(f"      · {n}")
+        for d in drift:
+            issues.append(f"tag-snapshot: {d}")
         if r.returncode not in (1, 2):
             issues.append(f"tag-snapshot: 门禁异常退出码 {r.returncode}")
 except Exception as e:  # noqa: BLE001
