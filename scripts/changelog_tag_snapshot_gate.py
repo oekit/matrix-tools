@@ -59,6 +59,14 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "logx:hertzlog/v0.1.0",
     "logx:sink/v0.1.0",
     "data:all/v0.1.1",
+    # 2026-11-08 发版潮：修复轮打 tag 时 CHANGELOG 段未先行（段已在 main 补齐，
+    # tag 快照不可变）——core/data/gormx/middleware 四仓同因；data v0.20.5 为
+    # tag 抢在补段 PR 合入前的脏 tag（v0.20.6 已干净重发，代码一致）。
+    "core:v0.13.2",
+    "data:v0.20.4",
+    "gormx:v0.11.5",
+    "middleware:v0.13.14",
+    "data:v0.20.5",
 }
 
 # 段头匹配：`## [v0.12.6]` / `## [toolgate/v0.12.6]`（允许行尾尾注）。

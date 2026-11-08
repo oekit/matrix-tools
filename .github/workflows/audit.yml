@@ -93,6 +93,8 @@ jobs:
         run: python3 scripts/audit_floor_gate_selftest.py
       - name: 审计「各仓对别仓嵌套模块的地板」门禁自测（落后必须判出 / 口径不与根模块重叠 / 变异自证）
         run: python3 scripts/audit_nested_floor_gate_selftest.py
+      - name: 审计「BOM 兼容地板」门禁自测（低于快照地板必须判出 / 数字比 / 未收录不判 / 变异自证）
+        run: python3 scripts/audit_bom_floor_gate_selftest.py
       - name: 审计假绿自测（崩了≠零漂移 / CI 判退出码+成功标记 / 深层 CHANGELOG 扫得到 / 门禁不可用判红 / 变异自证）
         run: python3 scripts/audit_fail_loud_selftest.py
       - name: 工具链闸门自测（合并回退只在 CLEAN 放行 / CHANGELOG 覆写要 --apply / local_dir 只此一份）
