@@ -43,8 +43,9 @@ import time
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
-from matrix import (MODULES, ORG, RemoteReadError, git_branch, ensure_clean_all,  # noqa: E402
-                     remote_tag_exists, repo_dir, sh)
+from matrix import (MODULES, ORG, RemoteReadError, apply_sumdb_policy, git_branch,  # noqa: E402
+                    ensure_clean_all, go_toolchain_from_gomod, local_go_version,
+                    remote_tag_exists, repo_dir, sh)
 from inflight import read as inflight_read  # noqa: E402
 
 TODAY = time.strftime("%Y-%m-%d")
@@ -85,10 +86,43 @@ def tag_exists_remote(repo: str, tag: str) -> bool:
     return remote_tag_exists(repo, tag)
 
 
-def go_env():
+def go_env(root=None):
+    """go / golangci-lint 子进程环境（matrix-tools#249 / #245）。
+
+    - ``GOWORK=off``（既有口径）：外部用户视角；
+    - ``GOTOOLCHAIN=<按仓 go.mod 的 go 指令换算>``：与 org 共享 CI 同面。
+      本地门禁此前不钉工具链 ⇒ 判定结论取决于**发版机器上装的 Go**
+      （gormx v0.11.6 实测：同一份代码、同一个 golangci-lint v2.14.0，
+      本机 go1.27 判 3 issues、CI 钉的 go1.24 判 0 ⇒ CI 全绿的版本被本地
+      假红挡住，反之则发出去 CI 才红——恰是本门禁要防的事）。
+      GOTOOLCHAIN 显式给了版本 ⇒ go **不会**静默回退本机 Go（缺工具链时
+      自动下载，失败会显式报错）；
+    - ``GONOSUMDB=github.com/oekit/*``（未自设校验策略时）：级联发版「刚发完
+      依赖就发下游」时新版本可能尚未被 checksum DB 收录 ⇒ tidy/build 的
+      sumdb lookup 404（matrix-tools#245），矩阵内路径跳过校验。
+    """
     env = dict(os.environ)
     env["GOWORK"] = "off"
+    if root is not None:
+        gm = Path(root) / "go.mod"
+        if gm.exists():
+            tc = go_toolchain_from_gomod(gm.read_text(encoding="utf-8", errors="replace"))
+            if tc:
+                env["GOTOOLCHAIN"] = tc
+    apply_sumdb_policy(env)
     return env
+
+
+def toolchain_note(env: dict) -> str:
+    """失败信息里可核对的工具链注记（#249）：实际钉的是哪个、本机默认是哪个。
+
+    「本地与 CI 同面」的前提是**看得出是谁判的**——旧实现只贴 golangci-lint
+    输出，同一 commit 两台机器结论相反时回执无法解释。
+    """
+    tc = env.get("GOTOOLCHAIN")
+    if tc:
+        return f"GOTOOLCHAIN={tc}（自 go.mod go 指令；本机默认 {local_go_version()}）"
+    return f"GOTOOLCHAIN 未钉（go.mod 无 go 指令；本机 {local_go_version()}）"
 
 
 def check_repo(root, failures: list[str]) -> None:
@@ -101,10 +135,13 @@ def check_repo(root, failures: list[str]) -> None:
     if not shutil.which("golangci-lint"):
         print("[check] golangci-lint 本地不可用，跳过（CI 兜底）")
         return
+    env = go_env(root)
+    print(f"[check] lint 工具链：{toolchain_note(env)}")
     r = subprocess.run(["golangci-lint", "run", "--timeout", "5m"],
-                       cwd=root, capture_output=True, text=True, env=go_env())
+                       cwd=root, capture_output=True, text=True, env=env)
     if r.returncode != 0:
-        failures.append(f"golangci-lint 失败\n{(r.stdout + r.stderr)[-600:]}")
+        failures.append(f"golangci-lint 失败（{toolchain_note(env)}）\n"
+                        f"{(r.stdout + r.stderr)[-600:]}")
 
 
 def _repo_root(module_dir: Path) -> Path:
@@ -128,14 +165,17 @@ def check_module(repo: str, name: str, module_dir, tag: str, failures: list[str]
         failures.append(f"{name}: tag {tag} 已存在于远端（重推会使已缓存消费方集体中毒）")
         return
     # b. tidy 干净（地板指向已删 tag 时 tidy 直接红）
+    #    env 按该模块自己的 go.mod 钉 GOTOOLCHAIN（#249）：嵌套模块可能比父仓
+    #    钉更高的 go（如 bootstrap/obs 是 1.26.0、父仓 1.24.0），用父仓的钉值
+    #    会判到另一个工具链上。
     r = subprocess.run(["go", "mod", "tidy", "-diff"], cwd=module_dir,
-                       capture_output=True, text=True, env=go_env())
+                       capture_output=True, text=True, env=go_env(module_dir))
     if r.returncode != 0:
         failures.append(f"{name}: go mod tidy -diff 非空\n{r.stdout[-600:]}{r.stderr[-200:]}")
         return
     # c. 构建
     r = subprocess.run(["go", "build", "./..."], cwd=module_dir,
-                       capture_output=True, text=True, env=go_env())
+                       capture_output=True, text=True, env=go_env(module_dir))
     if r.returncode != 0:
         failures.append(f"{name}: go build 失败\n{r.stderr[-600:]}")
         return

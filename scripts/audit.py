@@ -21,6 +21,7 @@ from matrix import (  # noqa: E402
 )
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
 import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
+from install_lines import check_readme_install_lines, nested_units_of  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
                                   check_nested_version_correspondence)
@@ -541,6 +542,45 @@ for _i, repo in enumerate(MODULES, 1):
             issues.append(
                 f"{repo}: AGENTS.md 首行不是 DESC 的前缀（跑 refresh_agents_desc.py）"
                 f"——AGENTS.md 与矩阵真相源说法不一致")
+    # 6d) 嵌套发版单元的安装行 + 登记外路径反向判据（matrix-tools#250）
+    #     「版本行纪律」此前只覆盖根模块 ⇒ 12 个嵌套发版单元的 README 安装行
+    #     永不刷新、也无人核对（实测 7/7 陈旧，最坏落后 15 个 patch）。
+    #     正向：本仓嵌套单元的带版本安装行 ≠ 该单元远端最新 tag；
+    #     反向：带版本号的 oekit 安装行指向登记外路径 ⇒ 漏登记探测器。
+    #     嵌套单元集合从**仓内嵌套 go.mod 的 module 行**推导（文件系统事实，
+    #     不依赖 NESTED_MODULES 登记表——判据不得与被检对象共享判断逻辑）。
+    try:
+        _units = nested_units_of(d)
+
+        def _latest_nested(path: str) -> str | None:
+            prefix = _units.get(path)
+            if prefix is None:
+                return None
+            try:
+                _tags = remote_tags(repo)
+            except RemoteReadError as e:
+                # 读不到 ≠ 没有（#79）：显式记一条「未核对」，不静默跳过
+                if repo not in _remote_fail_recorded:
+                    _remote_fail_recorded.add(repo)
+                    check(False, f"{e}（该仓版本事实未核对，不能当通过）")
+                return None
+            best = None
+            for _t in _tags:
+                if not _t.startswith(prefix + "/"):
+                    continue
+                _ver = _t[len(prefix) + 1:]
+                if not re.fullmatch(r"v\d+\.\d+\.\d+", _ver):
+                    continue
+                _k = tuple(int(x) for x in _ver[1:].split("."))
+                if best is None or _k > best[0]:
+                    best = (_k, _ver)
+            return best[1] if best else None
+
+        for _msg in check_readme_install_lines(t, repo, set(_units), _latest_nested):
+            issues.append(_msg)
+    except Exception as e:  # noqa: BLE001
+        # ⚠️ **不可用 ⇒ 判红**（口径同 gate_unavailable：判不了 ≠ 通过）
+        issues.append(gate_unavailable("嵌套安装行判据", e))
 
 # ---------- 门面壳同步（data 八壳 ← 源包导出符号） ----------
 # 「源仓新增导出符号时本壳需同步」的跟版税此前靠人记（2026-10-16 曾漏

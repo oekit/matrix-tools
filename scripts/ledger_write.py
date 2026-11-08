@@ -17,9 +17,20 @@
     python3 scripts/ledger_write.py --issue pkg#47 --pr 51 --tag v0.29.0 \\
         --kind Bug --priority P1 --closed --note "修复分页口径"
 
+`--issue` 两种**显式**形态（matrix-tools#258）：
+    repo#N       org 取 --org（默认 oekit）
+    org/repo#N   串里显式给了 org ⇒ 覆盖 --org；落库键统一成 repo#N
+                 （台账既有形态就是 repo#N，见第 534 轮 hertz#94）
+其余形态（如 `a/b/c#1`、`repo#`、`#5`）⇒ **用法错误**（退出码 2、零写入），
+错误信息说人话——旧实现只查表面，`org/repo#N` 被放行后撞「gh issue view
+--repo oekit/oekit/matrix-tools」报成网络错误 ⇒ 19 条整批少记。
+
 用法（开新一轮 / 收口）：
     python3 scripts/ledger_write.py --new-run
     python3 scripts/ledger_write.py --run-end --summary "本轮 2 个 issue"
+`--summary`（matrix-tools#257）：收口时把摘要写进该轮的 `summary` 字段
+（docstring 里的示例命令此前只是文档——argparse 没有这个参数 ⇒ 照文档敲
+直接 rc=2、台账零字节 ⇒ 轮次永远停在未收口状态）。
 
 退出码：
     0 成功；1 事实与要记的内容不符（**拒绝写入**）；2 用法/IO 错误。
@@ -33,6 +44,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -48,10 +60,44 @@ import ghsafe  # noqa: E402  —— 远端读取层（把「读到空」与「�
 DEFAULT_LEDGER = Path(os.environ.get(
     "OEKIT_LEDGER", "/Volumes/zy/oekit/.oekit-cron-state.json"))
 
-# 台账的形状（与 .oekit-cron-state.json 现有结构一致）
-RUN_KEYS = ("started_at", "finished_at", "handled", "also_done", "skip")
+# 台账的形状（与 .oekit-cron-state.json 现有结构一致；summary 是 --run-end
+# --summary 写入的可选键，matrix-tools#257）
+RUN_KEYS = ("started_at", "finished_at", "handled", "also_done", "skip", "summary")
 ENTRY_KEYS = ("issue", "org", "kind", "priority", "pr", "merge_commit",
               "tag", "release", "closed", "board_status", "note")
+
+# ── --issue 的形状校验（matrix-tools#258）────────────────────────────────
+#
+# 旧实现只有一句 `partition("#")`：只保证「# 后面是数字」「# 前面非空」，
+# 不保证前面真的是仓名 ⇒ `oekit/matrix-tools#254` 这种含斜杠形态被**原样**
+# 当成 repo 传下去 ⇒ `gh issue view 254 --repo oekit/oekit/matrix-tools`
+# 报「error connecting to oekit / check your internet connection」——
+# **形态错被说成网络故障** ⇒ 19 条整批少记，排查方向还被带偏。
+ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"
+                          r"([A-Za-z0-9][A-Za-z0-9._-]*)#(\d+)$")
+
+
+def parse_issue_ref(text: str, default_org: str) -> tuple[str, str, int]:
+    """issue 引用 → (org, repo, num)。两种显式形态：
+
+      repo#N      org 用 default_org（--org）；
+      org/repo#N  串里显式给了 org ⇒ **覆盖** --org（落库键统一成 repo#N，
+                  与台账既有形态一致——键里带 org 会让收口复核拿
+                  `oekit/matrix-tools` 当 repo，报「读不到 ⇒ 无法判定」⇒
+                  那一轮永久无法收口，且没有通道能改键）。
+
+    其余形态 ⇒ ValueError（人话），调用方转成**用法错误**（退出码 2、零写入）
+    ——参数非法 ≠「读 GitHub 失败 ⇒ 事实不可知」，不能进同一类重试。
+    """
+    m = ISSUE_REF_RE.match(str(text).strip())
+    if not m:
+        raise ValueError(
+            f"--issue 形态应为 repo#N 或 org/repo#N（如 matrix-tools#254 或 "
+            f"oekit/matrix-tools#254），收到：{text!r}。"
+            f"repo 段只允许字母/数字/._-，org 至多一段（斜杠多段必是写错）——"
+            f"org 不用拼进 repo（org 用 --org 或 org/repo#N 显式给）。")
+    org = m.group(1) or default_org
+    return org, m.group(2), int(m.group(3))
 
 
 def now_iso() -> str:
@@ -304,11 +350,14 @@ def cmd_new_run(data: dict[str, Any]) -> None:
 
 
 def cmd_add_entry(args, data: dict[str, Any]) -> None:
-    org = args.org
-    repo, _, num_s = args.issue.partition("#")
-    if not repo or not num_s.isdigit():
-        raise SystemExit(f"✗ --issue 格式应为 repo#N，收到：{args.issue}")
-    num = int(num_s)
+    # 形状校验（matrix-tools#258）：repo#N / org/repo#N，其余 ⇒ 用法错误。
+    # 解析失败发生在写任何东西之前 ⇒ 台账零写入（与「拒绝写入」同一纪律）。
+    try:
+        org, repo, num = parse_issue_ref(args.issue, args.org)
+    except ValueError as e:
+        print(f"✗ 用法错误：{e}")
+        raise SystemExit(2) from None
+    key = f"{repo}#{num}"   # 落库键统一成 repo#N（org 进 org 字段，不进键）
 
     # ── 事实回读（写入的字段来自这里，不是来自命令行参数）──
     state = issue_state(org, repo, num)
@@ -333,7 +382,7 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
     release = (f"https://github.com/{org}/{repo}/releases/tag/{args.tag}"
                if args.tag else None)
     entry = {
-        "issue": args.issue, "org": org, "kind": args.kind, "priority": args.priority,
+        "issue": key, "org": org, "kind": args.kind, "priority": args.priority,
         "pr": args.pr, "merge_commit": merge_commit or None,
         "tag": args.tag, "release": release,
         "closed": bool(args.closed) or state == "CLOSED",
@@ -346,7 +395,7 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
     }
 
     _append_entry(entry, data)
-    print(f"✓ 已记入：{args.issue}  issue状态={state}"
+    print(f"✓ 已记入：{key}（org={org}）  issue状态={state}"
           + (f"  PR#{args.pr}({merge_commit[:8]})" if args.pr else "")
           + (f"  tag={args.tag}" if args.tag else "")
           + f"  closed={entry['closed']}")
@@ -380,23 +429,29 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
         if not repo or not tag_in_key:
             raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）<repo>@<tag>，收到：{target}")
         num = None
+        key = target
     else:
-        repo, _, num_s = target.partition("#")
-        if not repo or not num_s.isdigit():
-            raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）<repo>@<tag>，收到：{target}")
-        num = int(num_s)
+        # 形状校验同 cmd_add_entry（#258）：org/repo#N 显式形态解析出 org，
+        # 键统一成 repo#N；其余非法形态 ⇒ 用法错误（退出码 2），**不进**「读
+        # GitHub 失败 ⇒ 事实不可知」那一类。
+        try:
+            org, repo, num = parse_issue_ref(target, args.org)
+        except ValueError as e:
+            print(f"✗ 用法错误：{e}")
+            raise SystemExit(2) from None
+        key = f"{repo}#{num}"
 
     # 找到目标条目（跨轮次找，找不到就报错——不许凭印象改）
     hits: list[tuple[dict, dict]] = []
     for run in data.get("runs") or []:
         for e in run.get("handled") or []:
-            if e.get("issue") == target and e.get("org", org) == org:
+            if e.get("issue") == key and e.get("org", org) == org:
                 hits.append((run, e))
     if not hits:
-        raise Refused(f"台账里没有 {org}/{target} 的记录 ⇒ 无从修正")
+        raise Refused(f"台账里没有 {org}/{key} 的记录 ⇒ 无从修正")
     if len(hits) > 1:
         idxs = [i for i, (r, _e) in enumerate(hits)]
-        raise Refused(f"台账里有 {len(hits)} 条 {org}/{target} 的记录"
+        raise Refused(f"台账里有 {len(hits)} 条 {org}/{key} 的记录"
                       f"（第 {idxs} 条，按轮次顺序）⇒ 请先确认要改哪一条")
 
     _run, entry = hits[0]
@@ -437,10 +492,10 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
     else:
         state = issue_state(org, repo, num)
         if "closed" in changes and changes["closed"] and state != "CLOSED":
-            raise Refused(f"{org}/{target} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
+            raise Refused(f"{org}/{key} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
                           f"拒绝把记录改成 closed=True（事实不可知时拒绝写入）")
         if "closed" in changes and not changes["closed"] and state == "CLOSED":
-            raise Refused(f"{org}/{target} 在 GitHub 上**确实已关**（{state}）⇒ "
+            raise Refused(f"{org}/{key} 在 GitHub 上**确实已关**（{state}）⇒ "
                           f"拒绝把记录改成 closed=False（那会与现实相反）")
         if "tag" in changes and changes["tag"] and not tag_exists(org, repo, changes["tag"]):
             raise Refused(f"远端没有 tag {org}/{repo}@{changes['tag']} ⇒ 拒绝写入")
@@ -492,12 +547,18 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             if e.get("release_only") or is_release_only_key(issue):
                 drift.extend(_review_release_only(org, e, issue))
                 continue
-            repo, _, num_s = issue.partition("#")
-            if not num_s.isdigit():
-                continue
-            num = int(num_s)
+            # 键解析走 parse_issue_ref（#258 同一套）：台账键应为 repo#N；
+            # 历史上若混进 org/repo#N 或别的形态 ⇒ 解析不出就**显式报漂移**
+            # （旧写法 `isdigit()` 不匹配就静默 continue ⇒ 那条记录从未被复核
+            #  ⇒「记了没人核」＝白记）。
             try:
-                state = issue_state(org, repo, num)
+                e_org, repo, num = parse_issue_ref(issue, org)
+            except ValueError:
+                drift.append(f"{issue}：台账键形态不认识（应为 repo#N）⇒ 无法复核"
+                             f"（不能当成「没问题」）")
+                continue
+            try:
+                state = issue_state(e_org, repo, num)
             except Exception as e:  # noqa: BLE001 —— 读不到就报「无法判定」，不猜
                 drift.append(f"{issue}：issue 状态读不到（{e}）⇒ 无法判定")
                 continue
@@ -506,7 +567,7 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             pr = e.get("pr")
             if pr:
                 try:
-                    pr_state, _sha = pr_facts(org, repo, int(pr))
+                    pr_state, _sha = pr_facts(e_org, repo, int(pr))
                 except Exception as ex:  # noqa: BLE001
                     drift.append(f"{issue}：PR#{pr} 读不到（{ex}）⇒ 无法判定")
                     continue
@@ -515,7 +576,7 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             tag = e.get("tag")
             if tag:
                 try:
-                    if not tag_exists(org, repo, tag):
+                    if not tag_exists(e_org, repo, tag):
                         drift.append(f"{issue}：记录里写了 tag {tag}，但远端查不到")
                 except Exception as ex:  # noqa: BLE001
                     drift.append(f"{issue}：tag {tag} 无法判定（{ex}）")
@@ -533,6 +594,11 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
                              f"（轮次时间窗与事实不自洽）")
     for run in pending:
         run["finished_at"] = now
+        # --summary（matrix-tools#257）：收口摘要写进该轮的 summary 字段——
+        # docstring 里的示例命令此前只是文档（argparse 没有这个参数 ⇒ 照文档
+        # 敲直接 rc=2、台账零字节 ⇒ 轮次永远停在未收口状态）。
+        if getattr(args, "summary", None):
+            run["summary"] = args.summary
         data["last_run"] = run["started_at"]
     if drift:
         print("✗ 收口复核发现**漂移**（台账记录与现实不一致 ⇒ 台账已记，但内容不可信）：")
@@ -540,7 +606,8 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             print(f"    - {d}")
         raise SystemExit(1)
     print(f"✓ 已收口 {len(pending)} 轮（finished_at={now}，"
-          f"共 {sum(len(r.get('handled', [])) for r in pending)} 条记录，事实全部复核通过）")
+          f"共 {sum(len(r.get('handled', [])) for r in pending)} 条记录，事实全部复核通过"
+          + (f"；summary={args.summary!r}" if getattr(args, "summary", None) else "") + "）")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -549,7 +616,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--org", default="oekit", help="仓所属 org（oekit / pigeonbox）")
     p.add_argument("--new-run", action="store_true", help="开新一轮记录")
     p.add_argument("--run-end", action="store_true", help="收口最新一轮（并复核每条事实）")
-    p.add_argument("--issue", help="repo#N")
+    p.add_argument("--summary", default=None,
+                   help="收口摘要（配合 --run-end，写进该轮 summary 字段；#257）")
+    p.add_argument("--issue", help="repo#N 或 org/repo#N（org/repo#N 的 org 覆盖 --org；#258）")
     p.add_argument("--release-only", action="store_true",
                    help="记一次**无 issue 锚点**的发版（工具仓/umbrella 仓/纯重构）；配合 --repo/--tag")
     p.add_argument("--repo", help="仓名（配合 --release-only 用，如 hertz / matrix-tools / oekit）")
@@ -579,6 +648,17 @@ def main(argv: list[str] | None = None) -> int:
         p.error("--release-only 不支持 --amend-*（修正通道用 --issue 定位记录）")
     if not any([args.new_run, args.run_end, args.issue, args.release_only]):
         p.error("至少给一个动作：--new-run / --run-end / --issue / --release-only")
+    if args.issue:
+        # 形状校验前置（#258）：**用法错误在 argparse 阶段就以退出码 2 报出**、
+        # 台账零写入——旧实现把 `org/repo#N` 放行到 gh 调用之后，报成「网络
+        # 错误」（exit 1），调用方会把参数错误当基础设施故障去重试。
+        if is_release_only_key(args.issue):
+            pass  # release-only 键形态（（发版）<repo>@<tag>）由 cmd_amend 自己解析
+        else:
+            try:
+                parse_issue_ref(args.issue, args.org)
+            except ValueError as e:
+                p.error(str(e))
 
     path = Path(args.ledger)
     data = load_ledger(path)

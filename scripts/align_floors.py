@@ -18,6 +18,12 @@
 
 注意：地板抬升只是本地变更——对齐完成的定义是这些仓以 patch 版发版
 （release_train）且下游可见。--apply 输出末尾会列出待发版仓。
+
+**BOM 仓（伞仓 oekit）不在本工具的处理集**（matrix-tools#241）：它的 go.mod
+require 是无 import 的地板快照，tidy 会整块清空；显式 `--repos oekit` /
+`--repo oekit` 会被拒绝，并指向 gen_matrix_go.py（BOM 的地板与 matrix.go 是
+同一生成器的两个产物，必须整体重生成）。apply 阶段另有 require 骤降护栏：
+tidy 前后 oekit 地板 require 行数只增不减，减少即回滚报错。
 """
 from __future__ import annotations
 
@@ -29,8 +35,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from matrix import (MODULES, OEKIT_REQ_RE, RemoteReadError, enable_tag_cache,  # noqa: E402
-                    git_branch, is_dirty, latest_nested_tag, latest_tag, repo_dir, sh)
+from matrix import (BOM_REPO, MODULES, OEKIT_REQ_RE, RemoteReadError,  # noqa: E402
+                    apply_sumdb_policy, enable_tag_cache, git_branch, is_dirty,
+                    go_toolchain_from_gomod, latest_nested_tag, latest_tag, repo_dir, sh)
 from prkit import land_pr  # noqa: E402
 
 # 地板扫描用的 require 行正则：**容忍行尾的 `// indirect` 标记**。
@@ -192,15 +199,49 @@ def apply_repo(repo: str, base: str, plans: dict[Path, list[tuple[str, str, str]
     又一次**假绿**。
 
     顺序：**先改全部 go.mod，再统一 tidy**（tidy 会用改后的父仓内容解析）。
+
+    **require 骤降护栏（matrix-tools#241）**：tidy 的语义是「只保留被 import
+    到的 require」⇒ 对「require 无 import 的地板快照」仓（伞仓 BOM 即此形态，
+    36 条 require 没有任何一条被 import）tidy 必然**整块清空**，而工具一路
+    报「✓ 已写入并 tidy」。现在 tidy 前后各数一遍 oekit 地板 require 行：
+    只增不减是本工具的正常形态（align 只抬版本号、从不删 require），**减少
+    超过 tidy 前 ⇒ 判定为破坏 ⇒ 回滚全部 go.mod/go.sum 并报错**，绝不允许
+    报「✓ 已写入并 tidy」。护栏兜住的是「跳过名单被绕过」（直接以子仓形态
+    加进 BOM、或未来新增同类仓）时的破坏。
     """
     d = repo_dir(repo, base)
     files: list[str] = []
     for gm, ups in plans.items():
         apply_edits(gm, ups)
+    all_gomods = [gm for gm in find_gomods(d) if gm.exists()]
+    floors_before = {gm: len(FLOOR_REQ_RE.findall(gm.read_text())) for gm in all_gomods}
     # 父仓改完后，仓内**每个**模块都要 tidy（根 + 全部嵌套模块）
-    for gm in find_gomods(d):
+    for gm in all_gomods:
         if run_tidy(gm.parent) != 0:
             raise SystemExit(f"{repo}/{gm.parent.relative_to(d)}: go mod tidy 失败")
+    shrunk = []
+    for gm in all_gomods:
+        after = len(FLOOR_REQ_RE.findall(gm.read_text()))
+        if after < floors_before[gm]:
+            shrunk.append(f"{gm.relative_to(d)}: 地板 require {floors_before[gm]} → {after} 行")
+    if shrunk:
+        # 回滚 tidy 对整个仓 go.mod/go.sum 的破坏（含本次抬升——半截产物不能留），
+        # 然后显式报错并指路。**不得**报「✓ 已写入并 tidy」。
+        for gm in all_gomods:
+            rel = str(gm.relative_to(d))
+            sh(["git", "checkout", "--", rel], d, check=False)
+            rel_sum = rel.replace("go.mod", "go.sum")
+            if (d / rel_sum).exists():
+                sh(["git", "checkout", "--", rel_sum], d, check=False)
+        raise SystemExit(
+            f"❌ {repo}: go mod tidy 把 oekit 地板 require 清掉了（matrix-tools#241 护栏）：\n"
+            + "".join(f"    - {s}\n" for s in shrunk)
+            + "  该模块的 require 是**无 import 的地板快照**（伞仓 BOM 即此形态），tidy "
+              "的语义（只保留被 import 的）必然清空它。\n"
+              "  ⇒ 正确做法：这类仓由 gen_matrix_go.py **整体重生成**（go.mod 与 "
+              "matrix.go 是同一生成器的两个产物）：\n"
+              "      python3 scripts/gen_matrix_go.py --version vX.Y.Z\n"
+              "  本次抬升已随回滚撤销；处理完成因后重跑本工具。")
     for gm in find_gomods(d):
         rel = str(gm.relative_to(d))
         if (d / rel).exists() and sh(["git", "status", "--porcelain", rel], d).stdout.strip():
@@ -230,6 +271,25 @@ def main() -> None:
     else:
         base = os.environ.get("MATRIX_BASE") or base
     base = os.path.abspath(base)
+
+    # BOM 仓（伞仓 oekit）**不进本工具的处理集**（matrix-tools#241）：它的
+    # go.mod require 是「无 import 的地板快照」，go mod tidy 会把整块 36 行
+    # require 清空，而工具一路报「✓ 已写入并 tidy」——报成功、实际是破坏
+    # （2026-11-08 维护轮实测：`--apply --repos oekit` ⇒ go.mod 40 deletions）。
+    # BOM 的地板与 matrix.go 是**同一生成器的两个产物**，必须整体重生成
+    # （gen_matrix_go.py），不能单独 tidy。缺省枚举（MODULES）本来就不含
+    # 伞仓；这里防的是显式 `--repos oekit` / `--repo oekit` 绕过。
+    if BOM_REPO in repos:
+        explicit = "--repos" in args or "--repo" in args
+        msg = (
+            f"❌ align_floors 不处理 BOM 仓 {BOM_REPO}（matrix-tools#241）："
+            f"它的 go.mod require 是无 import 的地板快照，go mod tidy 会整块清空"
+            f"（工具却会报「✓ 已写入并 tidy」）。BOM 由 gen_matrix_go.py 整体重生成：\n"
+            f"    python3 scripts/gen_matrix_go.py --version vX.Y.Z")
+        if explicit:
+            raise SystemExit(msg)
+        print(f"[skip] {msg}")
+        repos = [r for r in repos if r != BOM_REPO]
 
     print("align_floors：依赖地板对齐（维护轮工具 / --repo 按需，非常规跟版）")
     plans_all: dict[str, dict[Path, list[tuple[str, str, str]]]] = {}
@@ -295,14 +355,80 @@ def re_apply_for_pr(repo: str, base: str) -> list[str]:
     return apply_repo(repo, base, plan_repo(repo, base))
 
 
-def run_tidy(module_dir: Path) -> int:
-    """GOWORK=off tidy（外部用户视角的地板必须可解析）。"""
+# sumdb 收录窗口的特征（matrix-tools#245）：新版本**已在模块代理上**
+# （.info/.zip 200）但 checksum DB 还没收录 ⇒ lookup 404 / "temporarily
+# unavailable"。这不是网络故障，是「刚发布的版本还没进校验库」。
+SUMDB_WINDOW_RE = re.compile(
+    r"sum\.golang\.org|sumdb|not found: temporarily unavailable", re.I)
+TIDY_ATTEMPTS = 3
+TIDY_BACKOFF = (2, 5, 15)   # 秒；sumdb 收录通常分钟级，这里先退避三轮，
+                            # 仍失败就把真实原因写进报错（见 run_tidy）。
+
+
+def go_env_for(module_dir) -> dict:
+    """go 子进程环境（matrix-tools#249 / #245，tidy 与 build 同一套）：
+
+    - ``GOWORK=off``：外部用户视角的地板必须可解析（既有口径）；
+    - ``GOTOOLCHAIN=<go.mod 的 go 指令换算>``：与 org 共享 CI 同面——本地门禁
+      不钉工具链时，判定取决于发版机器上装的 Go（gormx v0.11.6 实测：同一份
+      代码 go1.27 判 3 issues、CI 的 go1.24 判 0 ⇒ 本地更严挡发版、更松门禁
+      形同虚设）。GOTOOLCHAIN 显式给了版本 ⇒ go **不会**静默回退本机 Go
+      （缺工具链时自动下载）；
+    - ``GONOSUMDB=github.com/oekit/*``（调用方未自设校验策略时）：矩阵内路径
+      跳过 checksum DB——级联发版「刚发完版就抬下游地板」必然撞 sumdb 收录
+      窗口（#245）。
+    """
     env = dict(os.environ, GOWORK="off")
-    r = subprocess.run(["go", "mod", "tidy"], cwd=module_dir, env=env,
-                       capture_output=True, text=True)
-    if r.returncode != 0:
-        print(r.stdout[-400:] + r.stderr[-400:])
-    return r.returncode
+    apply_sumdb_policy(env)
+    gm = Path(module_dir) / "go.mod"
+    if gm.exists():
+        tc = go_toolchain_from_gomod(gm.read_text(encoding="utf-8", errors="replace"))
+        if tc:
+            env["GOTOOLCHAIN"] = tc
+    return env
+
+
+def run_tidy(module_dir, runner=None, sleep_fn=None) -> int:
+    """GOWORK=off tidy（外部用户视角的地板必须可解析）。
+
+    #245：即便 GONOSUMDB 已把矩阵内路径挡在 sumdb 之外（go_env_for），仍可能
+    撞收录窗口（校验策略被人覆盖 / 第三方依赖同窗）⇒ 把「sumdb lookup 404 /
+    temporarily unavailable」识别成**可重试的收录窗口**，按 2/5/15s 退避重试；
+    重试耗尽 ⇒ 报错文案必须点名真实原因（「刚发布的版本尚未被 sumdb 收录」），
+    **不许**原样吐 go 的 404 把排查带向「换代理/查网络」。
+
+    ``runner`` / ``sleep_fn``：可注入（自测用，不真跑 go、不真睡）。
+    """
+    env = go_env_for(module_dir)
+    if runner is None:
+        def runner():  # noqa: E306
+            return subprocess.run(["go", "mod", "tidy"], cwd=module_dir, env=env,
+                                  capture_output=True, text=True)
+    if sleep_fn is None:
+        import time as _time
+        sleep_fn = _time.sleep
+    last = None
+    for attempt in range(TIDY_ATTEMPTS):
+        last = runner()
+        if last.returncode == 0:
+            return 0
+        out = (last.stdout or "") + (last.stderr or "")
+        if not SUMDB_WINDOW_RE.search(out):
+            break                       # 不是收录窗口 ⇒ 不重试（真错误别拖）
+        if attempt + 1 < TIDY_ATTEMPTS:
+            print(f"  [tidy] sumdb 收录窗口（刚发布的版本尚未被 checksum DB 收录）"
+                  f"⇒ 退避 {TIDY_BACKOFF[attempt]}s 重试 {attempt + 1}/{TIDY_ATTEMPTS - 1} …")
+            sleep_fn(TIDY_BACKOFF[attempt])
+    if last.returncode != 0:
+        out = (last.stdout or "") + (last.stderr or "")
+        if SUMDB_WINDOW_RE.search(out):
+            print("[tidy] ❌ go mod tidy 失败：疑似**刚发布的版本尚未被 sumdb 收录**"
+                  "（matrix-tools#245）——模块内容已在代理上（.info/.zip 可取），"
+                  "缺的只是校验记录；\n"
+                  "  ⇒ 等收录（通常分钟级）后重试；或显式设 GONOSUMDB/GOSUMDB=off"
+                  "（本工具默认已对 github.com/oekit/* 跳过 sumdb）。")
+        print((last.stdout or "")[-400:] + (last.stderr or "")[-400:])
+    return last.returncode
 
 
 if __name__ == "__main__":

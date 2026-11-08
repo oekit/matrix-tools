@@ -491,6 +491,81 @@ def main() -> int:
         else:
             print("  ✓ 用例23 同一次发版重复记入 ⇒ 拒绝且台账未被改")
 
+        # ═══ #257 / #258：--run-end --summary 收口摘要 + --issue 形状校验 ══════
+
+        # ── 用例 24：--run-end --summary ⇒ 摘要写进该轮 summary 字段 ──────
+        #    （docstring 里的收口示例此前只是文档——argparse 没有这个参数 ⇒
+        #      照文档敲 rc=2、台账零字节 ⇒ 轮次永远停在未收口状态）
+        led24 = ledger_of("summary.json")
+        run_tool(["--new-run"], base_env, led24)
+        run_tool(["--issue", "pkg#90", "--closed"], base_env, led24)
+        r = run_tool(["--run-end", "--summary", "本轮 2 个 issue"], base_env, led24)
+        if r.returncode != 0:
+            failures.append(f"用例24 --run-end --summary 失败：{r.stdout}{r.stderr}")
+        else:
+            data24 = json.loads(led24.read_text(encoding="utf-8"))
+            run24 = data24["runs"][-1]
+            if run24.get("summary") != "本轮 2 个 issue":
+                failures.append(f"用例24 summary 没写进该轮：{run24.get('summary')!r}")
+            elif not run24.get("finished_at"):
+                failures.append("用例24 summary 在但轮次没收口")
+            else:
+                print("  ✓ 用例24 --run-end --summary ⇒ 摘要写进该轮 summary 字段")
+
+        # ── 用例 25：org/repo#N 显式形态 ⇒ 正确解析、落库键统一成 repo#N ──
+        led25 = ledger_of("orgrepo.json")
+        run_tool(["--new-run"], base_env, led25)
+        r = run_tool(["--issue", "oekit/matrix-tools#254", "--note", "显式 org 形态"],
+                     base_env, led25)
+        if r.returncode != 0:
+            failures.append(f"用例25 org/repo#N 写入失败（不应报网络错误）：{r.stdout}{r.stderr}")
+        else:
+            e25 = json.loads(led25.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
+            if e25.get("issue") != "matrix-tools#254":
+                failures.append(f"用例25 落库键没统一成 repo#N：{e25.get('issue')!r}")
+            elif e25.get("org") != "oekit":
+                failures.append(f"用例25 org 不对：{e25.get('org')!r}")
+            else:
+                print("  ✓ 用例25 org/repo#N ⇒ 键统一 repo#N、org 来自串")
+        # 串里显式 org 覆盖 --org 默认值
+        run_tool(["--new-run"], base_env, led25)
+        r = run_tool(["--org", "oekit", "--issue", "pigeonbox/demo#7"], base_env, led25)
+        if r.returncode != 0:
+            failures.append(f"用例25b 显式 org 覆盖 --org 失败：{r.stdout}{r.stderr}")
+        else:
+            e25b = json.loads(led25.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
+            if e25b.get("issue") != "demo#7" or e25b.get("org") != "pigeonbox":
+                failures.append(f"用例25b org 覆盖不对：{e25b.get('issue')!r}/{e25b.get('org')!r}")
+            else:
+                print("  ✓ 用例25b 串里的 org 覆盖 --org 默认值")
+
+        # ── 用例 26：非法形态 ⇒ 用法错误（退出码 2、台账零写入、说人话）──
+        led26 = ledger_of("badshape.json")
+        run_tool(["--new-run"], base_env, led26)
+        before26 = led26.read_text(encoding="utf-8")
+        for bad in ("oekit/a/b#1", "repo#", "#5", "repo#x", "repo name#3", "pkg#12x"):
+            r = run_tool(["--issue", bad], base_env, led26)
+            if r.returncode != 2:
+                failures.append(f"用例26 非法形态 {bad!r} 退出码 {r.returncode}（应为 2）"
+                                f"——参数非法不该归到「读 GitHub 失败」那一类")
+            elif led26.read_text(encoding="utf-8") != before26:
+                failures.append(f"用例26 非法形态 {bad!r} 却把台账改了")
+            elif "格式" not in (r.stdout + r.stderr) and "形态" not in (r.stdout + r.stderr):
+                failures.append(f"用例26 非法形态 {bad!r} 的报错没说清用法：{r.stdout}{r.stderr}")
+        print("  ✓ 用例26 非法形态 ⇒ 退出码 2、零写入、报错说人话")
+
+        # ── 用例 27：amend 通道同款形状校验 ─────────────────────────────
+        led27 = ledger_of("amend_badshape.json")
+        run_tool(["--new-run"], base_env, led27)
+        before27 = led27.read_text(encoding="utf-8")
+        r = run_tool(["--issue", "oekit/a/b#3", "--amend-open"], base_env, led27)
+        if r.returncode != 2:
+            failures.append(f"用例27 amend 通道非法形态退出码 {r.returncode}（应为 2）")
+        elif led27.read_text(encoding="utf-8") != before27:
+            failures.append("用例27 amend 非法形态却把台账改了")
+        else:
+            print("  ✓ 用例27 amend 通道非法形态 ⇒ 退出码 2 且台账未被改")
+
     if failures:
         print("\n✗ 自测失败：")
         for f in failures:
@@ -534,10 +609,13 @@ _MUTATIONS = [
      ('    if not release_exists(org, repo, tag):', '    if False:'),
      {"16"}),
     # ⑤ 收口复核跳过 release-only 记录 ⇒「记了没人核」＝白记
+    #    （★ 影响面**两条**：正常收口（用例 19）与封存前收口（用例 20）都靠这条
+    #      分支把 release-only 键送进专项复核——跳掉后键落到通用解析，
+    #      #258 的形状校验会把「键形态不认识」显式报成漂移 ⇒ 两处一起红）
     ("收口复核跳过 release-only 记录",
      ('            if e.get("release_only") or is_release_only_key(issue):',
       '            if False:'),
-     {"19"}),
+     {"19", "20"}),
     # ⑥ ★★ **调用点级**变异：被测函数本身保持正确，**只把接线断了**
     #    （main 不再把 --release-only 接到写入通道）
     #    ⇒ 证明「默认接线真的被跑」⇒ 避免「自测只测了函数、接线早断了却全绿」
@@ -549,6 +627,19 @@ _MUTATIONS = [
     ("release-only 键形态被改掉",
      ('RELEASE_ONLY_PREFIX = "（发版）"', 'RELEASE_ONLY_PREFIX = "（发版X）"'),
      {"15"}),
+    # ⑧a ★ #258：org/repo#N 显式形态的解析被退掉（org 组不再匹配斜杠段）
+    #    ⇒ org/repo#N 被拒成用法错误（25/25b 红——形态支持是本修法的一半）
+    ("--issue 的 org/repo#N 显式形态被退掉",
+     ('ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"',
+      'ISSUE_REF_RE = re.compile(r"^(?:())?"'),
+     {"25", "25b"}),
+    # ⑧b ★ #258：repo 段的字符集放宽到「# 前任意」（旧写法的表面查）⇒
+    #    斜杠多段/含空格形态被放行后 rc=0 而非 2（26 红），amend 通道同款
+    #    放行但落库键是垃圾（27 红）——正是「放行后报网络错误、整批少记」的根
+    ("--issue 的 repo 段字符集退回表面查",
+     ('                          r"([A-Za-z0-9][A-Za-z0-9._-]*)#(\\d+)$")',
+      '                          r"([A-Za-z0-9][^#]*)#(\\d+)$")'),
+     {"26", "27"}),
 ]
 
 
