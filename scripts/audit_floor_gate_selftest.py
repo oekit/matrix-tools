@@ -178,12 +178,15 @@ def _make_floor_fixture(td: Path, lifted: bool) -> Path:
     """work clone：本地工作树与 main 都停在地板 v0.31.0；
     lifted=True 时另经 fresh clone 把 origin/main 抬到 v0.31.1（work 不 pull）。"""
     origin = td / "origin.git"
-    subprocess.run(["git", "init", "-q", "--bare", str(origin)], check=True)
+    subprocess.run(["git", "init", "-q", "--bare", "--initial-branch=main",
+                    str(origin)], check=True)
     work = td / "work"
-    subprocess.run(["git", "clone", "-q", str(origin), str(work)], check=True)
-    # 空 bare 仓 clone 出来是 unborn HEAD，分支名随 git 默认（可能是 master）
-    # ⇒ 显式钉成 main，保证 origin/main 存在（判据 fetch 的就是它）。
-    _git(work, "checkout", "-q", "-B", "main")
+    # ★ 不用 clone：空 bare 仓 clone 出来的 unborn HEAD 分支名随 git 默认
+    #   （CI 的 git 默认 master），而 checkout -B 在 unborn HEAD 上不保证生效
+    #   ⇒ CI 实测 push 报「src refspec main does not match any」。
+    #   git init -b main 显式钉死分支名，任何 git 版本行为一致。
+    subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True)
+    _git(work, "remote", "add", "origin", str(origin))
     _git(work, "config", "user.email", "selftest@example.invalid")
     _git(work, "config", "user.name", "selftest")
     (work / "go.mod").write_text(
@@ -191,8 +194,7 @@ def _make_floor_fixture(td: Path, lifted: bool) -> Path:
         "require (\n\tgithub.com/oekit/pkg v0.31.0\n)\n", encoding="utf-8")
     _git(work, "add", "-A")
     _git(work, "commit", "-q", "-m", "old floor")
-    _git(work, "push", "-q", "origin", "main")
-    _git(work, "branch", "-q", "--set-upstream-to=origin/main", "main")
+    _git(work, "push", "-q", "-u", "origin", "main")
     if lifted:
         fresh = td / "fresh"
         subprocess.run(["git", "clone", "-q", str(origin), str(fresh)], check=True)
