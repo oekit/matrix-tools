@@ -108,6 +108,16 @@ jobs:
         run: python3 scripts/audit_nested_floor_gate_selftest.py
       - name: 审计「BOM 兼容地板」门禁自测（低于快照地板必须判出 / 数字比 / 未收录不判 / 变异自证）
         run: python3 scripts/audit_bom_floor_gate_selftest.py
+      - name: 嵌套安装行判据自测（正向落后与登记外路径反向都判得出）
+        run: python3 scripts/install_lines_selftest.py
+      - name: GOTOOLCHAIN 钉面自测（按仓 go 指令钉版本，失败信息带 toolchain_note）
+        run: python3 scripts/gotoolchain_env_selftest.py
+      - name: 闭合规划器模拟自测（读 main 工作树，残留口径=走完应为 0）
+        run: python3 scripts/floor_closure_plan_selftest.py
+      - name: tag 可达性自测（悬空 tag 判出，peeled 行取 sha 不打 API）
+        run: python3 scripts/tag_reachability_selftest.py
+      - name: BOM Release 渲染/回填自测（正文从 go.mod 渲染，占位串判出）
+        run: python3 scripts/gen_releases_bom_selftest.py
       - name: 审计假绿自测（崩了≠零漂移 / CI 判退出码+成功标记 / 深层 CHANGELOG 扫得到 / 门禁不可用判红 / 变异自证）
         run: python3 scripts/audit_fail_loud_selftest.py
       - name: 工具链闸门自测（合并回退只在 CLEAN 放行 / CHANGELOG 覆写要 --apply / local_dir 只此一份）
