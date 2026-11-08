@@ -4,6 +4,16 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.4] — 2026-11-08
+
+### fix: 发版/地板工具链 11 连修（PR #263）+ audit 门禁 9 连修 + DESC 27 合 1（PR #264）
+
+#240 tag 可达性巡检 / #241 align_floors 拒 BOM 仓+require 骤降护栏 / #242 闭合规划器读 main 工作树 /
+#243 维护轮 issue 步骤重写 / #245 sumdb 收录窗口退避 / #249 GOTOOLCHAIN 钉面 / #250 嵌套安装行判据 /
+#251 BOM 纳入 release_repos / #252 BOM Release 正文渲染 / #257 ledger --summary / #258 --issue 形状校验；
+#246 地板判据读 origin/main / #248 GOPROXY 硬设 / #253 站点三产物集合相等 / #254 空跑 fail-loud /
+#255 --unit 只判点名 / #259 缺段模板+文案 lint / #260 接线门禁 / #261 proxy 复核 fail-closed。
+
 ## [v0.2.3] — 2026-11-08
 
 ### feat(audit): BOM 兼容地板门禁（矩阵内+oagentkit 消费方）+ 测试覆盖报警 + gen_agents 治理模板轮
