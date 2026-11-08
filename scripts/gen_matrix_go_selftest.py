@@ -15,6 +15,10 @@
 3. **既有口径不许回归**：取不到 go.mod 必须报错（#100）、读不到远端 tag ⇒
    退出码 2（#79）、退出码分类。
 
+4. **proxy 复核的覆盖与口径**（matrix-tools#261，2026-11-08）：--check 的 proxy
+   复核读不到时**必须退出码 2**（「未核对」≠「一致」，不许 ⚠ 完照样 exit 0）；
+   事实源可被 OEKIT_GO_PROXY / GOPROXY 覆盖、官方源读不到回退 goproxy.cn。
+
 **变异自证（--mutate）**：把实现**改回旧写法**（源码级替换 → 临时目录里
 加载变异体）⇒ 对应用例必须**精确转红**。
 
@@ -28,7 +32,10 @@ tag；「远端」用本地 bare 仓当 origin，fetch 不出网）。Go 编译/
 """
 from __future__ import annotations
 
+import contextlib
 import importlib.util
+import io
+import os
 import shutil
 import subprocess
 import sys
@@ -261,6 +268,65 @@ def case_B4_proxy_unreadable_is_unchecked_not_drift(gmg=gen_matrix_go) -> None:
     _record("B4", ok, f"读不到应记未核对而非漂移，实得 drift={drift} unchecked={unchecked}")
 
 
+def case_B5_proxy_unchecked_exits_2(gmg=gen_matrix_go) -> None:
+    """matrix-tools#261：proxy 复核没跑完 ⇒ main() --check 必须退出码 2。
+
+    旧写法 unchecked 只 ⚠ 一句然后照样「✓ 一致」+ exit 0 ⇒ proxy 全读不到时
+    这道复核静默零覆盖，audit 还按退出码判「BOM 新鲜度 ✓」（假绿）。
+    夹具：collect 注入夹具模块、产物落进临时 OEKIT_DIR（changed 空 ⇒ 不踩
+    「BOM 陈旧」分支）、proxy 全读不到 ⇒ 唯一出路必须是 EXIT_UNREADABLE。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        bom = Path(td) / "oekit"
+        bom.mkdir()
+        files = gmg.render(_fixture_modules(), "v0.2.9", "2026-11-08T00:00:00Z")
+        files["matrix.go"] = gmg.gofmt_text(files["matrix.go"])
+        for name, content in files.items():
+            (bom / name).write_text(content, encoding="utf-8")
+        saved = (gmg.OEKIT_DIR, gmg.collect, gmg.proxy_go_directive, sys.argv)
+        buf = io.StringIO()
+        try:
+            gmg.OEKIT_DIR = str(bom)
+            gmg.collect = lambda: _fixture_modules()
+            gmg.proxy_go_directive = lambda p, v, timeout=20.0: None
+            sys.argv = ["gen_matrix_go.py", "--check"]
+            with contextlib.redirect_stdout(buf):
+                rc = gmg.main()
+        finally:
+            (gmg.OEKIT_DIR, gmg.collect, gmg.proxy_go_directive, sys.argv) = saved
+        out = buf.getvalue()
+        ok = rc == gmg.EXIT_UNREADABLE == 2 and "未核对" in out \
+            and "✓ oekit BOM 与远端 tag 一致" not in out
+        _record("B5", ok,
+                f"proxy 全读不到 ⇒ 必须退出码 2 且不印「一致」（#261）："
+                f"rc={rc} out={out[:240]}")
+
+
+def case_B6_proxy_bases_env_override(gmg=gen_matrix_go) -> None:
+    """matrix-tools#261：复核事实源可覆盖——OEKIT_GO_PROXY > GOPROXY 首段 > 默认双源。"""
+    saved = {k: os.environ.get(k) for k in ("OEKIT_GO_PROXY", "GOPROXY")}
+    try:
+        os.environ["OEKIT_GO_PROXY"] = "http://127.0.0.1:9/mirror"
+        os.environ["GOPROXY"] = "https://goproxy.cn,direct"
+        bases1 = gmg.proxy_bases()
+        ok1 = bool(bases1) and bases1[0] == "http://127.0.0.1:9/mirror" \
+            and "https://goproxy.cn" in bases1
+        os.environ.pop("OEKIT_GO_PROXY")
+        bases2 = gmg.proxy_bases()
+        ok2 = bool(bases2) and bases2[0] == "https://goproxy.cn"
+        os.environ.pop("GOPROXY")
+        bases3 = gmg.proxy_bases()
+        ok3 = bases3 == ["https://proxy.golang.org", "https://goproxy.cn"]
+        _record("B6", ok1 and ok2 and ok3,
+                f"复核事实源的覆盖/顺序不对：{bases1}/{bases2}/{bases3}")
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
 # ── 改造A：breaking 索引 + 不可变对外面 ───────────────────────────────────
 def _fixture_modules() -> list[dict]:
     """两个模块的夹具（宿主 + 嵌套），各带自己的 breaking 条目。"""
@@ -463,6 +529,10 @@ CASES = [
      case_B3_proxy_detects_floor_mismatch, ["B3"]),
     ("B4 改造B：proxy 读不到 ⇒ 记「未核对」而不是判红",
      case_B4_proxy_unreadable_is_unchecked_not_drift, ["B4"]),
+    ("B5 #261：proxy 复核没跑完 ⇒ main() --check 退出码 2（不是「✓ 一致」+ 0）",
+     case_B5_proxy_unchecked_exits_2, ["B5"]),
+    ("B6 #261：复核事实源可覆盖（OEKIT_GO_PROXY/GOPROXY）+ 默认双源回退",
+     case_B6_proxy_bases_env_override, ["B6"]),
     ("C1 改造A：嵌套模块的 breaking 只归自己（不折叠进宿主）",
      case_C1_breaking_belongs_to_its_own_module, ["C1", "C1_render"]),
     ("C2 改造A：导出面是不可变的（无导出的可变 map/切片）",
@@ -522,6 +592,15 @@ def _mutate_proxy_no_compare():
     )])
 
 
+def _mutate_proxy_unchecked_still_green():
+    """matrix-tools#261 退回旧写法：未核对只 ⚠ 不改退出码 ⇒ 照样「✓ 一致」+ exit 0。"""
+    return _load_mutated("gmg_mut_unchecked_green", [(
+        """            print("   先修网络/凭证，或用 OEKIT_GO_PROXY 指定可达的镜像后重跑。")
+            return EXIT_UNREADABLE""",
+        """            print("   先修网络/凭证，或用 OEKIT_GO_PROXY 指定可达的镜像后重跑。")""",
+    )])
+
+
 def _mutate_breaking_folded():
     """改造A 退回旧写法：嵌套模块的 breaking 折叠进宿主（都取根模块的）。"""
     return _load_mutated("gmg_mut_folded", [(
@@ -543,6 +622,8 @@ MUTATIONS = [
      _mutate_go_floor_old_shape, {"B1", "B2"}),
     ("改造B 复核退化成「只看读到没有」（不再比对地板）",
      _mutate_proxy_no_compare, {"B3"}),
+    ("#261 退回旧写法：proxy 未核对只 ⚠ 不改退出码（照样 ✓ + exit 0）",
+     _mutate_proxy_unchecked_still_green, {"B5"}),
     ("改造A 退回旧写法：嵌套模块的 breaking 折叠进宿主",
      _mutate_breaking_folded, {"C1", "C1_render"}),
     ("改造A 退回旧写法：导出可变全局（var Versions / var Matrix）",

@@ -75,6 +75,18 @@ BOM_REPO = "oekit"
 # 判据一：零捆绑。只对**文档里明确承诺过**的仓生效。
 ZERO_THIRD_PARTY = {"pkg", "logx", "timertask"}
 
+# 判据用的 module proxy：**显式指定，不吃环境变量**（matrix-tools#248）。
+#
+# 旧写法是 setdefault（外部已设置的 GOPROXY 优先）⇒ 比如（比如巡检规范
+# 推荐给本地离线编译用的 `https://goproxy.cn,direct`）会**静默改写**判据的
+# 事实源：落后一个版本的镜像上 `@latest` 解析到旧版本 ⇒ 模块图少一个发版单元
+# ⇒「一次拉齐」被误判成「承诺被打破」——同一个 commit 换个代理结论相反
+# ⇒ 这条「可复算的事实」本身不可复算（2026-11-08 实测两个代理结论相反）。
+# 现在：代理只认 `--proxy` 参数（默认官方源），**环境变量一律进不去**，
+# 且实际使用的代理打进报告头 ⇒ 读者一眼知道结论出自哪个镜像。
+DEFAULT_PROXY = "https://proxy.golang.org,direct"
+PROXY = DEFAULT_PROXY      # main() 按 --proxy 覆写；自测直接改这个全局来验
+
 
 def _nested_units() -> list[str]:
     """嵌套模块的单元名（`parent/sub`），取自 matrix.py 的登记表。"""
@@ -278,6 +290,12 @@ def collect_problems(units: list[str], by_unit: dict, base: str) -> list[str]:
 
     伞仓（oekit）的「装不上」由 `check_bom_coverage` 报（它的口径不同：装不上时
     要报「少了哪些发版单元」，不能只说装不上）⇒ 这里跳过它，避免同一个故障报两次。
+
+    ★ **伞仓没被测量就不做判定**（matrix-tools#255）：`--unit` 模式只测一个单元
+      ⇒ `by_unit` 里没有伞仓 ⇒ 旧写法把「伞仓缺席」喂成 {"ok": False,
+      "error": "未测量"} ⇒ 判出一条**不存在的故障**
+      （「伞仓装不上」）并退出码 1 ⇒ 单单元调试入口**必然假红**。
+      口径：**未测量既不是绿也不是红**——没测的单元不产生任何问题。
     """
     problems: list[str] = []
     for u in units:
@@ -290,7 +308,8 @@ def collect_problems(units: list[str], by_unit: dict, base: str) -> list[str]:
         if "/" in u:
             parent = u.split("/")[0]
             problems += check_parent_isolation(u, by_unit.get(parent, {}), base)
-    problems += check_bom_coverage(by_unit.get(BOM_REPO, {"ok": False, "error": "未测量"}))
+    if BOM_REPO in by_unit:
+        problems += check_bom_coverage(by_unit[BOM_REPO])
     return problems
 
 
@@ -300,7 +319,10 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 300) -> tuple[int, str]:
     env = dict(os.environ)
     env["GOWORK"] = "off"
     env["GOFLAGS"] = "-mod=mod"
-    env.setdefault("GOPROXY", "https://proxy.golang.org,direct")
+    # ★ **硬设**，不用 setdefault（matrix-tools#248）：判据的事实源必须显式、
+    #   可复算——外部 GOPROXY 静默改写代理 ⇒ 落后镜像上的「@latest」解析到旧
+    #   版本 ⇒ 把「镜像没收录新版本」当成「承诺被打破」（假红）。
+    env["GOPROXY"] = PROXY
     try:
         r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True,
                            timeout=timeout, env=env)
@@ -443,8 +465,53 @@ def _selftest() -> int:
     assert not check_zero_third_party("pkg", broken), \
         "装不上不归零捆绑判据管（统一判据报，别重复报）"
 
+    # ⑩ ★ --unit 模式：**未测量的单元不得产生任何 problem**（matrix-tools#255）。
+    #    旧写法把「伞仓缺席」喂成 {"ok": False, "error": "未测量"} ⇒ 单单元调试
+    #    入口必然多出一条「oekit: 消费方装不上（未测量）」的假红并退出码 1。
+    #    ⛔ 变异自证：把分派退回「伞仓缺席 ⇒ 默认未测量」的旧写法
+    #      ⇒ 本组断言立刻转红（见下面的源码级锚点断言）。
+    unit_like = {"ok": True, "error": "", "paths": ["github.com/oekit/logx/sink"],
+                 "third_party": [], "own": [], "modules": []}
+    p_unit = collect_problems(["logx/sink"], {"logx/sink": unit_like}, "/nonexistent")
+    assert p_unit == [], f"--unit 模式下未测量的伞仓不得产生 problem（#255）：{p_unit}"
+    # 被点名的单元真有问题 ⇒ 真红必须还在（不许把真红一起消掉）
+    p_unit_bad = collect_problems(["logx/sink"], {"logx/sink": broken}, "/nonexistent")
+    assert len(p_unit_bad) == 1 and "logx/sink" in p_unit_bad[0], \
+        f"--unit 模式下被点名单元的真问题必须报出：{p_unit_bad}"
+    # --unit oekit（伞仓自己）⇒ 一次拉齐判据照常跑（点名伞仓 = 要判它）
+    p_bom_unit = collect_problems(["oekit"], {"oekit": full_ok}, "/nonexistent")
+    assert not p_bom_unit, f"--unit oekit 时伞仓判据应照常成立：{p_bom_unit}"
+
+    # ⑪ ★ 代理口径：**环境变量 GOPROXY 不得改写判据事实源**（matrix-tools#248）。
+    #    实测：GOPROXY=goproxy.cn（落后一个版本的镜像）⇒ @latest 解析到旧版本
+    #    ⇒「一次拉齐」被误判成「承诺被打破」⇒ 同一 commit 换代理结论相反。
+    #    ⛔ 变异自证：把 `env["GOPROXY"] = PROXY` 退回 `env.setdefault(...)` ⇒
+    #      下面的子进程读到的就是外部环境变量 ⇒ 断言转红（连同源码锚点断言）。
+    _old_goproxy = os.environ.get("GOPROXY")
+    os.environ["GOPROXY"] = "https://goproxy.cn,direct"
+    try:
+        rc_env, out_env = _run([sys.executable,
+                                "-c", "import os; print(os.environ.get('GOPROXY'))"],
+                               Path.cwd(), timeout=60)
+    finally:
+        if _old_goproxy is None:
+            os.environ.pop("GOPROXY", None)
+        else:
+            os.environ["GOPROXY"] = _old_goproxy
+    assert rc_env == 0 and out_env.strip() == DEFAULT_PROXY, \
+        (f"_run 子进程必须看到工具指定的代理（{DEFAULT_PROXY}），"
+         f"而不是外部环境变量改写的值（#248）：rc={rc_env} out={out_env.strip()!r}")
+
+    # 源码级锚点（两条变异自证）：退回旧写法时这里直接拦下
+    #（锚点串拆开写——否则本断言自己的源码就含锚点，永远自红）
+    _src = Path(__file__).read_text(encoding="utf-8")
+    assert ("env.set" + 'default("GOPROXY"') not in _src, \
+        "变异自证：GOPROXY 又回到 setdefault——外部环境变量会静默改写判据事实源（#248）"
+    assert "if BOM_REPO in by_unit:" in _src and ("by_unit.get(BOM" + "_REPO,") not in _src, \
+        "变异自证：伞仓缺席又被当成「装不上」喂给判据——--unit 入口必然假红（#255）"
+
     print("✅ consumer_probe 判据自测通过（父←子泄漏 / 兄弟泄漏 / 零捆绑 / 一次拉齐 / "
-          "子包粒度 / 深层嵌套 / 装不上）")
+          "子包粒度 / 深层嵌套 / 装不上 / --unit 只判点名单元 / 代理口径不吃环境变量）")
     return 0
 
 
@@ -487,14 +554,19 @@ def _fixture_base(leak: bool = True, parent_imports_subpkg: bool = False,
 # ---------- 主流程 ----------
 
 def main() -> int:
+    global PROXY
     ap = argparse.ArgumentParser(description="消费面依赖画像与隔离承诺核验")
-    ap.add_argument("--unit", default="", help="只跑一个单元")
+    ap.add_argument("--unit", default="", help="只跑一个单元（调试用；只判被点名的单元）")
     ap.add_argument("--json", default="", help="把结果写成 JSON")
     ap.add_argument("--base", default="", help="各仓父目录（默认取本仓上级）")
+    ap.add_argument("--proxy", default=DEFAULT_PROXY,
+                    help=f"判据事实源用的 module proxy（默认 {DEFAULT_PROXY}；"
+                         f"环境变量 GOPROXY 不影响本判据，matrix-tools#248）")
     ap.add_argument("--selftest", action="store_true", help="判据自测（不联网）")
     args = ap.parse_args()
     if args.selftest:
         return _selftest()
+    PROXY = args.proxy
 
     # stdout 行缓冲：重定向/管道时 Python 默认块缓冲 ⇒ 整个运行期间日志都是 0 字节，
     # 进程被杀/超时时**一个字都留不下**（2026-10-25 audit.py 踩过同一个坑）。
@@ -506,6 +578,9 @@ def main() -> int:
 
     base = args.base or str(Path(__file__).resolve().parent.parent.parent)
     units = [args.unit] if args.unit else (list(MODULES) + _nested_units() + [BOM_REPO])
+    # 报告头带上**实际使用的代理**（matrix-tools#248）：「消费面承诺成立与否」
+    # 依赖判据当时的 proxy ⇒ 结论必须能复算 ⇒ 读者得知道事实源出自哪个镜像。
+    print(f"  （判据事实源 module proxy：{PROXY}——环境变量 GOPROXY 改写不了它）")
     results: list[dict] = []
     by_unit: dict[str, dict] = {}
     tmp = Path(tempfile.mkdtemp(prefix="consumer_probe_"))
@@ -531,6 +606,12 @@ def main() -> int:
     else:
         print(f"✅ 消费面承诺全部成立（{len(results)} 个发版单元："
               f"装得上 + 父←子隔离 + 兄弟隔离 + 零捆绑 + 一次拉齐）")
+    if args.unit:
+        # matrix-tools#255：--unit 是单单元调试入口——被点名的单元没问题就是没问题，
+        # 不得被「没测过的伞仓」造出的假红淹没。这里明说覆盖面，覆盖不足不装作全量。
+        total = len(list(MODULES) + _nested_units() + [BOM_REPO])
+        print(f"ℹ --unit 模式：本次只测了 {len(units)}/{total} 个发版单元"
+              f"（只判被点名的单元；未测单元不做判定）")
     if args.json:
         Path(args.json).write_text(json.dumps(
             {"results": [{k: v for k, v in r.items() if k != "modules"} for r in results],

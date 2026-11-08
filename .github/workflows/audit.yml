@@ -41,6 +41,17 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
+      # matrix-tools#254：部分自测的「工作区依赖」用例需要兄弟仓当事实源——
+      # 独立 clone 里兄弟仓不在 ⇒ 判据拿不到事实源。曾经的处理是「跳过 + 判绿」
+      # （空跑），现在的口径是：CI 里把兄弟仓检出 ⇒ 判据真跑；脚本自己也加了
+      # 「核对数 == 0 ⇒ fail-loud」的兜底（检出漏了会红，不会静默绿）。
+      - name: Clone matrix repos（工作区依赖的自测用例需要兄弟仓——#254）
+        run: |
+          mkdir -p repos
+          MODS=$(python3 -c "import matrix; print(' '.join(matrix.MODULES))")
+          for m in $MODS; do
+            git clone --quiet --depth 1 "https://github.com/oekit/$m.git" "repos/$m"
+          done
       - name: close_issue 自测（回执必须真落地，不能假绿）
         run: python3 scripts/close_issue_selftest.py
       - name: close_issue 回执「变更内容」定位自测（能定位到本条 / 定位不到要明说 / PR 号不算 issue 引用 / 变异自证）
@@ -79,7 +90,9 @@ jobs:
         run: python3 scripts/release_train_requires_selftest.py
       - name: 发版「依赖可解析」门禁·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
         run: python3 scripts/release_train_requires_selftest.py --mutate
-      - name: DESC 子包口径自测（声明的「N 合 1」必须等于实际公开子包）
+      - name: DESC 子包口径自测（声明的「N 合 1」必须等于实际公开子包；兄弟仓已检出 ⇒ 判据真跑，零核对必须 fail-loud——#254）
+        env:
+          MATRIX_BASE: ${{ github.workspace }}/repos
         run: python3 scripts/desc_count_selftest.py
       - name: BOM 生成器 Go 地板自测（取不到 go.mod 必须报错，不许兜底假地板）
         run: python3 scripts/gen_matrix_go_selftest.py
@@ -111,10 +124,34 @@ jobs:
         run: python3 scripts/floor_claim_check_selftest.py
       - name: 地板类断言核验器·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
         run: python3 scripts/floor_claim_check_selftest.py --mutate
+      # matrix-tools#254：--live 的三类用例（嵌套覆盖 / 节边界 / Release 正文）
+      # 此前在 CI 里从不执行（不带 --live ⇒ 脚本打印「跳过」照样绿）。
+      # 兄弟仓已检出（见上面的 Clone 步骤）⇒ 现在真跑；空跑会被脚本自己拦下。
+      - name: 地板类断言核验器自测·工作区用例（--live：嵌套覆盖 / Release 正文必须真跑，不许静默跳过——#254）
+        env:
+          MATRIX_BASE: ${{ github.workspace }}/repos
+          GH_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.MATRIX_AUDIT_TOKEN || secrets.GITHUB_TOKEN }}
+        run: python3 scripts/floor_claim_check_selftest.py --live
       - name: 检查面 G 自测（打 tag 的模块 require 必须是最新已发布版本 / 落后一档与前瞻引用都拒绝 / 完整子路径前缀 / 远端读不到 fail closed）
         run: python3 scripts/release_train_latest_selftest.py
       - name: 检查面 G·变异自证（退回旧实现 / 落后放行 / 前缀截断 / fail-open ⇒ 精确转红集合必须精确）
         run: python3 scripts/release_train_latest_selftest.py --mutate
+      # matrix-tools#260：以下三个自测此前从未被任何 workflow 调用（CI 零回归
+      # 保护）。tag 快照门禁恰好是生产中反复触发的门（#234），它的 13+ 用例
+      # 必须有 CI 覆盖；接线漂移由 selftest_wiring_check.py 用集合相等判定根治。
+      - name: tag 快照 CHANGELOG 门禁自测（缺本版段判红 / 嵌套两面 / 不可用即红 / 修复模板自带 / 文案形状校验——#260）
+        run: python3 scripts/changelog_tag_snapshot_selftest.py
+      - name: tag 快照 CHANGELOG 门禁自测·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
+        run: python3 scripts/changelog_tag_snapshot_selftest.py --mutate
+      - name: gen_versions 自测（版本解析面——#260 补接线）
+        run: python3 scripts/gen_versions_selftest.py
+      - name: 站点内容门禁自测（deps.json/deps-table/llms.txt 嵌套段集合相等 / 缺产物 fail-loud / 变异自证）
+        run: python3 scripts/verify_site_copy_selftest.py
+      - name: 自测接线漂移门禁（自测文件集合 == workflow 调用集合，漏接必红——#260）
+        run: python3 scripts/selftest_wiring_check.py
+      - name: 自测接线漂移门禁·变异自证（合成漏接/幽灵引用/目录缺失 ⇒ 必须红）
+        run: python3 scripts/selftest_wiring_check.py --mutate
 
   audit:
     runs-on: ubuntu-latest
