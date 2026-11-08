@@ -18,6 +18,11 @@
   python3 scripts/gen_releases.py --check         # 门禁模式：有缺失则 exit 1（audit 调用）
   python3 scripts/gen_releases.py --repo data --apply
   python3 scripts/gen_releases.py --repo data --tag v0.9.0 --apply   # 只补一个
+
+枚举口径（matrix-tools#251）：MODULES + 伞仓 BOM（BOM_REPO）——伞仓是 37 个
+发版单元里的 1 个，缺了它 BOM 的 tag 永远不会被对账/补建 Release（存量：
+v0.2.7 有 tag 无 Release）。BOM 的 Release 正文从**该 tag 的 go.mod**渲染
+「本次钉住了哪些版本」（#252，见 bom_release_notes）。
 """
 from __future__ import annotations
 
@@ -29,8 +34,9 @@ import tempfile
 from typing import NamedTuple
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, ORG, repo_dir  # noqa: E402
+from matrix import BOM_REPO, MODULES, ORG, repo_dir  # noqa: E402
 from gen_versions import _remote_tags  # noqa: E402
+from gen_matrix_go import ensure_local_tag  # noqa: E402
 import ghsafe  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -340,6 +346,86 @@ def go_mod_at(repo_dir_path, tag: str, nested: str | None) -> str | None:
     return r.stdout if r.returncode == 0 else None
 
 
+# ---------- BOM（伞仓 oekit）Release 正文（matrix-tools#251 / #252） ----------
+#
+# 伞仓是 37 个发版单元里的 1 个，此前不在 MODULES 枚举 ⇒ BOM 的 tag 永远
+# 补不上 Release（v0.2.7 有 tag 无 Release 即存量）；而 release_post 建的
+# BOM Release 正文是**写死的占位串** ⇒ 每版都不含「本次钉住了哪些版本」。
+# BOM 这个产物的全部意义就是「声明一组互相兼容的模块版本」⇒ 正文必须从
+# **该 tag 的 go.mod 实际内容**渲染：钉住多少模块、相对上一版哪些地板动了。
+
+BOM_REQ_RE = re.compile(r"^\s*(github\.com/oekit/\S+)\s+(v\d+\.\d+\.\d+)\s*$", re.M)
+
+
+def bom_requires(go_mod_text: str) -> dict[str, str]:
+    """BOM go.mod 的地板 require {模块路径: 版本}（只认 oekit 行）。"""
+    return dict(BOM_REQ_RE.findall(go_mod_text))
+
+
+def bom_release_notes(oekit_dir, tag: str, prev_tag: str | None,
+                      read_at=None) -> str:
+    """BOM tag 的 Release 正文：从该 tag 的 go.mod 实际内容渲染。
+
+    ``read_at(oekit_dir, tag) -> go.mod 文本 | None``：可注入（自测不建 git 仓）；
+    缺省 `git show <tag>:go.mod`（tag 快照是唯一真相——main 上的内容可能已经
+    往下一版走了）。取不到正文（None）⇒ 该段如实写「读不到」，**不编造**。
+
+    正文四段：
+      1. 标题（BOM 快照说明）；
+      2. CHANGELOG 同版本小节（有则附，没有则如实指向 CHANGELOG——存量：
+         BOM 的 CHANGELOG 自 v0.2.0 后未再更新，bootstrap#115 同族）；
+      3. 本次钉住的组合（全量 require，按路径排序）；
+      4. 相对上一版的地板变化（old → new / 新增 / 移除）——消费方升级时
+         最需要的就是这段。
+    """
+    if read_at is None:
+        read_at = go_mod_at
+    cur_text = read_at(oekit_dir, tag)
+    parts = [f"BOM 推荐组合 `{ORG}/{BOM_REPO}` `{tag}`（gen_matrix_go.py 生成的兼容版本快照，"
+             f"`go get github.com/oekit/{BOM_REPO}@{tag}` 一次拉齐）。"]
+    sec = changelog_section(oekit_dir, tag, None)
+    if sec:
+        parts.append("## 变更记录\n\n" + sec)
+    else:
+        parts.append(f"变更记录见 [CHANGELOG.md](https://github.com/{ORG}/{BOM_REPO}/blob/{tag}/CHANGELOG.md)。")
+    if cur_text is None:
+        parts.append("⚠️ 读不到该 tag 的 go.mod ⇒ 本次钉住的组合**未核对**（不编造内容）。")
+        return "\n\n".join(parts) + "\n"
+    cur = bom_requires(cur_text)
+    lines = [f"\t{p} {cur[p]}" for p in sorted(cur)]
+    parts.append(f"## 本次钉住的组合（{len(cur)} 个模块）\n\n```go.mod\n"
+                 + "\n".join(lines) + "\n```")
+    prev = bom_requires(read_at(oekit_dir, prev_tag)) if prev_tag else None
+    if prev is not None:
+        changes = []
+        for p in sorted(set(cur) | set(prev)):
+            if p not in prev:
+                changes.append(f"- 新增 `{p} {cur[p]}`")
+            elif p not in cur:
+                changes.append(f"- 移除 `{p}`（原 `{prev[p]}`）")
+            elif cur[p] != prev[p]:
+                changes.append(f"- `{p}` {prev[p]} → {cur[p]}")
+        if changes:
+            head = (f"## 相对上一版 {prev_tag} 的地板变化（{len(changes)} 条）"
+                    if prev_tag else "## 地板变化")
+            parts.append(head + "\n\n" + "\n".join(changes))
+        else:
+            parts.append(f"## 相对上一版 {prev_tag}：地板零变化（同组合的重新声明）。")
+    return "\n\n".join(parts) + "\n"
+
+
+def release_repos(only_repo: str | None = None) -> list[str]:
+    """逐仓枚举：MODULES + 伞仓 BOM（matrix-tools#251）。
+
+    伞仓是 37 个发版单元里的 1 个，但不在 MODULES ⇒ 旧实现按 `list(MODULES)`
+    枚举时 BOM 的 tag **永远**不会被对账/补建 Release（v0.2.7 有 tag 无 Release
+    即存量足迹）。单数 `--repo` 指定时以调用方为准（含 BOM 自己）。
+    """
+    if only_repo:
+        return [only_repo]
+    return list(MODULES) + [BOM_REPO]
+
+
 def build_notes(repo_dir_path, tag: str, repo: str) -> str:
     nested = tag.rsplit("/", 1)[0] if "/" in tag else None
     version = tag.rsplit("/", 1)[-1]
@@ -371,11 +457,24 @@ def plan_repo(repo: str, only_tag: str | None = None) -> tuple[list[str], str | 
     return missing, latest_root, tags_asc
 
 
-def apply_repo(repo: str, missing: list[str], latest_root: str | None) -> int:
+def apply_repo(repo: str, missing: list[str], latest_root: str | None,
+               tags_asc: list[str] | None = None) -> int:
     d = str(repo_dir(repo, BASE))
     created = 0
     for tag in missing:
-        notes = build_notes(d, tag, repo)
+        if repo == BOM_REPO:
+            # BOM（伞仓）的正文从**该 tag 的 go.mod**渲染「本次钉住了哪些版本」
+            # （#251/#252）；prev = 全部 tag 升序里它的前一个（缺则无 diff 段）。
+            ensure_local_tag(d, tag)
+            prev = None
+            if tags_asc:
+                earlier = [t for t in tags_asc if semver_key(t) < semver_key(tag)]
+                if earlier:
+                    prev = earlier[-1]
+                    ensure_local_tag(d, prev)
+            notes = bom_release_notes(d, tag, prev)
+        else:
+            notes = build_notes(d, tag, repo)
         with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False, encoding="utf-8") as f:
             f.write(notes)
             path = f.name
@@ -427,7 +526,7 @@ def main() -> int:
     do_check = "--check" in args
     only_repo = args[args.index("--repo") + 1] if "--repo" in args else None
     only_tag = args[args.index("--tag") + 1] if "--tag" in args else None
-    repos = [only_repo] if only_repo else list(MODULES)
+    repos = release_repos(only_repo)
 
     mode = "APPLY" if do_apply else ("CHECK" if do_check else "DRY-RUN")
     print(f"GitHub Release 对账（{mode}，{len(repos)} 仓）\n")
@@ -439,7 +538,7 @@ def main() -> int:
             skipped.append(f"{repo}: 未核对（限速熔断：配额已耗尽，停止后续请求以免空转）")
             continue
         try:
-            missing, latest_root, _ = plan_repo(repo, only_tag)
+            missing, latest_root, tags_asc = plan_repo(repo, only_tag)
         except (RuntimeError, PermissionError) as e:
             skipped.append(str(e))  # 异常消息已自带仓名，不重复拼前缀
             if getattr(e, "rate_limited", False):
@@ -451,7 +550,7 @@ def main() -> int:
         root_extra = f"，latest={latest_root}" if latest_root else "（无根模块 tag，全部 --latest=false）"
         print(f"→ {repo}: 缺 {len(missing)} 个 Release（{missing[0]} … {missing[-1]}{root_extra}）")
         if do_apply:
-            apply_repo(repo, missing, latest_root)
+            apply_repo(repo, missing, latest_root, tags_asc)
 
     if skipped:
         print(f"\n无法核对（权限/限速，门禁模式下跳过不红）：{len(skipped)}/{len(repos)} 仓")

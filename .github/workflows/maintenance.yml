@@ -128,12 +128,19 @@ jobs:
                 + '固定 name 被上一轮占用、后台流量被算进业务计数）。'
                 + '复跑确认（同一用例单独再跑一次仍红）后再改。\n';
             const body = headline + flakeSection + '\n\n' +
-              '按需发版模型下这不阻塞任何人；到达期阈值说明组合漂移已可观，建议跑一轮：\n\n' +
+              '按需发版模型下这不阻塞任何人；到达期阈值说明组合漂移已可观，建议按**级联顺序**跑一轮。\n\n' +
+              '⚠️ 为什么不能「一次 align + 逐仓发版」：发布本身会制造新的落后——每发一个仓，\n' +
+              'require 它的下游地板当场变旧 ⇒ 下一个仓发版时会被 release_train 的检查面 G 拒绝\n' +
+              '（「依赖落后于最新已发布版本」）。**这是流程使然，不是并发会话抢发**。\n' +
+              '正确做法是级联：**发一个 ⇒ 重抬它的下游 ⇒ 再发下一个**（matrix-tools#243）：\n\n' +
               '```\n' +
-              '# 逐仓对齐 + 开 PR（auto-merge）\n' +
+              '# ① 抬到当前最新（第一轮）\n' +
               'python3 scripts/align_floors.py --apply --pr\n' +
-              '# 合并后逐仓 patch 发版（或按需挑仓）\n' +
+              '# ② 发一个仓（建议顺序 = 拓扑序，被依赖者先发；可参考 floor_closure_plan.py）\n' +
               'python3 scripts/release_train.py <repo> main=vX.Y.Z --apply --changelog "build: 地板对齐"\n' +
+              '# ③ 把它下游的地板抬到刚发布的新版本，再回到 ② 发下一个\n' +
+              'python3 scripts/align_floors.py --apply --pr --repos <刚发版仓的全部下游>\n' +
+              '# ④ 全部发完后逐仓收尾\n' +
               'python3 scripts/release_post.py <repo>\n' +
               '```\n\n' +
               '明细：\n\n```\n' + fs.readFileSync('maintenance-report.txt', 'utf8') + '\n```';

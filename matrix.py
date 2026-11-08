@@ -75,6 +75,17 @@ BOM_RELEASE_UNIT = 1
 GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 37 个 Go module
 # 工作区里的 go.mod 总数 = 36（24 根 + 11 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
 
+# 伞仓 BOM 的仓名（matrix-tools#251）。它是 37 个发版单元里的 1 个，但**不在
+# MODULES**（MODULES 的语义是「24 个根模块仓」，BOM 计数走 BOM_RELEASE_UNIT）
+# ⇒ 按 MODULES 枚举的逐仓工具（gen_releases / release_post 等）必须**显式**
+# 把它补进枚举，否则 BOM 的 CHANGELOG / Release / 版本行没有任何工具覆盖
+# （#251 实测：v0.2.7 有 tag 无 Release，gen_releases --apply 永远补不上）。
+#
+# ⚠️ 伞仓的产物（go.mod require + matrix.go）由 gen_matrix_go.py **整体生成**
+# （require 是无 import 的地板快照，勿 tidy——tidy 会整块清空，matrix-tools#241）；
+# 需要「对齐/发版」时走的是「重生成 + 打新 tag」，不是 release_train/align_floors。
+BOM_REPO = "oekit"
+
 ORG = "oekit"
 SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
@@ -545,6 +556,75 @@ def git_env() -> dict[str, str]:
         "ssh -o ConnectTimeout=10 -o ServerAliveInterval=10 "
         "-o ServerAliveCountMax=2 -o BatchMode=yes")
     env.setdefault("GIT_TERMINAL_PROMPT", "0")
+    return env
+
+
+def go_toolchain_from_gomod(text: str) -> str | None:
+    """go.mod 的 go 指令 → GOTOOLCHAIN 值；没有 go 指令返回 None。
+
+    为什么要有这个换算（matrix-tools#249）：本地门禁（release_train 的
+    golangci-lint / go build、align_floors 的 go mod tidy）此前不钉工具链，
+    判定结论取决于**发版机器上装的 Go**——gormx v0.11.6 实测：同一份代码、
+    同一个 golangci-lint v2.14.0，本机 go1.27 判 3 issues、CI 的 go1.24 判 0
+    ⇒ 本地更严时挡发版（假红）、本地更松时门禁形同虚设（发出去 CI 才红）。
+
+    换算与 org 共享 CI（oekit/.github 的 go-ci.yml tidy 门禁）**同一套**：
+
+        go 1.24   → go1.24.0     （go 指令两段则补 .0——GOTOOLCHAIN 只认
+                                   完整工具链版本，不认语言版本）
+        go 1.24.0 → go1.24.0
+
+    CI 的 go-version 就是按各仓 go.mod 钉的 ⇒ 按 go.mod 换算即「与 CI 同面」。
+    返回 None ⇒ 该 go.mod 没有 go 指令 ⇒ 调用方不钉（保持本机工具链）。
+    """
+    m = re.search(r"(?m)^go\s+(\d+(?:\.\d+){0,2})\s*$", text)
+    if not m:
+        return None
+    parts = m.group(1).split(".")
+    while len(parts) < 3:
+        parts.append("0")
+    return "go" + ".".join(parts)
+
+
+def local_go_version() -> str:
+    """本机默认 go 工具链的版本号（`go version` 的首个 token，如 go1.27.1）。
+
+    读不到 go 命令 ⇒ 返回 "（无 go 命令）"——**不编造版本号**（假版本号会被
+    人当成事实；读不到是「不知道」，必须照实说，#79 的同一条纪律）。
+    """
+    try:
+        r = subprocess.run(["go", "version"], capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return "（无 go 命令）"
+    if r.returncode != 0 or not r.stdout.strip():
+        return "（go version 读不到）"
+    m = re.search(r"go(\d+\.\d+(?:\.\d+)?)", r.stdout)
+    if m:
+        return "go" + m.group(1)
+    return r.stdout.split()[0]
+
+
+def apply_sumdb_policy(env: dict[str, str]) -> dict[str, str]:
+    """go 子进程的 checksum 校验策略：对矩阵内路径跳过 sumdb（matrix-tools#245）。
+
+    背景：级联发版「刚发完 X 就抬 X 的下游」时，X 的新版本往往**已在模块代理上**
+    （.info/.zip 200）但**尚未被 checksum DB 收录**（sumdb lookup 404，
+    "temporarily unavailable"）⇒ go mod tidy / go build 直接失败，读起来像
+    网络故障，真实原因是「你刚发布的版本 sumdb 还没收到」。
+
+    - 调用方**没有**自设校验策略（GOSUMDB / GOPRIVATE / GONOSUMDB 全空）⇒
+      设 ``GONOSUMDB=github.com/oekit/*``（只跳过矩阵内路径的 sumdb，
+      第三方依赖照常校验——口径最窄）；
+    - 已有 GONOSUMDB 但没盖住矩阵路径 ⇒ 追加一段；
+    - 已设 GOSUMDB（如 =off）或 GOPRIVATE（已蕴含跳 sumdb）⇒ 原样尊重，
+      不覆盖（与 git_env 的 setdefault 纪律一致：只补「没设时的默认」）。
+
+    返回传入的 env（就地修改，方便链式书写）。
+    """
+    if not any(env.get(k) for k in ("GOSUMDB", "GOPRIVATE", "GONOSUMDB")):
+        env["GONOSUMDB"] = "github.com/oekit/*"
+    elif env.get("GONOSUMDB") and "github.com/oekit/" not in env["GONOSUMDB"]:
+        env["GONOSUMDB"] += ",github.com/oekit/*"
     return env
 
 

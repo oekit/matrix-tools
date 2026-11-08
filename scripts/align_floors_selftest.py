@@ -244,6 +244,115 @@ def check_plan_uses_remote_tags() -> None:
           f"plan_repo 应用远端 tag 判出抬升：{ups}")
 
 
+# ═══ #241：BOM 仓不进本工具 + require 骤降护栏 ═══════════════════════════
+
+def check_bom_repo_skipped() -> None:
+    """显式 `--repos oekit` / `--repo oekit` 必须被拒（BOM 由 gen_matrix_go 生成）。
+
+    #241 实测：`align_floors --apply --repos oekit` 对 BOM 仓跑 go mod tidy
+    ⇒ 「勿 tidy」的 36 行无 import 地板 require 被整块清空，而工具报
+    「✓ 已写入并 tidy」——报成功、实际是破坏。
+
+    断言：main() 在碰到 BOM 仓时**在 plan/apply 之前**就 SystemExit，报错文案
+    指向 gen_matrix_go.py。用注入替身隔离网络与文件系统（plan_repo/repo_dir
+    被换成替身 ⇒ 若放行它们被调用即断言失败）。
+    """
+    import align_floors
+
+    touched: list[str] = []
+    orig_plan, orig_dir = align_floors.plan_repo, align_floors.repo_dir
+    orig_argv = sys.argv
+    align_floors.plan_repo = lambda repo, base: touched.append(repo) or {}
+    align_floors.repo_dir = lambda repo, base=None: Path("/nonexistent")
+    try:
+        for argv in (["--repos", "oekit"], ["--repo", "oekit"]):
+            sys.argv = ["align_floors.py"] + argv + ["--base", "/nonexistent-base"]
+            try:
+                align_floors.main()
+                check(False, f"#241 显式 {argv} 应被拒绝（BOM 仓不进处理集）")
+            except SystemExit as e:
+                msg = str(e)
+                if "gen_matrix_go" not in msg:
+                    check(False, f"#241 拒绝文案应指向 gen_matrix_go.py：{msg!r}")
+            if touched:
+                check(False, f"#241 {argv} 在拒绝前就不该碰 plan：{touched}")
+                touched.clear()
+    finally:
+        sys.argv = orig_argv
+        align_floors.plan_repo, align_floors.repo_dir = orig_plan, orig_dir
+
+
+def check_require_shrink_guard() -> None:
+    """require 骤降护栏：tidy 把无 import 的地板 require 清掉 ⇒ 必须回滚报错，
+    **不得**报「✓ 已写入并 tidy」。
+
+    夹具：BOM 形态的仓（require 全部无 import）+ 真实 git 仓（护栏要回滚到
+    HEAD）。run_tidy 换成替身（模拟 tidy 的「清掉无 import require」语义）
+    ⇒ 断言不依赖本机 go、可离线复现 #241 的破坏形态。
+    """
+    import subprocess
+
+    import align_floors
+
+    with tempfile.TemporaryDirectory() as td:
+        d = Path(td) / "oekit"
+        d.mkdir()
+        # BOM 形态 go.mod：36 行的缩影——3 条 oekit 地板 require，无任何 import
+        (d / "go.mod").write_text(
+            "module github.com/oekit/oekit\n\n"
+            "go 1.26.0\n\n"
+            "// ---- oekit BOM：矩阵兼容快照的地板 require（勿手改/勿 tidy）----\n"
+            "require (\n"
+            "\tgithub.com/oekit/concurrency v0.28.3\n"
+            "\tgithub.com/oekit/pkg v0.37.3\n"
+            "\tgithub.com/oekit/redisx v0.8.0\n"
+            ")\n",
+            encoding="utf-8")
+        # git 仓 + 已提交基线（护栏用 git checkout 回滚）
+        for cmd in (["git", "init", "-q"], ["git", "config", "user.email", "t@t"],
+                    ["git", "config", "user.name", "t"], ["git", "add", "-A"],
+                    ["git", "commit", "-qm", "init"]):
+            subprocess.run(cmd, cwd=d, check=True, capture_output=True)
+        # plan_repo/repo_dir 替身：把 apply_repo 引到夹具上
+        orig_dir = align_floors.repo_dir
+        align_floors.repo_dir = lambda repo, base=None: d
+
+        orig_tidy = align_floors.run_tidy
+
+        def tidy_like_go(module_dir):  # noqa: ANN001
+            """模拟 go mod tidy 对「无 import require」的语义：require 整块删掉。"""
+            gm = Path(module_dir) / "go.mod"
+            gm.write_text("module github.com/oekit/oekit\n\n", encoding="utf-8")
+            return 0
+
+        align_floors.run_tidy = tidy_like_go
+        try:
+            plans = {d / "go.mod": [("github.com/oekit/concurrency",
+                                     "v0.28.3", "v0.28.4")]}
+            try:
+                align_floors.apply_repo("oekit", td, plans)
+                check(False, "#241 护栏：tidy 清空地板 require 必须报错，不许放行")
+            except SystemExit as e:
+                msg = str(e)
+                if "matrix-tools#241" not in msg:
+                    check(False, f"#241 报错文案应注明护栏出处：{msg!r}")
+            # 回滚验证：go.mod 应回到 HEAD（3 条地板 require 原样在）
+            after = (d / "go.mod").read_text(encoding="utf-8")
+            for line in ("concurrency v0.28.3", "pkg v0.37.3", "redisx v0.8.0"):
+                if line not in after:
+                    check(False, f"#241 护栏应回滚 tidy 的破坏（缺 {line}）：\n{after}")
+            # 护栏不该误伤「require 没变少」的正常抬升
+            def tidy_noop(module_dir):  # noqa: ANN001
+                return 0
+            align_floors.run_tidy = tidy_noop
+            files = align_floors.apply_repo("oekit", td, plans)
+            check(isinstance(files, list),
+                  "#241 护栏不该误伤正常流程（require 未减少 ⇒ 放行）")
+        finally:
+            align_floors.run_tidy = orig_tidy
+            align_floors.repo_dir = orig_dir
+
+
 def main() -> None:
     with tempfile.TemporaryDirectory() as td:
         root = Path(td) / "repo"
@@ -270,6 +379,8 @@ def main() -> None:
     check_indirect_lines()
     check_apply_repo_tidies_all_modules()
     check_plan_uses_remote_tags()
+    check_bom_repo_skipped()
+    check_require_shrink_guard()
 
     if FAILURES:
         print("align_floors 自测失败：")
@@ -277,7 +388,8 @@ def main() -> None:
             print(f"  ✗ {f}")
         sys.exit(1)
     print("align_floors 自测通过：根/一层/第四层嵌套模块均扫到，vendor 被排除，"
-          "indirect 行可抬升，嵌套模块 go.sum 跟随父仓，地板按**远端** tag 判定")
+          "indirect 行可抬升，嵌套模块 go.sum 跟随父仓，地板按**远端** tag 判定，"
+          "BOM 仓被拒之门外（#241），require 骤降护栏会回滚破坏")
 
 
 if __name__ == "__main__":
