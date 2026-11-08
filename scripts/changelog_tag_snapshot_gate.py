@@ -84,6 +84,16 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "bootstrap:obs/v0.2.5",
     "bootstrap:obs/v0.2.6",
     "bootstrap:obs/v0.2.7",
+    # 2026-11-08 第三轮清零发版潮：agent 模板残留「空占位括号/地板缺版本号」形态
+    # （#259 文案 lint 首轮照见），快照不可变——Release 正文已订正，段留原样。
+    "concurrency:v0.29.0",
+    "core:v0.13.4",
+    "gormx:v0.11.7",
+    "logx:v0.8.11",
+    "logx:hertzlog/v0.1.1",
+    "logx:sink/v0.1.1",
+    "network:v0.7.13",
+    "pkg:v0.38.0",
 }
 
 # 段头匹配：`## [v0.12.6]` / `## [toolgate/v0.12.6]`（允许行尾尾注）。
