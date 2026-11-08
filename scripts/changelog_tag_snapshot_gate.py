@@ -67,6 +67,33 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "gormx:v0.11.5",
     "middleware:v0.13.14",
     "data:v0.20.5",
+    # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
+    # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
+    "bootstrap:nacos/v0.2.0",
+    "bootstrap:nacos/v0.2.1",
+    "bootstrap:nacos/v0.2.2",
+    "bootstrap:nacos/v0.2.3",
+    "bootstrap:nacos/v0.2.4",
+    "bootstrap:nacos/v0.2.5",
+    "bootstrap:nacos/v0.3.1",
+    "bootstrap:nacos/v0.3.2",
+    "bootstrap:obs/v0.2.0",
+    "bootstrap:obs/v0.2.1",
+    "bootstrap:obs/v0.2.3",
+    "bootstrap:obs/v0.2.4",
+    "bootstrap:obs/v0.2.5",
+    "bootstrap:obs/v0.2.6",
+    "bootstrap:obs/v0.2.7",
+    # 2026-11-08 第三轮清零发版潮：agent 模板残留「空占位括号/地板缺版本号」形态
+    # （#259 文案 lint 首轮照见），快照不可变——Release 正文已订正，段留原样。
+    "concurrency:v0.29.0",
+    "core:v0.13.4",
+    "gormx:v0.11.7",
+    "logx:v0.8.11",
+    "logx:hertzlog/v0.1.1",
+    "logx:sink/v0.1.1",
+    "network:v0.7.13",
+    "pkg:v0.38.0",
 }
 
 # 段头匹配：`## [v0.12.6]` / `## [toolgate/v0.12.6]`（允许行尾尾注）。
@@ -119,7 +146,15 @@ def pick_tags(tags: list[str]) -> list[str]:
 # ---------- 判定 ----------
 
 def check_tag(repo: str, tag: str, read_fn) -> str | None:
-    """核对单个 tag 快照；返回漂移描述（None=通过）。读失败向上抛。"""
+    """核对单个 tag 快照；返回漂移描述（None=通过）。读失败向上抛。
+
+    ★ 漂移消息自带**可照抄的修复模板**（matrix-tools#259，2026-11-08 实测 3 条
+      Release 正文是半成品：空括号 `（）`、前缀无版本 `（hertzlog/）`、「带出新的
+      地板」后跟**上一版号**、缺分隔符——全是修复者自己造句造出来的）：模板带上
+      快照顶部实际停留的上一版段名（嵌套补全成完整 tag 名）、本版号，并按
+      **该 tag 的 go.mod 是否有 oekit 内部依赖**决定要不要「带出新的地板」半句
+      （core/logx hertzlog/logx sink 这类零内部依赖模块写地板是无中生有）。
+    """
     if "/" in tag:
         prefix, _, ver = tag.rpartition("/")
         root = read_fn(repo, tag, "CHANGELOG.md")
@@ -130,22 +165,134 @@ def check_tag(repo: str, tag: str, read_fn) -> str | None:
                                    or section_re(ver).search(nested)):
             return None
         faces = []
+        prev = None
         if root is not None:
             m = re.search(r"^## \[(.+?)\]", root, re.M)
             faces.append(f"根面顶部停在 {m.group(1) if m else '无段'}")
+            if m:
+                prev = m.group(1)
         if nested is not None:
             m = re.search(r"^## \[(.+?)\]", nested, re.M)
             faces.append(f"嵌套面顶部停在 {m.group(1) if m else '无段'}")
+            if m and prev is None:
+                prev = m.group(1)
         what = "；".join(faces) if faces else "两面均无此文件"
-        return f"{repo}: tag {tag} 快照 CHANGELOG 缺本版段（{what}）——被钉版本无文档（#234）"
+        return (f"{repo}: tag {tag} 快照 CHANGELOG 缺本版段（{what}）"
+                f"——被钉版本无文档（#234）。{repair_template(repo, tag, prev, read_fn)}")
     root = read_fn(repo, tag, "CHANGELOG.md")
     if root is not None and section_re(tag).search(root):
         return None
     if root is None:
         return f"{repo}: tag {tag} 快照无 CHANGELOG.md——被钉版本无文档（#234）"
     m = re.search(r"^## \[(.+?)\]", root, re.M)
+    prev = m.group(1) if m else None
     return (f"{repo}: tag {tag} 快照 CHANGELOG 顶部停在 "
-            f"{m.group(1) if m else '无段'}——缺本版段，被钉版本无文档（#234）")
+            f"{prev or '无段'}——缺本版段，被钉版本无文档（#234）。"
+            f"{repair_template(repo, tag, prev, read_fn)}")
+
+
+# ---------- 修复模板与文案形状校验（matrix-tools#259） ----------
+
+def repair_template(repo: str, tag: str, prev: str | None, read_fn) -> str:
+    """「缺本版段」的可照抄修复模板（拼在漂移消息里，一行、可直接复制）。
+
+    prev = 快照顶部实际停留的段头（= 上一版的段名）⇒ 修复者不用猜；
+    嵌套面的裸版本头补全成完整 tag 名（#259 实测的 `（hertzlog/）` 空前缀即此）。
+    有无「带出新的地板」半句按该 tag 快照 go.mod 的 oekit 内部依赖定——
+    core/hertzlog/sink 这类零内部依赖模块谈地板是无中生有。
+    """
+    if "/" in tag:
+        prefix, _, ver = tag.rpartition("/")
+    else:
+        prefix, ver = "", tag
+    if prev and "/" not in prev and prefix and re.fullmatch(r"v\d+\.\d+\.\d+", prev):
+        prev_full = f"{prefix}/{prev}"
+    else:
+        prev_full = prev or "<上一版 tag 名>"
+    deps: list[str] | None
+    try:
+        gomod = read_fn(repo, tag, "go.mod")
+    except Exception:  # noqa: BLE001 — 读不到按「未知」处理，不猜
+        gomod = None
+    self_mod = f"github.com/{ORG}/{repo}" + (f"/{prefix}" if prefix else "")
+    deps = sorted(set(re.findall(r"(github\.com/oekit/[A-Za-z0-9._\-/]+)\s+v\d", gomod or ""))
+                  - {self_mod}) if gomod is not None else None
+    if deps:
+        floor = f"并带出新的地板：{ver}"
+        note = ""
+    elif deps is not None:
+        floor = ""
+        note = "（本模块无 oekit 内部依赖，不要写「带出新的地板」半句）"
+    else:
+        floor = ""
+        note = "（该 tag 的 go.mod 读不到：内部依赖面未核对，按无内部依赖处理，不要猜地板）"
+    return (f"修复模板：「chore: 补齐本版版本节——上一个已发布 tag（{prev_full}）的 "
+            f"CHANGELOG 快照缺本版段（tag 快照不可变），本版补上{floor}」{note}")
+
+
+# 半成品文案的四种残缺形态（#259 实测的三条 Release 正文全中）：
+#   ① 空括号 `（）`／`( )`；② 括号里只有路径前缀、没有版本号 `（hertzlog/）`；
+#   ③ 「新的地板」后缺分隔符 `地板v0.13.2`；④ 「新的地板：vX」处不是本版号。
+_LINT_EMPTY_PAREN_RE = re.compile(r"（[\s\u3000]*）|\([\s]*\)")
+_LINT_PREFIX_ONLY_RE = re.compile(r"[（(][A-Za-z0-9._\-]+/[\s]*[）)]")
+_LINT_FLOOR_NO_SEP_RE = re.compile(r"新的地板\s*v\d")
+_LINT_FLOOR_VER_RE = re.compile(r"新的地板\s*[:：]\s*(v\d+\.\d+\.\d+)")
+_LINT_MSG = {
+    "empty": "空占位括号（上一版 tag 名必须写全，不许留空）",
+    "prefix": "括号里只有路径前缀、没有版本号（如 `（hertzlog/）`）",
+    "nosep": "「新的地板」后缺分隔符（应为「新的地板：vX.Y.Z」）",
+    "ver": "「新的地板：vX.Y.Z」处不是本版号",
+}
+
+
+def lint_repair_bullet(text: str, version: str) -> list[str]:
+    """核一段本版文案的形状；返回问题清单（空 = 形状完好）。
+
+    只锚定 #259 实测的残缺形态，不泛化成「文案里出现别的版本号就红」——
+    CHANGELOG 里合法地会提到依赖的版本，泛化必误报。
+    """
+    problems: list[str] = []
+    if _LINT_EMPTY_PAREN_RE.search(text):
+        problems.append(_LINT_MSG["empty"])
+    if _LINT_PREFIX_ONLY_RE.search(text):
+        problems.append(_LINT_MSG["prefix"])
+    if _LINT_FLOOR_NO_SEP_RE.search(text):
+        problems.append(_LINT_MSG["nosep"])
+    for m in _LINT_FLOOR_VER_RE.finditer(text):
+        if m.group(1) != version:
+            problems.append(f"{_LINT_MSG['ver']}（实为 {m.group(1)}，本版 {version}）")
+    return problems
+
+
+def extract_section(text: str | None, version: str) -> str | None:
+    """取快照 CHANGELOG 里本版段原文（段头到下一个 `## [` 之前）；没有 ⇒ None。"""
+    if not text:
+        return None
+    m = section_re(version).search(text)
+    if not m:
+        return None
+    nxt = re.search(r"^## \[", text[m.end():], re.M)
+    return text[m.start():m.end() + nxt.start()] if nxt else text[m.start():]
+
+
+def lint_tag_section(repo: str, tag: str, read_fn) -> list[str]:
+    """快照里**写出来了**的本版段也要核文案形状（#259：写错的段随 tag 永久留痕）。"""
+    if "/" in tag:
+        prefix, _, ver = tag.rpartition("/")
+        root = read_fn(repo, tag, "CHANGELOG.md")
+        text = extract_section(root, f"{prefix}/{ver}")
+        if text is None:
+            nested = read_fn(repo, tag, f"{prefix}/CHANGELOG.md")
+            text = extract_section(nested, f"{prefix}/{ver}") \
+                or extract_section(nested, ver)
+    else:
+        ver = tag
+        text = extract_section(read_fn(repo, tag, "CHANGELOG.md"), ver)
+    if text is None:
+        return []   # 段不存在归 check_tag 管；这里只核「写出来的」
+    return [f"{repo}: tag {tag} 快照本版段文案残缺：{p}"
+            f"——快照不可变，只能靠后续版本订正 Release 正文（#259）"
+            for p in lint_repair_bullet(text, ver)]
 
 
 def run(repos: list[str], read_fn=read_snapshot_file, tags_fn=None) -> int:
@@ -179,6 +326,13 @@ def run(repos: list[str], read_fn=read_snapshot_file, tags_fn=None) -> int:
                 continue
             if d:
                 drifts.append(d)
+                continue
+            # ★ 段写出来了也要核文案形状（matrix-tools#259）：半成品文案随 tag
+            #   永久留痕（快照不可变）⇒ 门禁必须在发布链路上拦下，不能只拦「缺段」。
+            try:
+                drifts.extend(lint_tag_section(repo, tag, read_fn))
+            except Exception as e:  # noqa: BLE001
+                unavailable.append(str(e))
     if unavailable:
         print(f"⚠ tag 快照 CHANGELOG 门禁不可用 {len(unavailable)} 项（读不到 ≠ 无漂移，#79）：")
         for u in unavailable:

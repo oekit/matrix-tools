@@ -200,7 +200,30 @@ def _breaking_upto(items: list[dict], pinned_version: str) -> list[dict]:
     return out
 
 
-PROXY_BASE = "https://proxy.golang.org"
+# ---------- proxy 复核的事实源（matrix-tools#261） ----------
+#
+# 旧写法把 PROXY_BASE 写死 proxy.golang.org（无回退、无覆盖），且读不到 ⇒
+# 「未核对」但**退出码仍是 0**（照印「✓ 一致」）⇒ 在只通镜像（goproxy.cn）
+# 的网络里这道复核 100% 空转，报告照样全绿——audit.py 阶段 6 正是按退出码
+# 判的 ⇒ 「BOM 新鲜度 ✓」下面可以是零覆盖（#79「判据不可用即红」的破口）。
+# 现在：① 事实源可覆盖（OEKIT_GO_PROXY > GOPROXY 首段 > 官方源）；
+#       ② 官方源读不到自动回退镜像（本矩阵实测两源都收录）；
+#       ③ 复核没跑完 ⇒ 退出码 2（判不了 ≠ 一致，见 main() 的 check 分支）。
+DEFAULT_PROXY_BASE = "https://proxy.golang.org"
+MIRROR_PROXY_BASE = "https://goproxy.cn"
+
+
+def proxy_bases() -> list[str]:
+    """proxy 复核依次尝试的事实源（环境变量可指定镜像；逐源回退）。"""
+    env = os.environ.get("OEKIT_GO_PROXY") or os.environ.get("GOPROXY") or ""
+    out: list[str] = []
+    first = env.split(",")[0].strip().rstrip("/")
+    if first.startswith("http://") or first.startswith("https://"):
+        out.append(first)
+    for base in (DEFAULT_PROXY_BASE, MIRROR_PROXY_BASE):
+        if base not in out:
+            out.append(base)
+    return out
 
 
 def proxy_go_directive(module_path: str, version: str, timeout: float = 20.0) -> str | None:
@@ -213,15 +236,21 @@ def proxy_go_directive(module_path: str, version: str, timeout: float = 20.0) ->
 
     读法沿用 gen_versions._remote_tags 的既有手法：**读失败不静默**——
     返回 None（= 读不到），由调用方区分「读不到」与「读到且不符」。
+
+    逐源尝试（proxy_bases()）：OEKIT_GO_PROXY / GOPROXY 可指定镜像；官方源
+    读不到自动回退 goproxy.cn ⇒ 只通镜像的网络里复核不再 100% 空转（#261）。
     """
-    url = f"{PROXY_BASE}/{module_path}/@v/{version}.mod"
-    try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:
-            text = resp.read().decode("utf-8", "replace")
-    except (urllib.error.URLError, OSError, ValueError):
-        return None
-    m = re.search(r"(?m)^go (\d+\.\d+(\.\d+)?)", text)
-    return m.group(1) if m else None
+    for base in proxy_bases():
+        url = f"{base}/{module_path}/@v/{version}.mod"
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:
+                text = resp.read().decode("utf-8", "replace")
+        except (urllib.error.URLError, OSError, ValueError):
+            continue
+        m = re.search(r"(?m)^go (\d+\.\d+(\.\d+)?)", text)
+        if m:
+            return m.group(1)
+    return None
 
 
 def check_go_against_proxy(modules: list[dict]) -> tuple[list[str], list[str]]:
@@ -558,9 +587,16 @@ def main() -> int:
             print("   （跑 gen_matrix_go.py 重生成并打新 tag）")
             return 1
         if unchecked:
-            print(f"⚠️ proxy 的 .mod 未核对 {len(unchecked)} 个模块（读不到 ≠ 不符，"
-                  f"不判红但必须知道没核）：{', '.join(unchecked[:6])}"
+            # ★ 复核没跑完 ⇒ 退出码 2（matrix-tools#261）：「未核对」不是「一致」。
+            #   旧写法这里只 ⚠ 一句，然后照样「✓ 一致」+ exit 0 ⇒ proxy 全读不到时
+            #   这道复核静默零覆盖，报告还是绿的（#79「判据不可用即红」的破口；
+            #   audit.py 阶段 6 恰恰按退出码判「BOM 新鲜度 ✓」）。口径与上方
+            #   collect() 的远端 tag 读不到一致：判不了 ⇒ EXIT_UNREADABLE(2)。
+            print(f"⚠️ proxy 复核未完成：{len(unchecked)}/{len(modules)} 个模块未核对"
+                  f"（读不到 ≠ 不符，但也**不是**一致 ⇒ 判不了）：{', '.join(unchecked[:6])}"
                   f"{' ……' if len(unchecked) > 6 else ''}")
+            print("   先修网络/凭证，或用 OEKIT_GO_PROXY 指定可达的镜像后重跑。")
+            return EXIT_UNREADABLE
         if changed:
             print(f"❌ oekit BOM 陈旧（跑 gen_matrix_go.py 重生成并打新 tag）：{', '.join(changed)}")
             return 1
