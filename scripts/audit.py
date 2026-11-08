@@ -910,6 +910,86 @@ def scan_repo_nested_floors(repo: str, root, latest_nested_of) -> list[str]:
     return out
 
 
+# ---------- 地板判据的数据源：origin/main（远端事实），不读本地工作树（#246） ----------
+#
+# 为什么（matrix-tools#246，2026-11-08 维护轮实测两次）：地板判据拿「树里的
+# require」比「远端最新 tag」——树若取**本地工作树**，本地 clone 一落后，
+# 报告立刻**假红一片**，且每条红都挂着「跑 align_floors.py 抬升」的可执行
+# 建议 ⇒ 人会真去抬地板（而地板在远端 main 早已抬好）⇒ 判据与建议自相矛盾。
+# 实测：合并 15 个地板 PR 后本地未 pull，同款读取口径报出 22 条「需先抬
+# 地板」，全为假警报；`git pull --ff-only` 后归零。
+#
+# 修法：判据改读 **origin/main** 的 go.mod（fetch 后物化成临时树）——与
+# 「最新已发布 tag」同源，两边都是远端事实；读不到 ⇒ 显式判「未核对」
+# （#79：判不了 ≠ 零漂移），**不许**静默回退读本地工作树。
+_origin_trees: dict[str, Path] = {}       # repo → 物化的 origin/main go.mod 树
+_origin_unreadable: dict[str, str] = {}   # repo → 读不到的原因（fail-loud 用）
+_stale_local_main: dict[str, int] = {}    # repo → 本地 main 落后 origin/main 的提交数
+_origin_base_tmp: Path | None = None      # 所有物化树共用的临时根（atexit 清理）
+
+
+def _origin_main_tree(repo: str, root: Path) -> Path | None:
+    """把 origin/main 上的全部 go.mod 物化到临时目录，返回该目录；读不到 ⇒ None。
+
+    步骤：`git fetch origin main` → `git ls-tree FETCH_HEAD` 找 go.mod →
+    逐个 `git show` 物化（保持相对路径，嵌套模块的 go.mod 也在内）。
+    顺带记下「本地 main 落后 origin/main 多少提交」（_stale_local_main）⇒
+    报告里提示 pull——其余读工作树的判据仍会被陈旧 clone 带偏。
+
+    返回 None = 这道判据对这个仓**未核对**；调用方必须显式报红（#79），
+    不得把 None 当「零漂移」，也不得回退读本地工作树（那正是 #246 的 bug）。
+    """
+    global _origin_base_tmp
+    import atexit
+    import shutil
+    import tempfile
+    if repo in _origin_trees:
+        return _origin_trees[repo]     # 一仓只物化一次（fetch 有网络代价）
+    fetch = subprocess.run(["git", "-C", str(root), "fetch", "origin", "main"],
+                           capture_output=True, text=True, timeout=90)
+    if fetch.returncode != 0:
+        _origin_unreadable[repo] = ((fetch.stderr or fetch.stdout).strip().splitlines()
+                                    or ["fetch 失败"])[-1][:160]
+        return None
+    if _origin_base_tmp is None:
+        _origin_base_tmp = Path(tempfile.mkdtemp(prefix="audit-origin-main-"))
+        atexit.register(shutil.rmtree, _origin_base_tmp, True)
+    tree = subprocess.run(["git", "-C", str(root), "ls-tree", "-r", "--name-only",
+                           "FETCH_HEAD"], capture_output=True, text=True, timeout=60)
+    if tree.returncode != 0:
+        _origin_unreadable[repo] = ((tree.stderr or "").strip().splitlines()
+                                    or ["ls-tree 失败"])[-1][:160]
+        return None
+    # 陈旧检测（提示用，不判红）：本地 main 落后 origin/main 几个提交。
+    stale = subprocess.run(["git", "-C", str(root), "rev-list", "--count",
+                            "main..FETCH_HEAD"], capture_output=True, text=True, timeout=60)
+    if stale.returncode == 0 and stale.stdout.strip().isdigit() \
+            and int(stale.stdout.strip()) > 0:
+        _stale_local_main[repo] = int(stale.stdout.strip())
+    out = _origin_base_tmp / repo
+    n = 0
+    for rel in tree.stdout.splitlines():
+        if not rel.endswith("go.mod"):
+            continue
+        parts = Path(rel).parts
+        if ".git" in parts or "vendor" in parts:
+            continue
+        show = subprocess.run(["git", "-C", str(root), "show", f"FETCH_HEAD:{rel}"],
+                              capture_output=True, text=True, timeout=60)
+        if show.returncode != 0:
+            _origin_unreadable[repo] = f"show {rel} 失败：{(show.stderr or '').strip()[:120]}"
+            return None
+        dest = out / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(show.stdout, encoding="utf-8")
+        n += 1
+    if n == 0:
+        _origin_unreadable[repo] = "FETCH_HEAD 上一个 go.mod 都没有（仓坏了？）"
+        return None
+    _origin_trees[repo] = out
+    return out
+
+
 def check_repo_go_mod_floors():
     """各仓 go.mod 里 `github.com/oekit/*` 的地板，不得落后于该模块的远端最新 tag。
 
@@ -918,8 +998,10 @@ def check_repo_go_mod_floors():
     的新鲜度 ⇒ 2026-11-01 pkg v0.31.1 发布后，**18 处地板漂移**（跨 13 个仓）
     只能靠人翻出来，issue 提了才有人动。
 
-    口径与阶段 6 同源：**各仓远端 tag**（本地 clone 陈旧 ⇒ 误报一片红），
-    版本**按数字**比（字符串排序会把 `v0.3.0` 排在 `v0.31.0` 之后）。
+    口径（matrix-tools#246 起修正）：树 = **origin/main**（fetch 后物化，见
+    _origin_main_tree 的说明）——本地工作树会让「本地 clone 陈旧 ⇒ 误报一片
+    红」；tag = **远端最新 tag**。两边都是远端事实，版本**按数字**比
+    （字符串排序会把 `v0.3.0` 排在 `v0.31.0` 之后）。
 
     ⚠️ **判据独立于 align_floors.py**（那是整改工具，不是判据）：两者若共享
     同一套解析逻辑，解析漏收时两边一起漏 ⇒ 门禁全绿、而矩阵实际有漂移
@@ -929,7 +1011,15 @@ def check_repo_go_mod_floors():
         return remote_latest(dep)
 
     for repo in MODULES:
-        root = repo_dir(repo, BASE)
+        root = _origin_main_tree(repo, repo_dir(repo, BASE))
+        if root is None:
+            # ★ 判不了 ≠ 零漂移（#79），也**不是**「地板落后」：文案必须拦住
+            # 「照着红去抬地板」的错误动作（#246 实测的危害形态）。
+            check(False, f"{repo}: 地板判据**未核对**（origin/main 读不到："
+                         f"{_origin_unreadable.get(repo, '未知原因')}）——判不了 ≠ 零漂移；"
+                         f"先修网络/凭证（或 git fetch origin main）再跑，"
+                         f"不要据此抬地板")
+            continue
         for msg in scan_repo_floors(repo, root, latest_of):
             check(False, f"{msg}（跑 align_floors.py --plan 抬升）")
 
@@ -963,7 +1053,12 @@ def _nested_tag_prefixes() -> dict[str, str]:
     """
     prefixes: dict[str, str] = {}
     for repo in MODULES:
-        root = repo_dir(repo, BASE)
+        # ★ 数据源 = origin/main（#246 同款口径：本地工作树陈旧 ⇒ 前缀表残缺
+        #   ⇒ 消费方地板判据静默漏检）。读不到的仓由 check_repo_go_mod_floors
+        #   的「未核对」条目点名，这里不重复报。
+        root = _origin_main_tree(repo, repo_dir(repo, BASE))
+        if root is None:
+            continue
         for gomod in sorted(root.glob("**/go.mod")):
             if gomod.parent == root:
                 continue          # 仓根本身不是嵌套模块
@@ -1026,7 +1121,12 @@ def check_nested_floors_of_other_repo():
         return f"v{best[0]}.{best[1]}.{best[2]}" if best else None
 
     for repo in MODULES:
-        root = repo_dir(repo, BASE)
+        # ★ 数据源 = origin/main（#246：同 check_repo_go_mod_floors 的口径——
+        #   本地工作树陈旧 ⇒ 假红一片还挂着「去抬地板」的建议）。读不到 ⇒
+        #   「未核对」判红（check_repo_go_mod_floors 已逐仓点名，不重复报）。
+        root = _origin_main_tree(repo, repo_dir(repo, BASE))
+        if root is None:
+            continue
         for msg in scan_repo_nested_floors(repo, root, latest_nested_of):
             check(False, f"{msg}（跑 align_floors.py --plan 抬升）")
 
@@ -1285,6 +1385,13 @@ _read_ok = sum(1 for v in REMOTE_READ_LOG.values() if v == "ok")
 _read_fail = sum(1 for v in REMOTE_READ_LOG.values() if v == "failed")
 print(f"远端 tag 读取：{_read_ok}/{len(MODULES)} 仓成功"
       f"（{_read_fail} 读失败）")
+if _stale_local_main:
+    # matrix-tools#246：本地 main 落后的仓。地板判据已改读 origin/main 不受影响
+    # （这里只提示），但**其余读本地工作树的判据**（module 行/README/AGENTS…）
+    # 仍会被陈旧 clone 带偏 ⇒ 提醒先 pull，别把陈旧读数当成事实。
+    print(f"本地 main 落后 origin/main：{len(_stale_local_main)} 仓"
+          f"（{sorted(_stale_local_main)}）——地板判据已改读远端不受影响；"
+          f"其余读本地工作树的判据可能过时，建议先 git pull --ff-only（matrix-tools#246）")
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
     for i in issues:

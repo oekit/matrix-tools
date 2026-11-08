@@ -125,6 +125,32 @@ def main() -> int:
     def repo_tags(*repos: str) -> dict:
         return {k: v for k, v in tags.items() if k in repos}
 
+    # ── I 系夹具（matrix-tools#259：模板 + 文案形状）——正常与 --mutate 都要用 ──
+    # core=零内部依赖根模块（模板必须明示「不要写地板」）；
+    # boot/obs=有内部依赖的嵌套模块（模板必须带「带出新的地板：本版号」）；
+    # boot2=根面裸版本头（模板必须补全成完整 tag 名）；
+    # lintok=段在且文案完好；lintbad=段在但文案残缺（#259 实测形态）。
+    i_files = {
+        ("core", "v0.13.3", "CHANGELOG.md"): prev_snap("v0.13.3", "v0.13.2"),
+        ("core", "v0.13.3", "go.mod"): "module github.com/oekit/core\n\ngo 1.24\n",
+        ("boot", "obs/v0.2.14", "CHANGELOG.md"): prev_snap("obs/v0.2.14", "obs/v0.2.13"),
+        ("boot", "obs/v0.2.14", "go.mod"):
+            "module github.com/oekit/bootstrap/obs\n\ngo 1.24\n\n"
+            "require github.com/oekit/metrics v0.5.0\n",
+        ("boot2", "obs/v0.2.14", "CHANGELOG.md"): prev_snap("obs/v0.2.14", "v0.2.13"),
+        ("boot2", "obs/v0.2.14", "go.mod"):
+            "module github.com/oekit/bootstrap/obs\n\ngo 1.24\n\n"
+            "require github.com/oekit/metrics v0.5.0\n",
+        ("lintok", "v1.2.0", "CHANGELOG.md"): cur_snap("v1.2.0", "v1.1.0"),
+        ("lintbad", "v1.3.0", "CHANGELOG.md"):
+            "## [v1.3.0] - 2026-11-08\n\n"
+            "- chore: 补齐本版版本节——上一个已发布 tag（）的 CHANGELOG 快照缺本版段"
+            "（tag 快照不可变），本版补上并带出新的地板v1.2.9\n\n"
+            + prev_snap("v1.3.0", "v1.2.9"),
+    }
+    i_tags = {"core": ["v0.13.2", "v0.13.3"], "boot": ["obs/v0.2.14"],
+              "boot2": ["obs/v0.2.14"], "lintok": ["v1.2.0"], "lintbad": ["v1.3.0"]}
+
     if not mutate:
         # A：逃逸主形态（全量跑 + 单仓跑都必须红）
         run_case("A_escape_shape", files, tags, gate.EXIT_DRIFT)
@@ -162,6 +188,56 @@ def main() -> int:
         text = "## [v0.12.5] - 2026-10-23\n\n- build: 地板对齐 v0.12.6 前置（勿混淆）\n"
         _record("R_regex_not_string", not gate.section_re("v0.12.6").search(text),
                 "R: 段头正则误命中正文字串")
+
+        # I1：零内部依赖 ⇒ 模板给全上一版 tag 名与「不要写地板」的明示
+        d1 = gate.check_tag("core", "v0.13.3", make_read_fn(i_files))
+        _record("I1_template_no_deps",
+                d1 is not None and "修复模板" in d1 and "（v0.13.2）" in d1
+                and "不要写「带出新的地板」" in d1 and "带出新的地板：v0.13.3" not in d1,
+                f"I1: 零内部依赖的模板不对：{d1}")
+        # I2：有内部依赖 ⇒ 模板带「带出新的地板：本版号」
+        d2 = gate.check_tag("boot", "obs/v0.2.14", make_read_fn(i_files))
+        _record("I2_template_with_deps",
+                d2 is not None and "带出新的地板：v0.2.14" in d2
+                and "（obs/v0.2.13）" in d2,
+                f"I2: 有内部依赖的模板不对：{d2}")
+        # I3：嵌套面裸版本头 ⇒ 模板补全成完整 tag 名（#259 实测的 `（obs/）` 缺陷形态）
+        d3 = gate.check_tag("boot2", "obs/v0.2.14", make_read_fn(i_files))
+        _record("I3_template_nested_full_name",
+                d3 is not None and "（obs/v0.2.13）" in d3 and "（v0.2.13）" not in d3,
+                f"I3: 裸版本头没有补全成完整 tag 名：{d3}")
+        # I4：lint 判据单元——四种残缺形态各自命中；完好文案零误报
+        bad_text = ("- chore: 补齐本版版本节——上一个已发布 tag（）的 CHANGELOG 快照缺本版段"
+                    "（tag 快照不可变），本版补上并带出新的地板v1.2.9\n")
+        p_bad = gate.lint_repair_bullet(bad_text, "v1.3.0")
+        _record("I4_lint_catches_broken",
+                len(p_bad) >= 2 and any("空占位" in x for x in p_bad)
+                and any("缺分隔符" in x for x in p_bad),
+                f"I4: 残缺文案必须被抓（空括号+缺分隔符）：{p_bad}")
+        p_prefix = gate.lint_repair_bullet(
+            "- chore: 补齐本版版本节——上一个已发布 tag（obs/）的快照缺本版段\n", "v1.3.1")
+        _record("I4b_lint_prefix_only",
+                len(p_prefix) == 1 and "路径前缀" in p_prefix[0],
+                f"I4b: 前缀无版本形态必须单独命中：{p_prefix}")
+        p_ver = gate.lint_repair_bullet(
+            "- chore: 补齐本版版本节——本版补上并带出新的地板：v1.2.9\n", "v1.3.1")
+        _record("I4c_lint_wrong_floor_ver",
+                len(p_ver) == 1 and "不是本版号" in p_ver[0] and "v1.2.9" in p_ver[0]
+                and "v1.3.1" in p_ver[0],
+                f"I4c: 「新的地板」后跟旧版号必须命中：{p_ver}")
+        p_ok = gate.lint_repair_bullet(cur_snap("v1.2.0", "v1.1.0")
+                                       + "- feat: 依赖 logx 地板 v0.8.0 → v0.8.1\n", "v1.2.0")
+        _record("I4d_lint_clean_no_false_positive", not p_ok,
+                f"I4d: 完好文案（含合法的依赖地板叙述）不许误报：{p_ok}")
+        # I5：端到端——段在但文案残缺 ⇒ EXIT_DRIFT 且点名「文案残缺」；完好 ⇒ EXIT_OK
+        run_case("I5_lint_bad_section_drifts", i_files,
+                 {"lintbad": i_tags["lintbad"]}, gate.EXIT_DRIFT)
+        d5 = gate.lint_tag_section("lintbad", "v1.3.0", make_read_fn(i_files))
+        _record("I5b_lint_names_defect",
+                len(d5) >= 1 and "文案残缺" in d5[0] and "快照不可变" in d5[0],
+                f"I5b: 端到端残缺必须被点名：{d5}")
+        run_case("I6_clean_section_still_ok", i_files,
+                 {"lintok": i_tags["lintok"]}, gate.EXIT_OK)
 
         if all(_RESULTS.values()):
             print(f"\u2713 自测全绿（{len(_RESULTS)} 用例）")
@@ -217,8 +293,37 @@ def main() -> int:
     _record("M3_mutated_green_is_the_bug", rc_m3 == gate.EXIT_OK,
             f"M3 吞错应假绿(exit={rc_m3})——证明原版读失败不伪装通过")
 
+    # M4（matrix-tools#259）：文案形状校验被摘掉 ⇒ 残缺段照样判绿
+    #（正是 #259 要堵的洞：半成品文案随 tag 永久留痕、门禁却放行）。
+    rc_m4_orig = gate.run(["lintbad"], read_fn=make_read_fn(i_files),
+                          tags_fn=make_tags_fn(i_tags))
+    _record("M4_orig_red", rc_m4_orig == gate.EXIT_DRIFT,
+            f"M4 原版应判文案残缺: exit={rc_m4_orig}")
+    orig_lint = gate.lint_tag_section
+    try:
+        gate.lint_tag_section = lambda repo, tag, read_fn: []
+        rc_m4 = gate.run(["lintbad"], read_fn=make_read_fn(i_files),
+                         tags_fn=make_tags_fn(i_tags))
+    finally:
+        gate.lint_tag_section = orig_lint
+    _record("M4_mutated_green_is_the_bug", rc_m4 == gate.EXIT_OK,
+            f"M4 摘掉文案校验应假绿(exit={rc_m4})——证明原版在核文案形状")
+
+    # M5（matrix-tools#259）：修复模板被摘掉 ⇒ 报错退回「只说缺段、不给可照抄
+    # 的东西」（#259 的根因形态：修复者只能自己造句 ⇒ 残缺）。
+    orig_tpl = gate.repair_template
+    try:
+        gate.repair_template = lambda *a, **k: ""
+        d_m5 = gate.check_tag("toolgate", "v0.12.6", make_read_fn(files))
+    finally:
+        gate.repair_template = orig_tpl
+    _record("M5_template_removed_is_the_bug",
+            d_m5 is not None and "修复模板" not in d_m5,
+            "M5: 模板摘除后消息里不该再有模板（证明原版消息自带模板）")
+
     expected = {"M1_orig_red", "M1_mutated_green_is_the_bug", "M2_mutated_green_is_the_bug",
-                "M3_mutated_green_is_the_bug"}
+                "M3_mutated_green_is_the_bug", "M4_orig_red",
+                "M4_mutated_green_is_the_bug", "M5_template_removed_is_the_bug"}
     bad = [k for k, v in _RESULTS.items() if k in expected and not v]
     if bad:
         print(f"\u274c 变异自证失败 {len(bad)} 项：{bad}")
