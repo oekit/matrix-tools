@@ -67,6 +67,23 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "gormx:v0.11.5",
     "middleware:v0.13.14",
     "data:v0.20.5",
+    # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
+    # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
+    "bootstrap:nacos/v0.2.0",
+    "bootstrap:nacos/v0.2.1",
+    "bootstrap:nacos/v0.2.2",
+    "bootstrap:nacos/v0.2.3",
+    "bootstrap:nacos/v0.2.4",
+    "bootstrap:nacos/v0.2.5",
+    "bootstrap:nacos/v0.3.1",
+    "bootstrap:nacos/v0.3.2",
+    "bootstrap:obs/v0.2.0",
+    "bootstrap:obs/v0.2.1",
+    "bootstrap:obs/v0.2.3",
+    "bootstrap:obs/v0.2.4",
+    "bootstrap:obs/v0.2.5",
+    "bootstrap:obs/v0.2.6",
+    "bootstrap:obs/v0.2.7",
 }
 
 # 段头匹配：`## [v0.12.6]` / `## [toolgate/v0.12.6]`（允许行尾尾注）。
