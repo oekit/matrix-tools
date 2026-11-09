@@ -18,9 +18,19 @@
         --kind Bug --priority P1 --closed --note "修复分页口径"
 
 `--issue` 两种**显式**形态（matrix-tools#258）：
-    repo#N       org 取 --org（默认 oekit）
-    org/repo#N   串里显式给了 org ⇒ 覆盖 --org；落库键统一成 repo#N
-                 （台账既有形态就是 repo#N，见第 534 轮 hertz#94）
+    repo#N       org 取 --org（默认 oekit）——**兼容旧调用**；落库键仍是全键
+    org/repo#N   串里显式给了 org ⇒ 覆盖 --org（推荐形态，#268）
+**落库键是全键 `org/repo#N`**（matrix-tools#268）：「记的是哪个 org」必须在
+形态里可见——org 只能靠 --org 外部传时，记错 org 的同号 issue 会静默落账、
+复核还判它「一致」（实测：oagentkit/matrix-tools#194 被记成 oekit/matrix-tools#194
+——后者是个已合并 PR，账上凭空多出一条）。旧台账里的 `repo#N` 键仍可读
+（复核时 org 回退到条目自身的 org 字段）。
+
+**PR 与 issue 显式区分**（#268）：`gh issue view <n>` 对 PR 号返回的是 PR
+状态（MERGED/OPEN）⇒ 记入时读 `isPullRequest`，是 PR 一律拒绝并说清
+（要记交付请把号填进 --pr 字段，别冒充 issue 主语）。
+
+`--org` 显式给了且与串里的 org 冲突 ⇒ **用法错误**（退出码 2），不静默猜。
 其余形态（如 `a/b/c#1`、`repo#`、`#5`）⇒ **用法错误**（退出码 2、零写入），
 错误信息说人话——旧实现只查表面，`org/repo#N` 被放行后撞「gh issue view
 --repo oekit/oekit/matrix-tools」报成网络错误 ⇒ 19 条整批少记。
@@ -37,7 +47,8 @@
 
 环境：
     OEKIT_LEDGER  台账路径（默认 /Volumes/zy/oekit/.oekit-cron-state.json）
-    --org         仓所属 org（默认 oekit；pigeonbox 系用 pigeonbox）
+    --org         兜底 org（--issue 省略 org 段时用；默认 oekit；已知 org：
+                  oekit / pigeonbox / oagentkit——推荐直接写全键 org/repo#N）
 """
 from __future__ import annotations
 
@@ -59,6 +70,7 @@ import ghsafe  # noqa: E402  —— 远端读取层（把「读到空」与「�
 
 DEFAULT_LEDGER = Path(os.environ.get(
     "OEKIT_LEDGER", "/Volumes/zy/oekit/.oekit-cron-state.json"))
+DEFAULT_ORG = "oekit"   # --org 的默认值；「显式给了 --org」= args.org != DEFAULT_ORG
 
 # 台账的形状（与 .oekit-cron-state.json 现有结构一致；summary 是 --run-end
 # --summary 写入的可选键，matrix-tools#257）
@@ -80,11 +92,15 @@ ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"
 def parse_issue_ref(text: str, default_org: str) -> tuple[str, str, int]:
     """issue 引用 → (org, repo, num)。两种显式形态：
 
-      repo#N      org 用 default_org（--org）；
-      org/repo#N  串里显式给了 org ⇒ **覆盖** --org（落库键统一成 repo#N，
-                  与台账既有形态一致——键里带 org 会让收口复核拿
-                  `oekit/matrix-tools` 当 repo，报「读不到 ⇒ 无法判定」⇒
-                  那一轮永久无法收口，且没有通道能改键）。
+      repo#N      org 用 default_org（--org，**兼容旧调用**）；
+      org/repo#N  串里显式给了 org ⇒ 覆盖 default_org（推荐形态，#268）。
+
+    落库键由调用方取**全键** `org/repo#N`（#268）：org 只活在 --org 里时，
+    记错 org 的同号 issue 会静默落账、复核还判「一致」。旧台账里的 `repo#N`
+    键仍可读——复核方按条目自身的 org 字段解析。
+    （#258 时代键统一成 repo#N 的理由是「复核拿 oekit/matrix-tools 当 repo
+    会读不到」——那是复核没跟着键形态走的问题；复核已改为按全键解析，
+    不再是键带 org 的理由。）
 
     其余形态 ⇒ ValueError（人话），调用方转成**用法错误**（退出码 2、零写入）
     ——参数非法 ≠「读 GitHub 失败 ⇒ 事实不可知」，不能进同一类重试。
@@ -98,6 +114,21 @@ def parse_issue_ref(text: str, default_org: str) -> tuple[str, str, int]:
             f"org 不用拼进 repo（org 用 --org 或 org/repo#N 显式给）。")
     org = m.group(1) or default_org
     return org, m.group(2), int(m.group(3))
+
+
+def _entry_matches(e: dict[str, Any], org: str, repo: str, num: int) -> bool:
+    """台账条目是否指向 (org, repo, num)——按解析后的主语比，不按键串（#268）。
+
+    旧条目的键是 `repo#N`（org 在字段里）、新条目是全键 `org/repo#N`；
+    按键串比对会让一半形态永远匹配不上。解析不出主语的条目（历史脏数据）
+    不匹配——宁可「找不到记录」报错，也不拿错条目当修正目标。
+    """
+    try:
+        e_org, e_repo, e_num = parse_issue_ref(str(e.get("issue", "")),
+                                               str(e.get("org") or org))
+    except ValueError:
+        return False
+    return e_org == org and e_repo == repo and e_num == num
 
 
 def now_iso() -> str:
@@ -130,11 +161,18 @@ def save_ledger(path: Path, data: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def issue_state(org: str, repo: str, num: int) -> str:
-    """issue 在 GitHub 上的真实状态（大写 OPEN/CLOSED）。"""
+def issue_facts(org: str, repo: str, num: int) -> tuple[str, bool]:
+    """issue 在 GitHub 上的真实状态（大写 OPEN/CLOSED）与「是不是 PR」。
+
+    ★ PR 与 issue 显式区分（matrix-tools#268）：`gh issue view <n>` 对 **PR 号**
+    返回的是 PR 的状态（MERGED/OPEN），且带 `isPullRequest=true`——旧行为只读
+    state ⇒ 把已合并的 PR 静默记成 issue（且若恰逢 CLOSED 形态还会自动推断
+    closed=True，账上凭空多出「已关单」）。现在显式读 isPullRequest，
+    调用方据此拒绝「把 PR 记成 issue」。
+    """
     data = ghsafe.gh_json(["issue", "view", str(num), "--repo", f"{org}/{repo}",
-                           "--json", "state"])
-    return str(data.get("state", "")).upper()
+                           "--json", "state,isPullRequest"])
+    return str(data.get("state", "")).upper(), bool(data.get("isPullRequest"))
 
 
 def pr_facts(org: str, repo: str, num: int) -> tuple[str, str]:
@@ -202,8 +240,15 @@ def release_exists(org: str, repo: str, tag: str) -> bool:
 RELEASE_ONLY_PREFIX = "（发版）"
 
 
-def release_only_key(repo: str, tag: str) -> str:
-    """无 issue 锚点发版的台账键（与真实 issue 键 `repo#N` **不同形态** ⇒ 不撞）。"""
+def release_only_key(repo: str, tag: str, org: str | None = None) -> str:
+    """无 issue 锚点发版的台账键（与真实 issue 键 `repo#N` **不同形态** ⇒ 不撞）。
+
+    #268 同款修法：键里带 **org**（`（发版）org/repo@tag`）——org 只活在
+    --org 里时，记错 org 的同仓同 tag 发版会静默落账、复核还判「一致」。
+    org=None 兼容旧键形态（复核旧条目时用）。
+    """
+    if org:
+        return f"{RELEASE_ONLY_PREFIX}{org}/{repo}@{tag}"
     return f"{RELEASE_ONLY_PREFIX}{repo}@{tag}"
 
 
@@ -251,7 +296,8 @@ def cmd_add_release_entry(args, data: dict[str, Any]) -> None:
       ① 事实回读**不打折**：tag 必须存在 **且** GitHub Release 必须存在
          （tag 推了但 Release 没建 ⇒ 消费方拿不到变更记录 ⇒ 不能记成「已发版」）；
       ② 给了 `--pr` 则 PR 必须已合并；
-      ③ 键用 `（发版）<repo>@<tag>` ⇒ 与真实 issue 键**不同形态、不撞**；
+      ③ 键用 `（发版）org/repo@tag`（#268：org 进键，记错 org 不再静默；
+         旧形态 `（发版）repo@tag` 仍可读）⇒ 与真实 issue 键**不同形态、不撞**；
       ④ `cmd_run_end` 也**复核**这类键 ⇒ 否则「记了没人核」＝白记。
     """
     org = args.org
@@ -264,11 +310,16 @@ def cmd_add_release_entry(args, data: dict[str, Any]) -> None:
     if args.closed:
         raise SystemExit("✗ --release-only 不接受 --closed（这条记录没有 issue 可关）")
 
-    key = release_only_key(repo, tag)
+    key = release_only_key(repo, tag, org)
+    # 去重按 (org, repo, tag) 三元组，**不按键串**（#268）：旧形态键
+    # `（发版）repo@tag` 与新形态键 `（发版）org/repo@tag` 指向同一次发版，
+    # 按键串比对会漏判 ⇒ 同一次发版记两条。
     for r in data.get("runs") or []:
         for e in r.get("handled") or []:
-            if e.get("issue") == key and e.get("org", org) == org:
-                raise Refused(f"台账里已经有 {key} 的记录 ⇒ 拒绝重复写入"
+            if (e.get("org", org) == org and str(e.get("repo") or "") == repo
+                    and str(e.get("tag") or "") == tag):
+                raise Refused(f"台账里已经有 {org}/{repo}@{tag} 的发版记录"
+                              f"（键 {e.get('issue')}）⇒ 拒绝重复写入"
                               f"（同一次发版只该有一条；要改它请用 --amend-*）")
 
     # ── 事实回读（写入的字段来自这里，不是来自命令行参数）──
@@ -313,6 +364,21 @@ def _review_release_only(org: str, e: dict[str, Any], label: str) -> list[str]:
     if not repo or not tag:
         drift.append(f"{label}：记录里缺 repo/tag ⇒ 无法复核（不能当成「没问题」）")
         return drift
+    # 形态自查（matrix-tools#268）：键里显式带的 org/repo/tag 与条目字段不一致
+    # ⇒ 主语存疑——旧复核只读条目字段回读远端，键与字段「各说各话」照样判绿
+    # （记错 org 的同仓同 tag 发版就这样静默落账）。
+    if is_release_only_key(label):
+        k_repo, _, k_tag = label[len(RELEASE_ONLY_PREFIX):].partition("@")
+        k_org: str | None = None
+        if "/" in k_repo:
+            k_org, k_repo = k_repo.split("/", 1)
+        if k_org is not None and k_org != org:
+            drift.append(f"{label}：键里 org（{k_org}）与条目 org 字段（{org}）不一致"
+                         f"⇒ 主语存疑（#268 形态自查）")
+        if k_repo and k_repo != repo:
+            drift.append(f"{label}：键里 repo（{k_repo}）与条目 repo 字段（{repo}）不一致")
+        if k_tag and k_tag != tag:
+            drift.append(f"{label}：键里 tag（{k_tag}）与条目 tag 字段（{tag}）不一致")
     try:
         if not tag_exists(org, repo, tag):
             drift.append(f"{label}：记录里写了 tag {tag}，但远端查不到")
@@ -357,10 +423,23 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
     except ValueError as e:
         print(f"✗ 用法错误：{e}")
         raise SystemExit(2) from None
-    key = f"{repo}#{num}"   # 落库键统一成 repo#N（org 进 org 字段，不进键）
+    # org 一致性（matrix-tools#268）：--org 显式给了且与串里的 org 冲突 ⇒ 报错，
+    # 不静默猜。--org 处于默认值时以串里的显式 org 为准（兼容旧调用）。
+    if args.org != DEFAULT_ORG and org != args.org:
+        print(f"✗ 用法错误：--issue 的 org（{org}）与 --org（{args.org}）不一致"
+              f"⇒ 拒绝猜测（#268：主语必须显式且可核查）")
+        raise SystemExit(2) from None
+    # 落库键用**全键** org/repo#N（#268）：「记的是哪个 org」必须在形态里可见。
+    key = f"{org}/{repo}#{num}"
 
     # ── 事实回读（写入的字段来自这里，不是来自命令行参数）──
-    state = issue_state(org, repo, num)
+    state, is_pr = issue_facts(org, repo, num)
+    if is_pr:
+        # PR 一律拒绝记成 issue（#268）：不管它 MERGED 还是 OPEN——
+        # 「记一条 issue」与「记一条交付」是两件事，主语混用会让去重失效。
+        raise Refused(f"{org}/{repo}#{num} 是 **PR**（gh 报 isPullRequest=true，"
+                      f"状态 {state or '未知'}），不是 issue ⇒ 拒绝把 PR 记成 issue；"
+                      f"要记交付请把号填进 --pr 字段（或用 --release-only 记发版）")
 
     merge_commit = ""
     if args.pr:
@@ -371,11 +450,6 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
     if args.tag and not tag_exists(org, repo, args.tag):
         raise Refused(f"远端没有 tag {org}/{repo}@{args.tag} ⇒ 拒绝写入「已发版」")
     if args.closed and state != "CLOSED":
-        # `gh issue view <n>` 对 **PR 号**会返回 PR 的状态（MERGED/OPEN）⇒
-        # 明确说清「这是 PR 不是 issue」，否则措辞会让人以为是状态读错了。
-        if state == "MERGED":
-            raise Refused(f"{org}/{repo}#{num} 是 **PR**（状态 MERGED），不是 issue ⇒ "
-                          f"不能记成「已关单」")
         raise Refused(f"issue {org}/{repo}#{num} 在 GitHub 上还是 {state or '未知'}，"
                       f"**没关** ⇒ 拒绝记成「已关单」")
 
@@ -412,51 +486,70 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
 
     ⇒ 这里给一条**显式、受控**的修正通道：
       ① 修正的字段**只允许**事实类字段（`closed` / `tag` / `pr` / `note`
-         / `board_status`）——**不许**改 `issue` / `org`（那会换掉记录的主语）；
+         / `board_status`），外加**主语修正** `--amend-issue`（#268 的第④条：
+         错记的 org/repo#N——比如把 oagentkit 的 issue 记成了 oekit 同号的
+         已合并 PR——要能改回来，否则只能手工改 JSON）；
       ② 修正**必须留下痕迹**（`amended_at` + `amended_from` 记下原值），
          封存轮次也不豁免（这是**修错**，不是**加条目**）；
       ③ 修正确实回读 GitHub 核对：改了 `closed`/`tag`/`pr` ⇒ 事实必须与现实
-         一致，否则拒绝（事实不可知时拒绝写入，与本工具既有口径一致）。
+         一致，否则拒绝（事实不可知时拒绝写入，与本工具既有口径一致）；
+         改主语 ⇒ 新主语必须是真实存在的 **issue**（不是 PR）。
     """
     target = args.issue
     org = args.org
-    # ★ 「无 issue 锚点的发版」记录的键形态是 `（发版）<repo>@<tag>` ⇒ 修正通道
-    #   也要认它（否则一条错的发版记录**永远**修不了 ⇒ 那一轮**永远**收不了口）。
+    # ★ 「无 issue 锚点的发版」记录的键形态是 `（发版）[org/]repo@<tag>` ⇒ 修正
+    #   通道也要认它（否则一条错的发版记录**永远**修不了 ⇒ 那一轮**永远**收不了口）。
     rel_only = is_release_only_key(target)
+    tag_in_key = ""
     if rel_only:
         _body = target[len(RELEASE_ONLY_PREFIX):]
-        repo, _, tag_in_key = _body.partition("@")
+        _krepo, _, tag_in_key = _body.partition("@")
+        if "/" in _krepo:
+            org, repo = _krepo.split("/", 1)   # 键里显式带的 org 覆盖 --org（#268）
+        else:
+            repo = _krepo
         if not repo or not tag_in_key:
-            raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）<repo>@<tag>，收到：{target}")
+            raise SystemExit(f"✗ --issue 格式应为 repo#N 或 （发版）[org/]repo@tag，收到：{target}")
         num = None
         key = target
     else:
-        # 形状校验同 cmd_add_entry（#258）：org/repo#N 显式形态解析出 org，
-        # 键统一成 repo#N；其余非法形态 ⇒ 用法错误（退出码 2），**不进**「读
-        # GitHub 失败 ⇒ 事实不可知」那一类。
+        # 形状校验同 cmd_add_entry（#258）：org/repo#N 显式形态解析出 org；
+        # 其余非法形态 ⇒ 用法错误（退出码 2），**不进**「读 GitHub 失败 ⇒
+        # 事实不可知」那一类。
         try:
             org, repo, num = parse_issue_ref(target, args.org)
         except ValueError as e:
             print(f"✗ 用法错误：{e}")
             raise SystemExit(2) from None
-        key = f"{repo}#{num}"
+        key = f"{org}/{repo}#{num}"
 
-    # 找到目标条目（跨轮次找，找不到就报错——不许凭印象改）
+    # 找到目标条目（跨轮次找，找不到就报错——不许凭印象改）。
+    # 匹配按 (org, repo, num) 三元组而非键串（#268）：旧条目的键是 repo#N、
+    # 新条目是 org/repo#N，按键串比对会让一半形态永远「找不到记录」。
     hits: list[tuple[dict, dict]] = []
     for run in data.get("runs") or []:
         for e in run.get("handled") or []:
-            if e.get("issue") == key and e.get("org", org) == org:
+            if rel_only:
+                if (e.get("release_only") and e.get("org", org) == org
+                        and str(e.get("repo") or "") == repo
+                        and str(e.get("tag") or "") == tag_in_key):
+                    hits.append((run, e))
+            elif _entry_matches(e, org, repo, num):
                 hits.append((run, e))
     if not hits:
-        raise Refused(f"台账里没有 {org}/{key} 的记录 ⇒ 无从修正")
+        raise Refused(f"台账里没有 {org}/{repo}#{num if num is not None else tag_in_key}"
+                      f" 的记录 ⇒ 无从修正")
     if len(hits) > 1:
         idxs = [i for i, (r, _e) in enumerate(hits)]
-        raise Refused(f"台账里有 {len(hits)} 条 {org}/{key} 的记录"
+        raise Refused(f"台账里有 {len(hits)} 条 {org}/{repo}#{num} 的记录"
                       f"（第 {idxs} 条，按轮次顺序）⇒ 请先确认要改哪一条")
 
     _run, entry = hits[0]
+    # 校验主体：换了主语 ⇒ 后面的 closed/tag/pr 事实核对新主语（旧主语的事实
+    # 不外推到新主语）；没换 ⇒ 核对原主语。
+    v_org, v_repo = org, repo
 
-    # ① 只允许改事实类字段
+    # ① 只允许改事实类字段 + 主语修正通道（--amend-issue，#268）
     allowed = ("closed", "tag", "pr", "note", "board_status")
     changes: dict[str, Any] = {}
     if args.amend_closed is not None:
@@ -472,15 +565,19 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
     illegal = set(changes) - set(allowed)
     if illegal:
         raise SystemExit(f"✗ 不许修改的字段：{sorted(illegal)}（只允许 {list(allowed)}）")
-    if not changes:
+    if not changes and not args.amend_issue:
         raise SystemExit("✗ 没有要修正的内容（用 --amend-closed / --amend-tag / "
-                         "--amend-pr / --amend-note / --amend-board 指定）")
+                         "--amend-pr / --amend-note / --amend-board / "
+                         "--amend-issue 指定）")
 
     # ③ 修正后的事实必须与现实一致（事实不可知 ⇒ 拒绝）
     if rel_only:
         # 无 issue 锚点 ⇒ 没有 issue 状态可核 ⇒ 只核 tag / Release / PR
         if "closed" in changes:
             raise SystemExit("✗ 无 issue 锚点的发版记录没有 closed 字段可改")
+        if args.amend_issue:
+            raise SystemExit("✗ 无 issue 锚点的发版记录没有 issue 主语可改"
+                             "（要换成有锚点形态请删掉重记）")
         new_tag = changes.get("tag") or tag_in_key
         if not tag_exists(org, repo, new_tag):
             raise Refused(f"远端没有 tag {org}/{repo}@{new_tag} ⇒ 拒绝写入")
@@ -488,21 +585,46 @@ def cmd_amend(args, data: dict[str, Any]) -> None:
             raise Refused(f"远端没有 {org}/{repo}@{new_tag} 对应的 GitHub Release ⇒ 拒绝写入")
         if "tag" in changes and changes["tag"] != tag_in_key:
             # 键由 repo+tag **派生** ⇒ 改 tag 必须同步改键，否则键与内容不符
-            changes["issue"] = release_only_key(repo, changes["tag"])
+            changes["issue"] = release_only_key(repo, changes["tag"],
+                                                org if "/" in _krepo else None)
     else:
-        state = issue_state(org, repo, num)
-        if "closed" in changes and changes["closed"] and state != "CLOSED":
-            raise Refused(f"{org}/{key} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
-                          f"拒绝把记录改成 closed=True（事实不可知时拒绝写入）")
-        if "closed" in changes and not changes["closed"] and state == "CLOSED":
-            raise Refused(f"{org}/{key} 在 GitHub 上**确实已关**（{state}）⇒ "
-                          f"拒绝把记录改成 closed=False（那会与现实相反）")
-        if "tag" in changes and changes["tag"] and not tag_exists(org, repo, changes["tag"]):
-            raise Refused(f"远端没有 tag {org}/{repo}@{changes['tag']} ⇒ 拒绝写入")
+        if args.amend_issue:
+            # 主语修正（#268 的第④条）：错记的 org/repo#N 要能改回来——
+            # 旧实现不许改主语 ⇒ 错记只能手工改 JSON。新主语必须是真实存在的
+            # **issue**（不是 PR——那是本单要防的原始事故）。
+            try:
+                new_org, new_repo, new_num = parse_issue_ref(args.amend_issue, args.org)
+            except ValueError as e:
+                print(f"✗ 用法错误：--amend-issue {e}")
+                raise SystemExit(2) from None
+            try:
+                new_state, new_is_pr = issue_facts(new_org, new_repo, new_num)
+            except Exception as e:  # noqa: BLE001 —— 读不到就拒绝，不猜
+                raise Refused(f"--amend-issue 目标 {new_org}/{new_repo}#{new_num} "
+                              f"读不到（{e}）⇒ 无法确认它是真实 issue ⇒ 拒绝改主语")
+            if new_is_pr:
+                raise Refused(f"--amend-issue 目标 {new_org}/{new_repo}#{new_num} "
+                              f"是 **PR** 不是 issue ⇒ 拒绝改主语（#268）")
+            changes["issue"] = f"{new_org}/{new_repo}#{new_num}"
+            changes["org"] = new_org
+            v_org, v_repo = new_org, new_repo
+            # 改主语后 closed 要按新主语重核（旧主语的 closed 事实不外推）
+            if "closed" not in changes:
+                changes["closed"] = new_state == "CLOSED"
+        else:
+            state, _is_pr = issue_facts(org, repo, num)
+            if "closed" in changes and changes["closed"] and state != "CLOSED":
+                raise Refused(f"{org}/{repo}#{num} 在 GitHub 上是 {state or '未知'}，**没关** ⇒ "
+                              f"拒绝把记录改成 closed=True（事实不可知时拒绝写入）")
+            if "closed" in changes and not changes["closed"] and state == "CLOSED":
+                raise Refused(f"{org}/{repo}#{num} 在 GitHub 上**确实已关**（{state}）⇒ "
+                              f"拒绝把记录改成 closed=False（那会与现实相反）")
+        if "tag" in changes and changes["tag"] and not tag_exists(v_org, v_repo, changes["tag"]):
+            raise Refused(f"远端没有 tag {v_org}/{v_repo}@{changes['tag']} ⇒ 拒绝写入")
     if "pr" in changes and changes["pr"]:
-        pr_state, merge_commit = pr_facts(org, repo, int(changes["pr"]))
+        pr_state, merge_commit = pr_facts(v_org, v_repo, int(changes["pr"]))
         if pr_state != "MERGED":
-            raise Refused(f"PR {org}/{repo}#{changes['pr']} 当前状态是 {pr_state or '未知'}，"
+            raise Refused(f"PR {v_org}/{v_repo}#{changes['pr']} 当前状态是 {pr_state or '未知'}，"
                           f"**不是 MERGED** ⇒ 拒绝记成「已交付」")
         changes["merge_commit"] = merge_commit or None
 
@@ -554,13 +676,26 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             try:
                 e_org, repo, num = parse_issue_ref(issue, org)
             except ValueError:
-                drift.append(f"{issue}：台账键形态不认识（应为 repo#N）⇒ 无法复核"
-                             f"（不能当成「没问题」）")
+                drift.append(f"{issue}：台账键形态不认识（应为 repo#N 或 org/repo#N）"
+                             f"⇒ 无法复核（不能当成「没问题」）")
+                continue
+            # 形态自查（matrix-tools#268）：全键里显式带的 org 与条目 org 字段
+            # 不一致 ⇒ 主语存疑——这正是「记错 org 的同号 issue 静默落账」在
+            # 账面上唯一能露头的缝（复核读的是同一个错主语，不查就判「一致」）。
+            if e_org != org:
+                drift.append(f"{issue}：键里 org（{e_org}）与条目 org 字段（{org}）"
+                             f"不一致 ⇒ 主语存疑（#268 形态自查）")
                 continue
             try:
-                state = issue_state(e_org, repo, num)
+                state, is_pr = issue_facts(e_org, repo, num)
             except Exception as e:  # noqa: BLE001 —— 读不到就报「无法判定」，不猜
                 drift.append(f"{issue}：issue 状态读不到（{e}）⇒ 无法判定")
+                continue
+            # 形态自查（#268 的第⑤条）：主语是 PR（isPullRequest 或状态 MERGED）
+            # 却被记成 issue ⇒ 判漂移——写入端已拒绝新犯，这里拦历史存量。
+            if is_pr or state == "MERGED":
+                drift.append(f"{issue}：主语是 **PR**（状态 {state or '未知'}）"
+                             f"不是 issue ⇒ 台账把它记成了 issue（#268 形态自查）")
                 continue
             if e.get("closed") and state != "CLOSED":
                 drift.append(f"{issue}：记录里写了 closed，但 GitHub 上是 {state}")
@@ -613,12 +748,15 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(description="巡检台账写入器（事实从 GitHub 回读）")
     p.add_argument("--ledger", default=str(DEFAULT_LEDGER), help="台账路径")
-    p.add_argument("--org", default="oekit", help="仓所属 org（oekit / pigeonbox）")
+    p.add_argument("--org", default=DEFAULT_ORG,
+                   help="兜底 org（--issue 省略 org 段时用；默认 oekit；已知 org："
+                        "oekit / pigeonbox / oagentkit——推荐 --issue 直接写全键 org/repo#N，#268）")
     p.add_argument("--new-run", action="store_true", help="开新一轮记录")
     p.add_argument("--run-end", action="store_true", help="收口最新一轮（并复核每条事实）")
     p.add_argument("--summary", default=None,
                    help="收口摘要（配合 --run-end，写进该轮 summary 字段；#257）")
-    p.add_argument("--issue", help="repo#N 或 org/repo#N（org/repo#N 的 org 覆盖 --org；#258）")
+    p.add_argument("--issue", help="repo#N 或 org/repo#N（推荐全键 org/repo#N，#268；"
+                                   "省 org 段时 org 取 --org）")
     p.add_argument("--release-only", action="store_true",
                    help="记一次**无 issue 锚点**的发版（工具仓/umbrella 仓/纯重构）；配合 --repo/--tag")
     p.add_argument("--repo", help="仓名（配合 --release-only 用，如 hertz / matrix-tools / oekit）")
@@ -638,13 +776,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--amend-pr", dest="amend_pr", type=int, default=None, help="修正记录的 PR 号")
     p.add_argument("--amend-note", dest="amend_note", default=None, help="修正记录的备注")
     p.add_argument("--amend-board", dest="amend_board", default=None, help="修正记录的看板状态")
+    p.add_argument("--amend-issue", dest="amend_issue", default=None,
+                   help="修正记录的主语（repo#N 或 org/repo#N；新主语必须是真实 issue "
+                        "不是 PR；#268 的修正通道）")
     args = p.parse_args(argv)
 
     if args.release_only and args.issue:
         p.error("--release-only 与 --issue 不能同时给（一条记录要么有 issue 锚点，要么没有）")
     if args.release_only and any(v is not None for v in (args.amend_closed, args.amend_tag,
                                                         args.amend_pr, args.amend_note,
-                                                        args.amend_board)):
+                                                        args.amend_board, args.amend_issue)):
         p.error("--release-only 不支持 --amend-*（修正通道用 --issue 定位记录）")
     if not any([args.new_run, args.run_end, args.issue, args.release_only]):
         p.error("至少给一个动作：--new-run / --run-end / --issue / --release-only")
@@ -667,7 +808,7 @@ def main(argv: list[str] | None = None) -> int:
             cmd_new_run(data)
         if args.issue:
             if any(v is not None for v in (args.amend_closed, args.amend_tag, args.amend_pr,
-                                          args.amend_note, args.amend_board)):
+                                          args.amend_note, args.amend_board, args.amend_issue)):
                 cmd_amend(args, data)
             else:
                 cmd_add_entry(args, data)

@@ -424,6 +424,22 @@ def latest_tag(repo: str, base: str | None = None, remote: bool = False) -> str 
     return semver[0] if semver else None
 
 
+def local_latest_tag(repo: str, base: str | None = None) -> str | None:
+    """本地 clone 里的最新 semver tag——**只在明确要本地事实时用**（matrix-tools#269）。
+
+    本地 tag 只在 `git fetch origin --tags` 时更新；日常的 `git fetch origin main`
+    **不动 tag** ⇒ 工作树是新的、本地 tag 列表可能落后一大截。审计的「最新版本」
+    事实源自 #269 起默认读**远端**；本函数只服务两处：
+    1. 审计的「本地 tag 陈旧」比对（本地 vs 远端不一致 ⇒ 报告开头显式提示）；
+    2. 发布类脚本里「我本地刚打的 tag」这类**刻意的本地事实**。
+    """
+    d = repo_dir(repo, base)
+    r = subprocess.run(["git", "-C", str(d), "tag", "-l", "--sort=-v:refname"],
+                       capture_output=True, text=True)
+    semver = [t for t in r.stdout.split() if re.fullmatch(r"v\d+\.\d+\.\d+", t)]
+    return semver[0] if semver else None
+
+
 def nested_tag_prefix(module_path: str) -> str | None:
     """模块 import 路径 → 其嵌套 tag 前缀。
 

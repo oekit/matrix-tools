@@ -26,7 +26,10 @@ META_DIRS = ["oekit", "matrix-tools", "oekit.github.io", "profile"]
 
 def repo_state(d: Path, fetch: bool) -> dict:
     if fetch:
-        subprocess.run(["git", "-C", str(d), "fetch", "--prune", "origin"],
+        # --tags 必须带上（matrix-tools#269）：裸 fetch **不更新本地 tag 列表**，
+        # 而后续流程（发版对账/审计/人工核对）碰的正是 tag——上一轮假红的根源
+        # 就是「工作树新、tag 旧」。--prune 同时清掉远端已删的本地残留 tag。
+        subprocess.run(["git", "-C", str(d), "fetch", "--prune", "--tags", "origin"],
                        capture_output=True, text=True)
     sb = subprocess.run(["git", "-C", str(d), "status", "-sb"],
                         capture_output=True, text=True).stdout.splitlines()

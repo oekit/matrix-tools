@@ -1066,6 +1066,11 @@ def report_train_result(created: list, rel_failed: int) -> None:
               f"（跑 gen_releases.py --apply 补齐）——本次 train **不算完成**")
         sys.exit(1)
     print(f"\n✓ train 完成：{len(created)} 个 tag 已推送")
+    # 「我发新版 ⇒ 核查下游」（matrix-tools#267 的第④条）：跨 org 消费方的
+    # 地板追平不在本侧工具的射程里（align_floors 只扫本 org），发完版把
+    # 反向依赖核查显式递到操作者手上——一行输出，不阻塞、不联网。
+    print(f"ⓘ 反向依赖核查：python3 scripts/reverse_floors.py"
+          f"（确认跨 org 消费方是否跟上了新地板；audit 周巡检也会报）")
 
 
 def create_releases(repo: str, root, created: list) -> int:

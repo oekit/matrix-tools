@@ -41,7 +41,7 @@ TOOL = ROOT / "scripts" / "ledger_write.py"
 FAKE_GH = """#!/bin/sh
 case "$1" in
   issue)
-    printf '{"state":"%s"}\\n' "${FAKE_ISSUE_STATE:-CLOSED}"
+    printf '{"state":"%s","isPullRequest":%s}\\n' "${FAKE_ISSUE_STATE:-CLOSED}" "${FAKE_ISSUE_IS_PR:-false}"
     ;;
   pr)
     if [ "${FAKE_PR_STATE:-MERGED}" = "MERGED" ]; then
@@ -127,7 +127,8 @@ def main() -> int:
                     failures.append(f"用例1 tag/release 不对：{e.get('tag')} / {e.get('release')}")
                 if e.get("closed") is not True:
                     failures.append(f"用例1 closed 不对：{e.get('closed')}")
-                if e.get("issue") != "pkg#47" or e.get("kind") != "Bug" or e.get("priority") != "P1":
+                # #268：落库键是全键 org/repo#N——「记的是哪个 org」必须在形态里可见
+                if e.get("issue") != "oekit/pkg#47" or e.get("kind") != "Bug" or e.get("priority") != "P1":
                     failures.append(f"用例1 元数据不对：{e}")
             print("  ✓ 用例1 正常形态 ⇒ 写入成功且事实来自回读")
 
@@ -363,8 +364,8 @@ def main() -> int:
                 failures.append(f"用例15 台账里应有 1 条，实际 {len(entries15)}")
             else:
                 e = entries15[0]
-                if e.get("issue") != "（发版）pkg@v9.9.9":
-                    failures.append(f"用例15 键形态不对（应是 （发版）pkg@v9.9.9）：{e.get('issue')}")
+                if e.get("issue") != "（发版）oekit/pkg@v9.9.9":
+                    failures.append(f"用例15 键形态不对（应是 （发版）oekit/pkg@v9.9.9，#268 全键）：{e.get('issue')}")
                 elif not e.get("release_only"):
                     failures.append(f"用例15 记录缺 release_only 标记：{e}")
                 elif e.get("tag") != "v9.9.9" or "releases/tag/v9.9.9" not in (e.get("release") or ""):
@@ -512,7 +513,7 @@ def main() -> int:
             else:
                 print("  ✓ 用例24 --run-end --summary ⇒ 摘要写进该轮 summary 字段")
 
-        # ── 用例 25：org/repo#N 显式形态 ⇒ 正确解析、落库键统一成 repo#N ──
+        # ── 用例 25：org/repo#N 显式形态 ⇒ 正确解析、落库键用全键（#268）──
         led25 = ledger_of("orgrepo.json")
         run_tool(["--new-run"], base_env, led25)
         r = run_tool(["--issue", "oekit/matrix-tools#254", "--note", "显式 org 形态"],
@@ -521,12 +522,12 @@ def main() -> int:
             failures.append(f"用例25 org/repo#N 写入失败（不应报网络错误）：{r.stdout}{r.stderr}")
         else:
             e25 = json.loads(led25.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
-            if e25.get("issue") != "matrix-tools#254":
-                failures.append(f"用例25 落库键没统一成 repo#N：{e25.get('issue')!r}")
+            if e25.get("issue") != "oekit/matrix-tools#254":
+                failures.append(f"用例25 落库键应是全键 org/repo#N：{e25.get('issue')!r}")
             elif e25.get("org") != "oekit":
                 failures.append(f"用例25 org 不对：{e25.get('org')!r}")
             else:
-                print("  ✓ 用例25 org/repo#N ⇒ 键统一 repo#N、org 来自串")
+                print("  ✓ 用例25 org/repo#N ⇒ 落库键全键、org 来自串")
         # 串里显式 org 覆盖 --org 默认值
         run_tool(["--new-run"], base_env, led25)
         r = run_tool(["--org", "oekit", "--issue", "pigeonbox/demo#7"], base_env, led25)
@@ -534,7 +535,7 @@ def main() -> int:
             failures.append(f"用例25b 显式 org 覆盖 --org 失败：{r.stdout}{r.stderr}")
         else:
             e25b = json.loads(led25.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
-            if e25b.get("issue") != "demo#7" or e25b.get("org") != "pigeonbox":
+            if e25b.get("issue") != "pigeonbox/demo#7" or e25b.get("org") != "pigeonbox":
                 failures.append(f"用例25b org 覆盖不对：{e25b.get('issue')!r}/{e25b.get('org')!r}")
             else:
                 print("  ✓ 用例25b 串里的 org 覆盖 --org 默认值")
@@ -565,6 +566,136 @@ def main() -> int:
             failures.append("用例27 amend 非法形态却把台账改了")
         else:
             print("  ✓ 用例27 amend 通道非法形态 ⇒ 退出码 2 且台账未被改")
+
+        # ═══ #268：org 全键化 / PR-非-issue / 主语修正通道 ══════════════════
+        # 背景（#268 实测三连）：--org 默认 oekit 且不在 --issue 形态里 ⇒
+        # oagentkit/matrix-tools#194（一个 OPEN issue）被静默记成
+        # oekit/matrix-tools#194（一个已合并 PR），复核读同一个错主语还判「一致」。
+
+        # ── 用例 28：主语是 PR ⇒ 一律拒绝（不管 MERGED 还是 OPEN）────────
+        led28 = ledger_of("pr_as_issue.json")
+        run_tool(["--new-run"], base_env, led28)
+        before28 = led28.read_text(encoding="utf-8")
+        env28 = dict(base_env)
+        env28["FAKE_ISSUE_IS_PR"] = "true"
+        env28["FAKE_ISSUE_STATE"] = "MERGED"
+        r = run_tool(["--issue", "pkg#88", "--closed"], env28, led28)
+        if r.returncode == 0:
+            failures.append("用例28 PR（MERGED）被记成了 issue ⇒ #268 的原始事故复现")
+        elif "PR" not in (r.stdout + r.stderr):
+            failures.append(f"用例28 拒绝时没说清「这是 PR 不是 issue」：{r.stdout}{r.stderr}")
+        elif led28.read_text(encoding="utf-8") != before28:
+            failures.append("用例28 拒绝写入却把台账改了")
+        else:
+            print("  ✓ 用例28 主语是 PR（MERGED）⇒ 拒绝记成 issue 且台账未被改")
+        env28b = dict(base_env)
+        env28b["FAKE_ISSUE_IS_PR"] = "true"
+        env28b["FAKE_ISSUE_STATE"] = "OPEN"
+        r = run_tool(["--issue", "pkg#89"], env28b, led28)
+        if r.returncode == 0:
+            failures.append("用例28b OPEN 的 PR 被记成了 issue ⇒ 区分不彻底")
+        else:
+            print("  ✓ 用例28b 主语是 PR（OPEN）⇒ 同样拒绝")
+
+        # ── 用例 29：--org 显式给了且与串里的 org 冲突 ⇒ 用法错误（不猜）──
+        led29 = ledger_of("org_conflict.json")
+        run_tool(["--new-run"], base_env, led29)
+        before29 = led29.read_text(encoding="utf-8")
+        r = run_tool(["--org", "oagentkit", "--issue", "oekit/pkg#5", "--closed"],
+                     base_env, led29)
+        if r.returncode != 2:
+            failures.append(f"用例29 org 冲突退出码 {r.returncode}（应为 2，不静默猜）")
+        elif led29.read_text(encoding="utf-8") != before29:
+            failures.append("用例29 org 冲突却把台账改了")
+        else:
+            print("  ✓ 用例29 --org 与 --issue 的 org 冲突 ⇒ 退出码 2、零写入")
+
+        # ── 用例 30：--amend-issue 换主语 ⇒ 生效、留痕、closed 按新主语重核 ──
+        #    场景即 #268 的实测事故：错记成 oekit/matrix-tools#194（实为 PR）
+        #    ⇒ 现在有通道把它改成真主语，不用再手改 JSON。
+        led30 = tmp / "amend_subject.json"
+        led30.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "oekit/demo#90", "org": "oekit",
+                                   "closed": True, "note": "错记的主语"}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        env30 = dict(base_env)
+        env30["FAKE_ISSUE_STATE"] = "OPEN"    # 新主语还 OPEN ⇒ closed 必须重核成 False
+        r = run_tool(["--issue", "oekit/demo#90", "--amend-issue", "oagentkit/demo#91"],
+                     env30, led30)
+        if r.returncode != 0:
+            failures.append(f"用例30 --amend-issue 失败：{r.stdout}{r.stderr}")
+        else:
+            e30 = json.loads(led30.read_text(encoding="utf-8"))["runs"][0]["handled"][0]
+            if e30.get("issue") != "oagentkit/demo#91" or e30.get("org") != "oagentkit":
+                failures.append(f"用例30 主语没换：{e30.get('issue')!r}/{e30.get('org')!r}")
+            elif e30.get("closed") is not False:
+                failures.append(f"用例30 closed 没按新主语重核：{e30.get('closed')!r}")
+            elif not (e30.get("amended_at") and e30.get("amended_from")):
+                failures.append(f"用例30 换主语没留痕：{e30}")
+            else:
+                print("  ✓ 用例30 --amend-issue 换主语 ⇒ 生效、closed 重核、留痕")
+        # 新主语是 PR ⇒ 拒绝（防止借修正通道把 PR 再塞回来）
+        before30b = led30.read_text(encoding="utf-8")
+        env30b = dict(base_env)
+        env30b["FAKE_ISSUE_IS_PR"] = "true"
+        env30b["FAKE_ISSUE_STATE"] = "MERGED"
+        r = run_tool(["--issue", "oagentkit/demo#91", "--amend-issue", "oekit/demo#99"],
+                     env30b, led30)
+        if r.returncode == 0:
+            failures.append("用例30b --amend-issue 把主语换成了 PR ⇒ 原始事故借道复现")
+        elif led30.read_text(encoding="utf-8") != before30b:
+            failures.append("用例30b 拒绝换主语却把台账改了")
+        else:
+            print("  ✓ 用例30b --amend-issue 目标是 PR ⇒ 拒绝且台账未被改")
+
+        # ── 用例 31：收口形态自查——键 org ≠ org 字段 ⇒ 漂移 ─────────────
+        led31 = tmp / "runend_org_mismatch.json"
+        led31.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "oagentkit/demo#92", "org": "oekit",
+                                   "closed": False}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        r = run_tool(["--run-end"], base_env, led31)
+        if r.returncode == 0:
+            failures.append("用例31 键 org 与 org 字段不一致却收口成功 ⇒ #268 的静默落账照样判绿")
+        elif "主语存疑" not in (r.stdout + r.stderr):
+            failures.append(f"用例31 收口没指出主语存疑：{r.stdout}{r.stderr}")
+        else:
+            print("  ✓ 用例31 收口复核：键 org ≠ org 字段 ⇒ 报主语存疑")
+        # 旧形态键（repo#N + org 字段）⇒ 必须照常复核通过（向后兼容不误报）
+        led31b = tmp / "runend_oldkey.json"
+        led31b.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "demo#93", "org": "oekit", "closed": False}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        r = run_tool(["--run-end"], base_env, led31b)
+        if r.returncode != 0:
+            failures.append(f"用例31b 旧形态键（repo#N）收口失败（不该误报）：{r.stdout}{r.stderr}")
+        else:
+            print("  ✓ 用例31b 旧形态键（repo#N + org 字段）⇒ 照常复核通过")
+
+        # ── 用例 32：收口形态自查——主语实为 PR ⇒ 漂移 ────────────────────
+        led32 = tmp / "runend_pr_subject.json"
+        led32.write_text(json.dumps({
+            "runs": [{"started_at": "2026-11-02T00:00:00Z", "finished_at": None,
+                      "handled": [{"issue": "oekit/demo#94", "org": "oekit",
+                                   "closed": True}],
+                      "also_done": [], "skip": []}], "last_run": "2026-11-02T00:00:00Z"},
+            ensure_ascii=False), encoding="utf-8")
+        env32 = dict(base_env)
+        env32["FAKE_ISSUE_IS_PR"] = "true"
+        env32["FAKE_ISSUE_STATE"] = "MERGED"
+        r = run_tool(["--run-end"], env32, led32)
+        if r.returncode == 0:
+            failures.append("用例32 主语是 PR 却收口成功 ⇒ 历史存量 PR 记录永远漏检")
+        elif "主语是" not in (r.stdout + r.stderr):
+            failures.append(f"用例32 收口没指出主语是 PR：{r.stdout}{r.stderr}")
+        else:
+            print("  ✓ 用例32 收口复核：主语实为 PR ⇒ 报漂移")
 
     if failures:
         print("\n✗ 自测失败：")
@@ -601,9 +732,10 @@ _MUTATIONS = [
       'pending = [runs[-1]] if runs else []'),
      {"9"}),
     # ③ 修正通道退回旧写法：没有 amend ⇒ 错记录改不了（永久阻塞收口）
+    #    （★ #268 之后影响面加一条：主语修正通道（用例 30）也走 cmd_amend）
     ("修正通道退回旧写法（amend 变成追加）",
      ('cmd_amend(args, data)', 'cmd_add_entry(args, data)'),
-     {"10", "11", "12"}),
+     {"10", "11", "12", "30"}),
     # ④ 「无 issue 锚点的发版」写入通道：Release 检查退掉（tag 推了就算已发版）
     ("release-only 写入通道的 Release 检查退掉",
      ('    if not release_exists(org, repo, tag):', '    if False:'),
@@ -628,11 +760,30 @@ _MUTATIONS = [
      ('RELEASE_ONLY_PREFIX = "（发版）"', 'RELEASE_ONLY_PREFIX = "（发版X）"'),
      {"15"}),
     # ⑧a ★ #258：org/repo#N 显式形态的解析被退掉（org 组不再匹配斜杠段）
-    #    ⇒ org/repo#N 被拒成用法错误（25/25b 红——形态支持是本修法的一半）
+    #    ⇒ 全键 org/repo#N 被拒成用法错误（#268 之后影响面列全：落库键是全键
+    #      ⇒ 收口复核/修正通道解析全键全红——7/14/24（含全键的收口）、
+    #      25/25b（形态支持）、30（换主语定位旧全键条目）、31/32（收口读全键））
     ("--issue 的 org/repo#N 显式形态被退掉",
      ('ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"',
       'ISSUE_REF_RE = re.compile(r"^(?:())?"'),
-     {"25", "25b"}),
+     {"25", "25b", "30", "31", "32", "7", "14", "24"}),
+    # ⑨ ★ #268：写入端「PR ≠ issue」拒绝被退掉 ⇒ PR 静默记成 issue（原始事故）
+    ("写入端 PR-非-issue 拒绝被退掉",
+     ('    state, is_pr = issue_facts(org, repo, num)\n    if is_pr:',
+      '    state, is_pr = issue_facts(org, repo, num)\n    if False:'),
+     {"28", "28b"}),
+    # ⑩ ★ #268：--org 与串里 org 冲突的校验被退掉 ⇒ 静默按串里 org 落账
+    ("--org 冲突校验被退掉",
+     ('    if args.org != DEFAULT_ORG and org != args.org:',
+      '    if False:'),
+     {"29"}),
+    # ⑪ ★ #268：收口端主语形态自查（PR/键-org 一致性）被退掉 ⇒ 历史存量漏检
+    ("收口端键-org 一致性自查被退掉",
+     ('            if e_org != org:', '            if False:'),
+     {"31"}),
+    ("收口端 PR-主语自查被退掉",
+     ('            if is_pr or state == "MERGED":', '            if False:'),
+     {"32"}),
     # ⑧b ★ #258：repo 段的字符集放宽到「# 前任意」（旧写法的表面查）⇒
     #    斜杠多段/含空格形态被放行后 rc=0 而非 2（26 红），amend 通道同款
     #    放行但落库键是垃圾（27 红）——正是「放行后报网络错误、整批少记」的根
