@@ -110,6 +110,17 @@ def ensure_local_tag(repo_dir_path: str, tag: str, timeout: float = 120) -> None
         pass  # 同「fetch 失败」：交由 go_floor 报真因，绝不兜底假地板
 
 
+def _tag_has_gomod(repo_dir_path: str, tag: str, sub: str) -> bool:
+    """该 tag 下 <sub>/go.mod 是否存在（嵌套 tag = 模块 tag 的必要条件）。"""
+    try:
+        r = subprocess.run(
+            ["git", "-C", repo_dir_path, "cat-file", "-e", f"{tag}:{sub}/go.mod"],
+            capture_output=True, text=True)
+        return r.returncode == 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def _tag_gomods(repo_dir_path: str, tag: str) -> str:
     """该 tag 下实际存在的 go.mod 列表（诊断用：取地板失败时告诉人文件在哪）。"""
     r = subprocess.run(["git", "-C", repo_dir_path, "ls-tree", "-r", "--name-only", tag],
@@ -317,6 +328,12 @@ def collect() -> list[dict]:
             seen.add(m.group(1))
             ensure_local_tag(d, tag)
             sub = m.group(1)
+            # 嵌套 tag 的模块路径必须有 go.mod——没有就**不是模块 tag**
+            # （幽灵 tag：打 tag 误在错误仓目录执行的事故遗留，matrix-tools#290），
+            # 跳过并留痕：这不是「兜底地板」（不写任何值），是精确排除非模块 tag。
+            if not _tag_has_gomod(d, tag, sub):
+                print(f"  ⚠ {repo}:{tag} 的 {sub}/go.mod 不存在——非模块 tag（幽灵 tag，#290），跳过")
+                continue
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{sub}",
                            "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True,
                            "breaking": breaking_for(breaking_by_module, sub,
