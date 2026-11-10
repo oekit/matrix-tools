@@ -99,7 +99,7 @@ def main() -> None:
     # ── W：接线自证（拆任何一处 ⇒ 假红原样回来）──
     check('REMOTE_TAGS = "--local-tags" not in sys.argv' in src,
           "W1: 事实源默认必须是远端（--local-tags 才退回本地）——默认值被改回本地旗子 ⇒ 假红回来了")
-    check("detect_stale_local_tags(MODULES, BASE)" in src,
+    check("detect_stale_local_tags(_present, BASE)" in src,
           "W2: audit 主流程必须真的调用本地陈旧比对（不是只有函数没有接线）")
     check("本地 tag 陈旧" in src and "git fetch origin --tags --prune" in src,
           "W3: 结论区必须显式印本地陈旧提示与同步命令")
