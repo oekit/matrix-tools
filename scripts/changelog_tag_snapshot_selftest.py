@@ -229,6 +229,19 @@ def main() -> int:
                                        + "- feat: 依赖 logx 地板 v0.8.0 → v0.8.1\n", "v1.2.0")
         _record("I4d_lint_clean_no_false_positive", not p_ok,
                 f"I4d: 完好文案（含合法的依赖地板叙述）不许误报：{p_ok}")
+        # I4e（matrix-tools#286 实测误报回归）：Go 方法名后缀空括号是合法行文，
+        # 不许判「空占位括号」残缺；ASCII 带空白占位 `( )` 仍须命中。
+        p_call = gate.lint_repair_bullet(
+            "- fix: 白名单外整条丢弃并经 Err() 累计、Strict() 当场 panic、"
+            "Page() 归一；上游 Drain() 后 nc.Close()（目标态已达成）\n", "v1.3.0")
+        _record("I4e_lint_gocall_no_false_positive", not p_call,
+                f"I4e: Go 调用后缀空括号不许误报：{p_call}")
+        p_sp = gate.lint_repair_bullet(
+            "- chore: 补齐本版版本节——上一个已发布 tag( ) 的快照缺本版段\n",
+            "v1.3.0")
+        _record("I4e2_lint_ascii_spaced_paren_still_hit",
+                any("空占位" in x for x in p_sp),
+                f"I4e2: ASCII 带空白空括号占位仍须命中：{p_sp}")
         # I5：端到端——段在但文案残缺 ⇒ EXIT_DRIFT 且点名「文案残缺」；完好 ⇒ EXIT_OK
         run_case("I5_lint_bad_section_drifts", i_files,
                  {"lintbad": i_tags["lintbad"]}, gate.EXIT_DRIFT)

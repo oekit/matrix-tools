@@ -233,7 +233,12 @@ def repair_template(repo: str, tag: str, prev: str | None, read_fn) -> str:
 # 半成品文案的四种残缺形态（#259 实测的三条 Release 正文全中）：
 #   ① 空括号 `（）`／`( )`；② 括号里只有路径前缀、没有版本号 `（hertzlog/）`；
 #   ③ 「新的地板」后缺分隔符 `地板v0.13.2`；④ 「新的地板：vX」处不是本版号。
-_LINT_EMPTY_PAREN_RE = re.compile(r"（[\s\u3000]*）|\([\s]*\)")
+# ①的空括号判据只锚定「占位残留」形态（matrix-tools#286 实测误报）：全宽
+# 空括号无条件命中；ASCII 空括号仅在「前面不是标识符」或「括号内有空白」
+# 时命中——`Err()`/`Strict()`/`nc.Close()` 这类 Go 方法名后缀空括号是合法
+# 行文（gormx v0.11.12 / network v0.9.2 两段被误判实测），不许判残缺。
+_LINT_EMPTY_PAREN_RE = re.compile(
+    r"（[\s\u3000]*）|(?<![\w.)\]])\(\s*\)|\(\s+\)")
 _LINT_PREFIX_ONLY_RE = re.compile(r"[（(][A-Za-z0-9._\-]+/[\s]*[）)]")
 _LINT_FLOOR_NO_SEP_RE = re.compile(r"新的地板\s*v\d")
 _LINT_FLOOR_VER_RE = re.compile(r"新的地板\s*[:：]\s*(v\d+\.\d+\.\d+)")
