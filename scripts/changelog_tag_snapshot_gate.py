@@ -67,6 +67,20 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "gormx:v0.11.5",
     "middleware:v0.13.14",
     "data:v0.20.5",
+    # 2026-11-11 nns#126-#129 收口：v0.6.0 tag 打在补段前（fixes 经并发会话
+    # PR#130 合入即 tag，CHANGELOG 段随后经 #132 定版进 main）——段已补 main，
+    # 快照不可变，按名单口径豁免。
+    "nns:v0.6.0",
+    # 2026-11-11 事故（matrix-tools#290）：workflow 幽灵 tag v0.2.12——批量发版
+    # 连续命令未重新 cd 验目录，etcdx 的 tag 误打在 workflow 仓（内容=v0.4.0
+    # 提交，快照顶部 [v0.4.0] 段、无 [v0.2.12] 段），protect-release-tags 禁删
+    # 永久留存。显式钉 v0.2.12 的消费方会拿到 v0.4.0 内容（@latest 不受影响）。
+    "workflow:v0.2.12",
+    # 2026-11-11 同因第二例（matrix-tools#290 附记）：tracing 幽灵 tag
+    # redis/v0.2.19——timertask 的嵌套 tag 误打在 tracing 仓（批量打 tag
+    # 连续命令漏 cd），protect-release-tags 禁删；tracing 无 redis 嵌套
+    # 模块，go get 该路径直接失败，纯 tag 空间噪声。
+    "tracing:redis/v0.2.19",
     # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
     # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
     "bootstrap:nacos/v0.2.0",
@@ -233,7 +247,11 @@ def repair_template(repo: str, tag: str, prev: str | None, read_fn) -> str:
 # 半成品文案的四种残缺形态（#259 实测的三条 Release 正文全中）：
 #   ① 空括号 `（）`／`( )`；② 括号里只有路径前缀、没有版本号 `（hertzlog/）`；
 #   ③ 「新的地板」后缺分隔符 `地板v0.13.2`；④ 「新的地板：vX」处不是本版号。
-_LINT_EMPTY_PAREN_RE = re.compile(r"（[\s\u3000]*）|\([\s]*\)")
+# ① 的半角侧加负向后顾（#289）：Go 调用语法 `recover()`/`Err()`/`Close()`/
+# `min()` 天然是「标识符+空括号」，散文里提无参函数名即中招（实测 4 tag 全
+# 假阳性）——只拦前置非标识符字符的独立占位 `()`/`( )`；全角 `（）` 恒拦
+# （模板占位专用形态，散文无合法用途）。
+_LINT_EMPTY_PAREN_RE = re.compile(r"（[\s\u3000]*）|(?<![A-Za-z0-9_])\([\s]*\)")
 _LINT_PREFIX_ONLY_RE = re.compile(r"[（(][A-Za-z0-9._\-]+/[\s]*[）)]")
 _LINT_FLOOR_NO_SEP_RE = re.compile(r"新的地板\s*v\d")
 _LINT_FLOOR_VER_RE = re.compile(r"新的地板\s*[:：]\s*(v\d+\.\d+\.\d+)")

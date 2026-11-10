@@ -154,6 +154,32 @@ SUSPECT_TEXT_RE = re.compile(r"(结构重置|目录正名|路径变更|历史与
 # 标记行必须**顶格**（不以空白开头）才作数——缩进的 `**breaking**：...` 多为
 # 上一条 bullet 的续行（logx 即如此），由信号 B 随父条目一并收录。
 STANDALONE_BREAK_RE = re.compile(r"^\*\*[^*]*(?:breaking|不兼容|破坏性)[^*]*\*\*", re.I)
+
+
+def has_breaking_annotation(section: str) -> bool:
+    """版本节是否含「有意识的破坏性变更标注」——BREAKING 标注的**单一判据源**
+    （matrix-tools#292：release_train apidiff 门禁 / breakingIndex / audit 三处
+    此前各自为政，裸关键词 search 被「无破坏性变更」等无关字样豁免、漏全小写）。
+
+    只认确定性标注形态，不认正文裸词：
+      A) 破坏性段标题（### Breaking / ### 不兼容 / 标题带 `!`）——_is_break_section；
+      E) 顶格粗体破坏性标记行——STANDALONE_BREAK_RE；
+      B) 条目行内加粗破坏性标记——`- **BREAKING** ...`。
+    """
+    if not section:
+        return False
+    for raw in section.splitlines():
+        line = raw.strip()
+        if line.startswith("###") and _is_break_section(line[3:]):
+            return True
+        if STANDALONE_BREAK_RE.match(raw):
+            return True
+        m = ITEM_RE.match(raw)
+        if m:
+            bold = BOLD_PREFIX_RE.match(m.group(2).strip())
+            if bold and BREAK_WORD_RE.search(bold.group(1)):
+                return True
+    return False
 # 隐式破坏性段里要排除的「别仓说明」类条目：讲的是依赖地板 / 消费方波次，
 # 不是本仓自身的破坏性变更（与信号 C 同一判据）。
 #   hertz v0.7.0: `- gormx 地板 v0.5.5 → **v0.6.0**`

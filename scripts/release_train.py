@@ -909,7 +909,11 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
     preflight_gate(root, apply=True)
 
 
-BREAKING_MARKER_RE = re.compile(r"BREAKING|Breaking|破坏性|不兼容")
+# BREAKING 标注判据（#292）：改用 gen_versions.has_breaking_annotation 单一
+# 判据源（确定性标注形态：破坏性段标题 / 顶格粗体标记 / 条目加粗标记）。
+# 此前的裸关键词 search 两向都错：「无破坏性变更」等无关字样豁免未标注的
+# BREAKING（假绿），全小写 **breaking** 不命中（假红）。
+BREAKING_MARKER_RE = re.compile(r"BREAKING|Breaking|破坏性|不兼容")  # 兼容旧引用；判定走 has_breaking_annotation
 
 
 def incompatible_lines(diff_output: str) -> list[str]:
@@ -952,8 +956,9 @@ def apidiff_gate_problems(diff_output: str, section: str) -> list[str]:
     bad = incompatible_lines(diff_output)
     if not bad:
         return []
-    if section and BREAKING_MARKER_RE.search(section):
-        return []          # 标注了 ⇒ 是「有意识的破坏性变更」，放行
+    from gen_versions import has_breaking_annotation
+    if has_breaking_annotation(section):
+        return []          # 确定性标注形态命中 ⇒ 是「有意识的破坏性变更」，放行
     head = f"apidiff 发现 {len(bad)} 项不兼容变更且本版本节无 BREAKING 标注"
     return [head] + [f"    {ln}" for ln in bad[:8]]
 
@@ -1013,7 +1018,7 @@ def check_apidiff_gate(repo: str, specs, failures: list[str], skip_reason: str |
         apidiff_skip_note(f"apidiff 退出码 {r.returncode}（{r.stderr.strip()[:120]}）")
         return
     from gen_releases import changelog_section
-    sec = changelog_section(str(mod_dir), tag) or ""
+    sec = changelog_section(str(mod_dir), tag, None) or ""  # 三参显式 None（#291：无缺省值，两参必 TypeError）
     problems = apidiff_gate_problems(r.stdout, sec)
     if problems:
         failures.append(

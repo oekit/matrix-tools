@@ -1,2 +1,5 @@
 __pycache__/
 .in-flight/
+
+# issue_sweep 运行产物（按次生成，不入库）
+.issue-sweep/
