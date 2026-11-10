@@ -79,6 +79,28 @@ PRODUCTS = {
 }
 
 
+# 「多仓文档产物」——生成器改了但产物散在 N 个仓的 README/AGENTS 里，
+# 单仓 regen+PR 模型套不上（matrix-tools#276：只登记 versions/bom 时，
+# 改 gen_tables/refresh_versions/refresh_agents_desc 会得到假的
+# 「✓ 无产物待落地——可直接合入」⇒ 24 仓矩阵表瞬间全漂移）。
+# 判定模型：产物已落地 = 该模式的 **plan 归零**（doc_wave --<mode> --plan
+# 以**当前工作树的新生成器**重算受影响仓；0 = 全部仓的产物已是新生成器的
+# 输出 ⇒ 生成器 PR 合入不会再产生漂移）。
+ADVISORY = {
+    "tables": ("gen_tables.py", "tables"),
+    "version-lines": ("refresh_versions.py", "versions"),
+    "agents-desc": ("refresh_agents_desc.py", "agents"),
+}
+
+
+def _changed_generators(here: Path, branch: str) -> set[str]:
+    """本分支相对 main 改了哪些生成器脚本（文件名集合）。"""
+    r = subprocess.run(
+        ["git", "-C", str(here), "diff", "--name-only", "origin/main...HEAD", "--", "scripts/"],
+        capture_output=True, text=True)
+    return {Path(line).name for line in r.stdout.splitlines() if line.strip()}
+
+
 def sh(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if check and r.returncode != 0:
@@ -182,7 +204,8 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="跨仓生成器变更的落地顺序工具")
     ap.add_argument("--apply", action="store_true", help="真的开 PR（默认只检查）")
     ap.add_argument("--branch", default="", help="生成器改动所在分支（默认当前分支）")
-    ap.add_argument("--only", default="", help="只处理某类产物（versions / bom）")
+    ap.add_argument("--only", default="",
+                    help="只处理某类产物（versions / bom / tables / version-lines / agents-desc）")
     args = ap.parse_args()
 
     here = Path(__file__).resolve().parent.parent
@@ -196,8 +219,14 @@ def main() -> int:
     if is_dirty(here):
         raise SystemExit("matrix-tools 工作树不干净——生成器改动必须先提交")
 
-    keys = [args.only] if args.only else list(PRODUCTS)
+    all_keys = list(PRODUCTS) + list(ADVISORY)
+    keys = [args.only] if args.only else all_keys
+    for k in keys:
+        if k not in all_keys:
+            raise SystemExit(f"未知产物 {k}（可选：{', '.join(all_keys)}）")
+    changed_gens = _changed_generators(here, branch)
     todo: list[tuple[str, str, list[str]]] = []
+    advisory_todo: list[str] = []
     for key in keys:
         if key not in PRODUCTS:
             raise SystemExit(f"未知产物 {key}（可选：{', '.join(PRODUCTS)}）")
@@ -218,7 +247,27 @@ def main() -> int:
         print(f"    产物变化：{', '.join(real)}")
         todo.append((key, repo, real))
 
-    if not todo:
+    # advisory 面（matrix-tools#276）：改了 gen_tables / refresh_versions /
+    # refresh_agents_desc ⇒ 必须先用**新**生成器把 N 仓产物落完（plan 归零）
+    # 才能「直接合入生成器 PR」——否则就是本单实测的 24 仓瞬间全漂移。
+    for key, (gen, mode) in ADVISORY.items():
+        if key not in keys or gen not in changed_gens:
+            continue
+        r = subprocess.run(
+            [sys.executable, str(here / "scripts" / "doc_wave.py"), f"--{mode}", "--plan"],
+            capture_output=True, text=True, timeout=600)
+        m = re.search(r"分支 \S+：(\d+) 仓", r.stdout)
+        n = int(m.group(1)) if m else -1
+        if n != 0:
+            advisory_todo.append(
+                f"{key}（{gen}）：doc_wave --{mode} --plan 还有 "
+                f"{'未知（plan 输出不可解析，请手工确认）' if n < 0 else f'{n} 仓'} 产物未落地"
+                f"⇒ 先 `doc_wave --{mode} --pr` → 等 CI → `doc_wave --{mode} --merge-all`，"
+                f"plan 归零后再合生成器 PR")
+        else:
+            print(f"[{key}] plan 已归零——{gen} 的新输出已全部落地")
+
+    if not todo and not advisory_todo:
         print("\n✓ 无产物待落地——生成器 PR 可直接合入")
         return 0
 
@@ -226,6 +275,12 @@ def main() -> int:
     for i, (key, repo, ch) in enumerate(todo, 1):
         print(f"  {i}. {repo}：{', '.join(ch)}（产物 {key}）")
 
+    if advisory_todo:
+        print("\n⚠ 多仓文档产物未随本分支的新生成器落地（matrix-tools#276）：")
+        for a in advisory_todo:
+            print(f"  - {a}")
+        if not todo:
+            return 1
     if not args.apply:
         print("\n（只检查模式；加 --apply 开 PR）")
         print("⚠ 关键：产物必须由**新**生成器产出——上面跑的就是新生成器，"

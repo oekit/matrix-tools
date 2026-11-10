@@ -696,6 +696,26 @@ def main() -> int:
             failures.append(f"用例32 收口没指出主语是 PR：{r.stdout}{r.stderr}")
         else:
             print("  ✓ 用例32 收口复核：主语实为 PR ⇒ 报漂移")
+        # ── 用例 33：.github 特殊仓名 ⇒ 可记（matrix-tools#280）───────────
+        led33 = ledger_of("dotrepo.json")
+        run_tool(["--new-run"], base_env, led33)
+        r = run_tool(["--issue", "oekit/.github#35", "--note", "治理仓 issue"], base_env, led33)
+        if r.returncode != 0:
+            failures.append(f"用例33 .github 仓 issue 写入失败（#280）：{r.stdout}{r.stderr}")
+        else:
+            e33 = json.loads(led33.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
+            if e33.get("issue") != "oekit/.github#35":
+                failures.append(f"用例33 键形态不对：{e33.get('issue')!r}")
+            else:
+                print("  ✓ 用例33 .github 特殊仓名 ⇒ 全键落库")
+        for bad in ("..#3", "..foo#3"):
+            before33 = led33.read_text(encoding="utf-8")
+            r = run_tool(["--issue", bad], base_env, led33)
+            if r.returncode != 2:
+                failures.append(f"用例33b 路径形态 {bad!r} 退出码 {r.returncode}（应为 2）")
+            elif led33.read_text(encoding="utf-8") != before33:
+                failures.append(f"用例33b {bad!r} 却把台账改了")
+        print("  ✓ 用例33b 路径形态（./ /..）⇒ 用法错误且零写入")
 
     if failures:
         print("\n✗ 自测失败：")
@@ -766,7 +786,7 @@ _MUTATIONS = [
     ("--issue 的 org/repo#N 显式形态被退掉",
      ('ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"',
       'ISSUE_REF_RE = re.compile(r"^(?:())?"'),
-     {"25", "25b", "30", "31", "32", "7", "14", "24"}),
+     {"25", "25b", "30", "31", "32", "33", "7", "14", "24"}),
     # ⑨ ★ #268：写入端「PR ≠ issue」拒绝被退掉 ⇒ PR 静默记成 issue（原始事故）
     ("写入端 PR-非-issue 拒绝被退掉",
      ('    state, is_pr = issue_facts(org, repo, num)\n    if is_pr:',
@@ -788,8 +808,8 @@ _MUTATIONS = [
     #    斜杠多段/含空格形态被放行后 rc=0 而非 2（26 红），amend 通道同款
     #    放行但落库键是垃圾（27 红）——正是「放行后报网络错误、整批少记」的根
     ("--issue 的 repo 段字符集退回表面查",
-     ('                          r"([A-Za-z0-9][A-Za-z0-9._-]*)#(\\d+)$")',
-      '                          r"([A-Za-z0-9][^#]*)#(\\d+)$")'),
+     ('                          r"([A-Za-z0-9._-]+)#(\\d+)$")',
+      '                          r"([^#]+)#(\\d+)$")'),
      {"26", "27"}),
 ]
 

@@ -85,8 +85,12 @@ ENTRY_KEYS = ("issue", "org", "kind", "priority", "pr", "merge_commit",
 # 当成 repo 传下去 ⇒ `gh issue view 254 --repo oekit/oekit/matrix-tools`
 # 报「error connecting to oekit / check your internet connection」——
 # **形态错被说成网络故障** ⇒ 19 条整批少记，排查方向还被带偏。
+# repo 段允许**前导点**（matrix-tools#280）：`.github` 是 GitHub 的特殊仓名
+# （治理仓 / 共享 workflow 仓），oekit/.github 与 oagentkit/.github 都真实存在
+# ——旧正则要求 repo 首字符是字母/数字 ⇒ 这类仓的 issue 一笔都记不进台账。
+# 防误收：`.` / `..` / `..x` 这类路径形态仍拒绝（那不是仓名）。
 ISSUE_REF_RE = re.compile(r"^(?:([A-Za-z0-9][A-Za-z0-9._-]*)/)?"
-                          r"([A-Za-z0-9][A-Za-z0-9._-]*)#(\d+)$")
+                          r"([A-Za-z0-9._-]+)#(\d+)$")
 
 
 def parse_issue_ref(text: str, default_org: str) -> tuple[str, str, int]:
@@ -113,7 +117,14 @@ def parse_issue_ref(text: str, default_org: str) -> tuple[str, str, int]:
             f"repo 段只允许字母/数字/._-，org 至多一段（斜杠多段必是写错）——"
             f"org 不用拼进 repo（org 用 --org 或 org/repo#N 显式给）。")
     org = m.group(1) or default_org
-    return org, m.group(2), int(m.group(3))
+    repo = m.group(2)
+    # 路径形态守卫（#280）：允许前导点后，`.` / `..` / `..foo` 这类「那是路径
+    # 不是仓名」的形态要拦下（报人话，退出码 2），只放行 `.github` 这类真实仓名。
+    if repo in (".", "..") or repo.startswith(".."):
+        raise ValueError(
+            f"--issue 的 repo 段是路径形态（{repo!r}），不是仓名。"
+            f"前导点只用于特殊仓名如 .github（matrix-tools#280）。收到：{text!r}")
+    return org, repo, int(m.group(3))
 
 
 def _entry_matches(e: dict[str, Any], org: str, repo: str, num: int) -> bool:
