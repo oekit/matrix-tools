@@ -4,6 +4,17 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.5] — 2026-11-10
+
+- fix: audit 版本事实源默认读**远端** tag + 本地 tag 陈旧比对（#269）——`git fetch origin main` 不更新 tag 的历次假红从源头消除；handoff 同步动作补 `--tags --prune`
+- feat: reverse_floors.py 反向依赖地板核查（#267）——「谁依赖我」：跨 org 消费方 go.mod require vs 本侧远端最新，按**集合**判定落后；404/读不到/登记过期三口径分立；audit 以 ⚠ 可见不阻塞；release_train 收尾提示核查下游（#267 的④）
+- fix: 台账写入器 org 全键化 `org/repo#N`——记错 org 不再静默落账（#268）；`gh issue view` 读 `isPullRequest` ⇒ PR 一律拒绝记成 issue；`--org` 与串里 org 冲突显式报错；新增 `--amend-issue` 主语修正通道；收口复核加键-org 一致性与 PR 主语形态自查；release-only 键同步全键化 `（发版）org/repo@tag`
+- feat: release_train 检查面 H——apidiff 相邻 tag API 面对比（#270）：导出面有不兼容变更而版本节无 BREAKING 标注 ⇒ 红；`--skip-apidiff "理由"` 逃生；判定核自测含双实弹形态与变异自证
+- feat: reverse_floors `--emit <go.mod>` 下游消费方精确 `go get` 升级命令（#271，全量钉最新 / `--diff` 只钉落差；tag 读不到不进命令且显式警告）；gen_versions 新增 `verifiedCombos`——伞仓 BOM 最新 tag 的互洽组合（#272）
+- fix: audit 阶段5 Release 对账改用 release_repos()（MODULES+伞仓，#273）；gen_releases bom_release_notes 缺省 read_at 补 nested 参数（TypeError 实测 BOM Release 造不出）
+- fix: pkg DESC 27→28 合 1 并补 procx（desc_count 存量漂移）；audit 阶段1 预取先过滤本地缺仓（audit_fail_loud 用例1 复绿）
+- test: audit_tag_source_selftest / release_train_apidiff_selftest 新增并接线 audit.yml；ledger_write_selftest +5 用例 +4 变异体
+
 ## [v0.2.4] — 2026-11-08
 
 ### fix: 发版/地板工具链 11 连修（PR #263）+ audit 门禁 9 连修 + DESC 27 合 1（PR #264）
