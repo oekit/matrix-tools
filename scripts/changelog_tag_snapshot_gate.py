@@ -85,6 +85,11 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     # （merge 被 pending check 拒后仍执行了 tag——链式命令未对拒合止步），
     # 段随后经 #173 定版进 main；内容含 pkg#355 改名（代码先经 #171 落地）。
     "data:v0.21.0",
+    # 2026-11-11 同因第四例（matrix-tools#290 附记）：workflow 幽灵 tag
+    # v0.10.1——network 的 tag 误打进 workflow 仓（链式命令 cwd 漂移未验目录，
+    # 第二次栽进同一仓），protect-release-tags 禁删；内容 = workflow main HEAD
+    # （v0.4.0 线），@latest 不受影响。
+    "workflow:v0.10.1",
     # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
     # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
     "bootstrap:nacos/v0.2.0",
