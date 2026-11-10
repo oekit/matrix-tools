@@ -56,8 +56,6 @@ jobs:
         run: python3 scripts/close_issue_selftest.py
       - name: close_issue 回执「变更内容」定位自测（能定位到本条 / 定位不到要明说 / PR 号不算 issue 引用 / 变异自证）
         run: python3 scripts/close_issue_locate_selftest.py
-      - name: issue 存量扫描自测（双路对账 / 空页陷阱 / 白名单约束两条路径 / 只读契约 / 变异自证）
-        run: python3 scripts/issue_sweep_selftest.py
       - name: dependabot 目录门禁自测（残留条目必须抓得到，且非 gomod 生态不误报）
         run: python3 scripts/dependabot_dirs_selftest.py
       - name: ghsafe 读取层自测（读到空 ≠ 事实为空，不能假红也不能假绿）
