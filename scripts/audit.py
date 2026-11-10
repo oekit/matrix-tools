@@ -493,24 +493,38 @@ def check_go_floor_pairing(repo: str, d):
 # 「读不到」永远不等于「没有 tag」。
 enable_tag_cache()
 if REMOTE_TAGS:
-    progress(f"阶段 1/7 预取远端事实（{len(MODULES)} 仓，并发）…")
-    prefetch_remote_tags(MODULES, BASE, on_fail=lambda repo, e: check(
-        False, f"{e}（该仓版本事实未核对，不能当通过）"))
-    progress("阶段 1/7 完成")
-    # 本地 tag 陈旧比对（#269）：远端事实已缓存 ⇒ 本地读法很便宜（git tag -l）。
-    # 只提示不判漂移——版本判据已按远端读，本地陈旧不影响本报告的结论；
-    # 但它影响所有**别的**碰本地 tag 的流程，必须显式可见。
-    progress("阶段 1/7 本地 tag 陈旧比对…")
-    _stale_local_tags = detect_stale_local_tags(MODULES, BASE)
-    progress("阶段 1/7 完成")
-    # 反向依赖核查（matrix-tools#267）：跨 org 消费方的地板——本 org 工具
-    # 此前只管「我依赖谁」，不管「谁依赖我」。⚠ 可见不阻塞：追平动作在
-    # 对侧 org（bump_dep_floors），❌ 会把本侧 CI 钉死在对侧行动上。
-    # 事实源复用上面预取的远端 tag 缓存 ⇒ 零额外 tag 读；消费方 go.mod 走
-    # raw.githubusercontent（HEAD，不吃本地 clone 陈旧的亏）。
-    progress("阶段 1/7 反向依赖核查（跨 org 消费方）…")
-    _reverse_floor_lines, _reverse_floor_err = cross_org_floor_warnings()
-    progress("阶段 1/7 完成")
+    # 本地不存在的仓先过滤（audit_fail_loud 用例1：空 base 夹具上 prefetch 的
+    # repo_dir 会 FileNotFoundError 冒泡 ⇒ 报告只剩崩溃行，「仓检出失败」的
+    # 逐仓漂移没了）。过滤不记漂移——**报告职责在阶段 2 的逐仓检查**（同一
+    # 判据、同一措辞），这里只保证预取不炸。
+    def _repo_present(r: str) -> bool:
+        try:
+            repo_dir(r, BASE)
+            return True
+        except FileNotFoundError:
+            return False
+    _present = [r for r in MODULES if _repo_present(r)]
+    _stale_local_tags = {}
+    _reverse_floor_lines = []
+    _reverse_floor_err = None
+    if _present:
+        progress(f"阶段 1/7 预取远端事实（{len(_present)}/{len(MODULES)} 仓本地在，并发）…")
+        prefetch_remote_tags(_present, BASE, on_fail=lambda repo, e: check(
+            False, f"{e}（该仓版本事实未核对，不能当通过）"))
+        progress("阶段 1/7 完成")
+        # 本地 tag 陈旧比对（#269）：远端事实已缓存 ⇒ 本地读法很便宜（git tag -l）。
+        # 只提示不判漂移——版本判据已按远端读，本地陈旧不影响本报告的结论；
+        # 但它影响所有**别的**碰本地 tag 的流程，必须显式可见。
+        progress("阶段 1/7 本地 tag 陈旧比对…")
+        _stale_local_tags = detect_stale_local_tags(_present, BASE)
+        # 反向依赖核查（matrix-tools#267）：跨 org 消费方的地板——本 org 工具
+        # 此前只管「我依赖谁」，不管「谁依赖我」。⚠ 可见不阻塞：追平动作在
+        # 对侧 org（bump_dep_floors），❌ 会把本侧 CI 钉死在对侧行动上。
+        # 事实源复用上面预取的远端 tag 缓存 ⇒ 零额外 tag 读；消费方 go.mod 走
+        # raw.githubusercontent（HEAD，不吃本地 clone 陈旧的亏）。
+        progress("阶段 1/7 反向依赖核查（跨 org 消费方）…")
+        _reverse_floor_lines, _reverse_floor_err = cross_org_floor_warnings()
+        progress("阶段 1/7 完成")
 else:
     _stale_local_tags = {}
     _reverse_floor_lines = []
