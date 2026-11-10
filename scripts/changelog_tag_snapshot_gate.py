@@ -81,6 +81,10 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     # 连续命令漏 cd），protect-release-tags 禁删；tracing 无 redis 嵌套
     # 模块，go get 该路径直接失败，纯 tag 空间噪声。
     "tracing:redis/v0.2.19",
+    # 2026-11-11 nns v0.6.0 同款第三例：data:v0.21.0 tag 打在补段 PR 合入前
+    # （merge 被 pending check 拒后仍执行了 tag——链式命令未对拒合止步），
+    # 段随后经 #173 定版进 main；内容含 pkg#355 改名（代码先经 #171 落地）。
+    "data:v0.21.0",
     # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
     # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
     "bootstrap:nacos/v0.2.0",
