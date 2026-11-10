@@ -696,6 +696,26 @@ def main() -> int:
             failures.append(f"用例32 收口没指出主语是 PR：{r.stdout}{r.stderr}")
         else:
             print("  ✓ 用例32 收口复核：主语实为 PR ⇒ 报漂移")
+        # ── 用例 33：.github 特殊仓名 ⇒ 可记（matrix-tools#280）───────────
+        led33 = ledger_of("dotrepo.json")
+        run_tool(["--new-run"], base_env, led33)
+        r = run_tool(["--issue", "oekit/.github#35", "--note", "治理仓 issue"], base_env, led33)
+        if r.returncode != 0:
+            failures.append(f"用例33 .github 仓 issue 写入失败（#280）：{r.stdout}{r.stderr}")
+        else:
+            e33 = json.loads(led33.read_text(encoding="utf-8"))["runs"][-1]["handled"][0]
+            if e33.get("issue") != "oekit/.github#35":
+                failures.append(f"用例33 键形态不对：{e33.get('issue')!r}")
+            else:
+                print("  ✓ 用例33 .github 特殊仓名 ⇒ 全键落库")
+        for bad in ("..#3", "..foo#3"):
+            before33 = led33.read_text(encoding="utf-8")
+            r = run_tool(["--issue", bad], base_env, led33)
+            if r.returncode != 2:
+                failures.append(f"用例33b 路径形态 {bad!r} 退出码 {r.returncode}（应为 2）")
+            elif led33.read_text(encoding="utf-8") != before33:
+                failures.append(f"用例33b {bad!r} 却把台账改了")
+        print("  ✓ 用例33b 路径形态（./ /..）⇒ 用法错误且零写入")
 
     if failures:
         print("\n✗ 自测失败：")

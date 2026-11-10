@@ -44,8 +44,8 @@ def count_units(repos_dir: str | None = None) -> dict:
     三个口径不一样，别选一个当「唯一正确值」：
       根矩阵模块数 = len(MODULES)（站点文案用这个，与「矩阵总览」表同口径）
       根 go.mod 数  = 25（24 矩阵模块 + 门面 BOM 仓 oekit）
-      嵌套模块数    = 11（仓根以下任意深度的 go.mod，各自独立发版）
-      发版单元总数  = 根矩阵模块 + 嵌套模块 + **伞仓 oekit** = 36
+      嵌套模块数    = 12（快照，真相源=verify_release_units.release_unit_count()）（仓根以下任意深度的 go.mod，各自独立发版）
+      发版单元总数 = 37（快照，真相源=verify_release_units.release_unit_count()）
                      （伞仓有自己的 tag 与 GitHub Release，v0.1.11 等——下游
                       `go get github.com/oekit/oekit@latest` 是一次独立的版本
                       获取，按「可独立 go get 的发版单元」口径必须计入）
