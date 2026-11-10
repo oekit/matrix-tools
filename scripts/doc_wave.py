@@ -90,7 +90,15 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
     title = msg
     landed, skipped, failed = [], [], []
     for repo in repos:
-        d = repo_dir(repo, BASE)
+        # 单仓失败**记录后继续**（matrix-tools#275）：中途 SystemExit/异常中断
+        # 会让后续仓完全没跑 ⇒ 半更新形态（前半仓开了 PR、后半仓没碰）。
+        # 失败汇总在收尾打印并进退出码判定。
+        try:
+            d = repo_dir(repo, BASE)
+        except Exception as e:
+            failed.append(f"{repo}（{str(e)[:80]}）")
+            print(f"✗ {repo}: {str(e)[:100]}")
+            continue
         if is_dirty(d):
             skipped.append(f"{repo}（脏）")
             continue
@@ -125,6 +133,7 @@ def do_pr(cfg: dict, repos: list[str]) -> None:
         print(f"失败 {len(failed)} 仓（网络/远端问题可单独重跑 --repos）：{'; '.join(failed)}")
     print(f"\n{len(landed)} 个 PR 已开；CI 绿后跑：doc_wave.py --{mode} --merge-all"
           + (f" --branch {branch}" if branch != ("docs/matrix-sync" if mode == "tables" else "docs/version-bump") else ""))
+    return landed, skipped, failed
 
 
 def do_merge_all(cfg: dict, repos: list[str]) -> None:
@@ -139,6 +148,7 @@ def do_merge_all(cfg: dict, repos: list[str]) -> None:
         (failed if "失败" in result else pending if "排程" in result else ok).append(repo)
     print(f"\n合并完成 {len(ok)}；auto 排程 {len(pending)}；失败 {len(failed)}"
           + (f"：{', '.join(failed)}" if failed else ""))
+    return ok, pending, failed
 
 
 def main() -> None:
@@ -149,10 +159,17 @@ def main() -> None:
         print(f"  {r}")
     if cfg["action"] == "pr":
         print()
-        do_pr(cfg, repos)
+        landed, skipped, failed = do_pr(cfg, repos)
+        # 退出码语义（matrix-tools#275）：失败 ⇒ 1；**受影响却一无所成** ⇒ 1
+        # （全部仓被跳过/失败 ⇒ 调用方必须能从退出码看出这轮什么都没做成，
+        # 不能与「零漂移的正常空跑」同码）。plan 判定 0 仓受影响 ⇒ 正常 0。
+        if failed or (not landed and (skipped or failed)):
+            sys.exit(1)
     elif cfg["action"] == "merge-all":
         print()
-        do_merge_all(cfg, repos)
+        _ok, _pending, failed = do_merge_all(cfg, repos)
+        if failed:
+            sys.exit(1)
     else:
         print("\n（plan 只读；加 --pr 开批量 PR，--merge-all 合并）")
 
