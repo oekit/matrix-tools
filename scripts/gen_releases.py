@@ -379,7 +379,10 @@ def bom_release_notes(oekit_dir, tag: str, prev_tag: str | None,
          最需要的就是这段。
     """
     if read_at is None:
-        read_at = go_mod_at
+        # 伞仓没有嵌套模块 ⇒ nested 恒 None（matrix-tools#273 实测：缺省实现
+        # 直接把 go_mod_at 当 read_at 用会缺第三参 TypeError——BOM Release
+        # 从此造不出来，只能手工）。
+        read_at = lambda d, t: go_mod_at(d, t, None)  # noqa: E731
     cur_text = read_at(oekit_dir, tag)
     parts = [f"BOM 推荐组合 `{ORG}/{BOM_REPO}` `{tag}`（gen_matrix_go.py 生成的兼容版本快照，"
              f"`go get github.com/oekit/{BOM_REPO}@{tag}` 一次拉齐）。"]
