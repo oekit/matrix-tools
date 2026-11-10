@@ -1,0 +1,19 @@
+{
+  "oagentkit": [
+    "agent",
+    "agentkit",
+    "guardx",
+    "llm",
+    "matrix-tools",
+    "mcpkit",
+    "obs",
+    "promptx",
+    "queue",
+    "rag",
+    "runtime",
+    "skillkit",
+    "textx",
+    "toolgate",
+    "tools"
+  ]
+}

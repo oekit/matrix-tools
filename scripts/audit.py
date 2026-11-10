@@ -2,7 +2,15 @@
 """全矩阵审计：module 行 / 残留引用 / README 门面 / AGENTS / CHANGELOG / 安装行版本 / 矩阵表新鲜度 / 站点。
 用法：
   python3 scripts/audit.py               # 本地检出（MATRIX_BASE 或默认路径）
-  MATRIX_BASE=repos python3 scripts/audit.py --remote-tags   # Actions 克隆布局
+  MATRIX_BASE=repos python3 scripts/audit.py --remote-tags   # Actions 克隆布局（旗子保留，等价于默认）
+
+**版本事实源**（matrix-tools#269）：默认读**远端** tag（canonical HTTPS 优先、
+本地 origin 兜底）。「最新版本」不再取自本地 `git tag -l`——本地 tag 只在
+`git fetch origin --tags` 时更新，日常 `git fetch origin main` **不动 tag** ⇒
+工作树新、tag 旧 ⇒ 本地跑曾经整片假红（实测 69 项）。本地跑**不需要**预
+fetch tag；本地 tag 落后会在报告结论区显式提示（本地 vs 远端逐仓比对）。
+离线跑可显式 `--local-tags` 退回本地 tag 列表——此时事实源是**本地的**，
+报告结论区会显式标注（换事实源必须说清，matrix-tools#79 同族纪律）。
 输出：stdout 报告；发现漂移时 exit 1（供 CI 判定）。"""
 from __future__ import annotations
 import json
@@ -16,6 +24,7 @@ sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
 sys.path.insert(0, str(__file__).rsplit("/", 1)[0])
 from matrix import (  # noqa: E402
     MODULES, ORG, SITE_REPO, STALE_RE, repo_dir, module_line, sibling_deps, latest_tag,
+    local_latest_tag,
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
     RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags, remote_tags,
 )
@@ -25,10 +34,13 @@ from install_lines import check_readme_install_lines, nested_units_of  # noqa: E
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
                                   check_nested_version_correspondence)
+from reverse_floors import cross_org_floor_warnings  # noqa: E402  （#267 反向依赖面）
 
 BASE = os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
 BASE = os.path.abspath(BASE)
-REMOTE_TAGS = "--remote-tags" in sys.argv
+# 版本事实源（#269）：默认**远端**；`--local-tags` 显式退回本地（离线跑用）。
+# `--remote-tags` 保留为兼容旗子（CI 仍传着）——它现在等价于默认，不再有开关意义。
+REMOTE_TAGS = "--local-tags" not in sys.argv
 EXEMPT_QUICKUSE = {"pkg", "kitex-examples"}      # pkg 全文即用法；kitex-examples 有「## 运行」
 EXEMPT_TABLE = set()                              # 矩阵总览表所有仓都必须有
 
@@ -146,6 +158,39 @@ def remote_latest(repo: str) -> str | None:
             _remote_fail_recorded.add(repo)
             check(False, f"{e}（该仓版本事实未核对，不能当通过）")
         return None
+
+
+def detect_stale_local_tags(
+        repos, base, local_read=local_latest_tag, remote_read=remote_latest) -> dict[str, tuple[str, str]]:
+    """逐仓比对「本地最新 tag」vs「远端最新 tag」，返回不一致的仓（#269）。
+
+    **为什么要有这道比对**：审计的版本事实源自 #269 起默认读**远端**，本地 tag
+    陈旧不再制造假红——但本地 tag 落后仍要**显式可见**：floor_claim / 发版脚本 /
+    人工核对都会碰本地 tag 列表，`git fetch origin main` 不更新 tag 是历次假红的
+    根源（#246 同族：本地 clone 陈旧 ⇒ 报告不可信）。
+
+    返回 `{repo: (本地最新, 远端最新)}`。读失败的仓不进返回值（那已由
+    remote_latest 的漂移口径单独记账，这里没得比）；本地一个 tag 都没有的仓
+    也**不**算陈旧——CI 的 `--depth 1` clone、全新登记仓天然无本地 tag，全算
+    会把提示变成噪音。比对键是「两边最新 semver 是否一致」，方向不限：落后要
+    提示，本地比远端新也要提示（那通常意味着远端 tag 被删过或本地 tag 是旁支，
+    #269 报告里「安装行是新的、最新是旧的」的反向形态）。
+    """
+    stale: dict[str, tuple[str, str]] = {}
+    for repo in repos:
+        try:
+            remote = remote_read(repo)
+        except RemoteReadError:
+            continue                      # 读失败已单独记漂移（#79 口径），这里没得比
+        if not remote:
+            continue                      # 远端一个 semver tag 都没有，无从比对
+        try:
+            local = local_read(repo, base)
+        except FileNotFoundError:
+            continue                      # 仓不在本地：逐仓检查阶段已单独判红
+        if local and local != remote:
+            stale[repo] = (local, remote)
+    return stale
 
 
 def expected_table(repo: str) -> str:
@@ -448,10 +493,42 @@ def check_go_floor_pairing(repo: str, d):
 # 「读不到」永远不等于「没有 tag」。
 enable_tag_cache()
 if REMOTE_TAGS:
-    progress(f"阶段 1/7 预取远端事实（{len(MODULES)} 仓，并发）…")
-    prefetch_remote_tags(MODULES, BASE, on_fail=lambda repo, e: check(
-        False, f"{e}（该仓版本事实未核对，不能当通过）"))
-    progress("阶段 1/7 完成")
+    # 本地不存在的仓先过滤（audit_fail_loud 用例1：空 base 夹具上 prefetch 的
+    # repo_dir 会 FileNotFoundError 冒泡 ⇒ 报告只剩崩溃行，「仓检出失败」的
+    # 逐仓漂移没了）。过滤不记漂移——**报告职责在阶段 2 的逐仓检查**（同一
+    # 判据、同一措辞），这里只保证预取不炸。
+    def _repo_present(r: str) -> bool:
+        try:
+            repo_dir(r, BASE)
+            return True
+        except FileNotFoundError:
+            return False
+    _present = [r for r in MODULES if _repo_present(r)]
+    _stale_local_tags = {}
+    _reverse_floor_lines = []
+    _reverse_floor_err = None
+    if _present:
+        progress(f"阶段 1/7 预取远端事实（{len(_present)}/{len(MODULES)} 仓本地在，并发）…")
+        prefetch_remote_tags(_present, BASE, on_fail=lambda repo, e: check(
+            False, f"{e}（该仓版本事实未核对，不能当通过）"))
+        progress("阶段 1/7 完成")
+        # 本地 tag 陈旧比对（#269）：远端事实已缓存 ⇒ 本地读法很便宜（git tag -l）。
+        # 只提示不判漂移——版本判据已按远端读，本地陈旧不影响本报告的结论；
+        # 但它影响所有**别的**碰本地 tag 的流程，必须显式可见。
+        progress("阶段 1/7 本地 tag 陈旧比对…")
+        _stale_local_tags = detect_stale_local_tags(_present, BASE)
+        # 反向依赖核查（matrix-tools#267）：跨 org 消费方的地板——本 org 工具
+        # 此前只管「我依赖谁」，不管「谁依赖我」。⚠ 可见不阻塞：追平动作在
+        # 对侧 org（bump_dep_floors），❌ 会把本侧 CI 钉死在对侧行动上。
+        # 事实源复用上面预取的远端 tag 缓存 ⇒ 零额外 tag 读；消费方 go.mod 走
+        # raw.githubusercontent（HEAD，不吃本地 clone 陈旧的亏）。
+        progress("阶段 1/7 反向依赖核查（跨 org 消费方）…")
+        _reverse_floor_lines, _reverse_floor_err = cross_org_floor_warnings()
+        progress("阶段 1/7 完成")
+else:
+    _stale_local_tags = {}
+    _reverse_floor_lines = []
+    _reverse_floor_err = "反向依赖核查需要远端事实源（--local-tags 离线模式跳过）"
 
 # ---------- 模块仓 ----------
 for _i, repo in enumerate(MODULES, 1):
@@ -1330,17 +1407,21 @@ check_dependabot_directories()
 # 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
 # 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
 # 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
-progress("阶段 5/7 GitHub Release 对账（24 仓）")
+progress("阶段 5/7 GitHub Release 对账（24 仓 + 伞仓 BOM）")
 try:
-    from gen_releases import missing_releases  # noqa: E402
+    from gen_releases import missing_releases, release_repos  # noqa: E402
 
-    rel_missing, rel_skipped = missing_releases(list(MODULES))
+    # 伞仓也在对账名单里（matrix-tools#273）：MODULES 不含 BOM 仓 oekit，
+    # 旧写法按 list(MODULES) 枚举 ⇒ 伞仓「有 tag 无 Release」audit 全绿
+    # （v0.2.10/v0.2.11 存量足迹）。gen_releases 的 release_repos() 是
+    # MODULES + BOM_REPO 的同一份枚举口径，对账必须同源。
+    rel_missing, rel_skipped = missing_releases(release_repos())
     for repo, tags in rel_missing.items():
         check(False, f"{repo}: {len(tags)} 个 tag 缺 GitHub Release（跑 gen_releases.py --apply）：{tags[:3]}…")
     if rel_skipped:
         fused = sum(1 for s in rel_skipped if "限速熔断" in s)
         extra = f"，其中 {fused} 仓因限速熔断**未发起请求**" if fused else ""
-        print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(MODULES)} 仓未取到 Release 列表"
+        print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(release_repos())} 仓未取到 Release 列表"
               f"——这部分本门禁无结论（CI 需注入 GH_TOKEN，见 audit.yml）{extra}")
         for s in rel_skipped[:5]:
             print(f"      · {s}")
@@ -1423,8 +1504,24 @@ progress("阶段 7/7 出报告")
 # 所以结论行前补一行可核对的读数：读到几个 / 有几个降级或跳过。
 _read_ok = sum(1 for v in REMOTE_READ_LOG.values() if v == "ok")
 _read_fail = sum(1 for v in REMOTE_READ_LOG.values() if v == "failed")
-print(f"远端 tag 读取：{_read_ok}/{len(MODULES)} 仓成功"
-      f"（{_read_fail} 读失败）")
+if REMOTE_TAGS:
+    print(f"版本事实源：远端 tag（默认，matrix-tools#269）；远端读取：{_read_ok}/{len(MODULES)} 仓成功"
+          f"（{_read_fail} 读失败）")
+else:
+    # --local-tags：事实源是本地的，必须显式标注——这一行出现本身就是信号，
+    # 防止「本地跑出一堆红、CI 全绿」时操作者把两边当成同一份事实。
+    print(f"版本事实源：**本地 tag 列表**（--local-tags 显式指定）——"
+          f"本地 tag 只在 git fetch origin --tags 时更新，陈旧 tag 会造成假红"
+          f"（matrix-tools#269）；离线场景才这么跑")
+if _stale_local_tags:
+    # matrix-tools#269：本地 tag ≠ 远端的仓。版本判据已按远端读，本报告结论
+    # 不受影响（这正是默认改读远端的意义）；但 floor_claim / 发版脚本 / 人工
+    # 核对碰的是本地 tag ⇒ 必须提示先同步，别让陈旧列表流到别的流程。
+    _stale_desc = ", ".join(f"{k}（本地={lv} / 远端={rv}）"
+                            for k, (lv, rv) in sorted(_stale_local_tags.items()))
+    print(f"本地 tag 陈旧（≠远端）：{len(_stale_local_tags)} 仓：{_stale_desc}"
+          f"——先 git fetch origin --tags --prune 同步"
+          f"（注意 fetch origin main 不更新 tag，matrix-tools#269）")
 if _stale_local_main:
     # matrix-tools#246：本地 main 落后的仓。地板判据已改读 origin/main 不受影响
     # （这里只提示），但**其余读本地工作树的判据**（module 行/README/AGENTS…）
@@ -1432,6 +1529,12 @@ if _stale_local_main:
     print(f"本地 main 落后 origin/main：{len(_stale_local_main)} 仓"
           f"（{sorted(_stale_local_main)}）——地板判据已改读远端不受影响；"
           f"其余读本地工作树的判据可能过时，建议先 git pull --ff-only（matrix-tools#246）")
+# 反向依赖核查（matrix-tools#267）：⚠ 行可见不阻塞（追平责任在对侧 org），
+# 但必须显式可见——「我的新版本还没被谁跟上」从对侧的自觉变成本侧的事实。
+if _reverse_floor_err:
+    print(f"⚠ {_reverse_floor_err}")
+for _rf in _reverse_floor_lines:
+    print(f"⚠ {_rf}")
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
     for i in issues:

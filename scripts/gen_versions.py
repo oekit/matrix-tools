@@ -25,8 +25,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import (MODULES, ORG, repo_dir, ensure_file_clean, sibling_deps,  # noqa: E402
-                    remote_tags)
+from matrix import (MODULES, ORG, BOM_REPO, repo_dir, ensure_file_clean,  # noqa: E402
+                    sibling_deps, remote_tags)
 
 BASE = os.path.abspath(
     os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -872,7 +872,42 @@ def build() -> dict:
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "org": ORG,
         "modules": modules,
+        # 消费方已验证组合（matrix-tools#272）：伞仓 BOM 最新 tag 的 go.mod
+        # 是**矩阵 CI 逐轮验证过的兼容组合**——BOM 打 tag 的前提是全部地板
+        # 齐平且矩阵 CI 绿。消费方升级「12 次考古」从此有权威起点：
+        # 对齐这一个组合 = 对齐一套互洽版本（github.com/oekit/<bom> 一次 get
+        # 是同款承诺的 Go module 形态）。读不到 BOM 组合 ⇒ 字段为空列表
+        # 且 _warn_unreadable 显式提示（读不到 ≠ 没有组合）。
+        "verifiedCombos": _verified_combos(),
     }
+
+
+def _verified_combos() -> list[dict]:
+    """伞仓 BOM 最新 tag 的 require 表 → [{tag, modules}]（matrix-tools#272）。"""
+    try:
+        bom_latest = latest_version(BOM_REPO)
+        if not bom_latest:
+            _warn_unreadable(BOM_REPO, "伞仓没有任何 vX.Y.Z tag",
+                             "verifiedCombos 记为空（**读不到**，不是「没有组合」）")
+            return []
+        d = repo_dir(BOM_REPO, BASE)
+        gm = subprocess.run(
+            ["git", "-C", str(d), "show", f"{bom_latest}:go.mod"],
+            capture_output=True, text=True, timeout=60)
+        if gm.returncode != 0:
+            _warn_unreadable(BOM_REPO, f"伞仓 tag {bom_latest} 的 go.mod 读不出"
+                             f"（{gm.stderr.strip()[:80]}）",
+                             "verifiedCombos 记为空（**读不到**，不是「没有组合」）")
+            return []
+        modules = {f"github.com/{ORG}/{m}": v
+                   for m, v in re.findall(
+                       r"github\.com/{}/([A-Za-z0-9._/-]+)\s+(v\d+\.\d+\.\d+)".format(ORG),
+                       gm.stdout)}
+        return [{"tag": bom_latest, "modules": modules}]
+    except Exception as e:  # noqa: BLE001 —— 读不到显式提示，不当「没有组合」
+        _warn_unreadable(BOM_REPO, f"伞仓组合读取失败（{e}）",
+                         "verifiedCombos 记为空（**读不到**，不是「没有组合」）")
+        return []
 
 
 def to_md(data: dict) -> str:
