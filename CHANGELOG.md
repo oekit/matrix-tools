@@ -4,6 +4,13 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.6] — 2026-11-10
+
+- fix: doc_wave 退出码语义——单仓失败记录后继续跑完（半更新消灭），失败/受影响却一无所成 ⇒ 退出码 1（#275）
+- fix: land_generator_change 登记 tables/version-lines/agents-desc 三类 advisory 产物——「无产物待落地」绿灯只在 doc_wave --plan 归零后给出，否则落地顺序指引 + 退出码 1（#276）
+- fix: ledger --issue 的 repo 段允许前导点——oekit/.github 等特殊仓名的 issue 可入账，. 与 .. 路径形态仍拒绝（#280）
+- fix: verify_site_copy/gen_tables 口径表过期数字（7/32、11/36 互不一致）统一 12/37 并标注真相源 release_unit_count()（#279）
+
 ## [v0.2.5] — 2026-11-10
 
 - fix: audit 版本事实源默认读**远端** tag + 本地 tag 陈旧比对（#269）——`git fetch origin main` 不更新 tag 的历次假红从源头消除；handoff 同步动作补 `--tags --prune`
