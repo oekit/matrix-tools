@@ -4,6 +4,24 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.5] — 2026-11-10
+
+### feat: issue 存量扫描器 issue_sweep——org 全仓双路对账盘点 + 五级分级战报（只读，绝不关单）(#277)
+
+- `scripts/issue_sweep.py`：把 2026-11 三轮手工清零战的开场盘点固化成一条命令。分级战报按清零顺序：
+  merged-pr（疑似修复已合入但单未关——修复 PR 引用单号没用 closing keyword，合入后静默开着；
+  2026-11-10 实测 oekit 41 条）→ re-report（重报聚类，标题数字归一化 + Jaccard，最早单为 canonical）
+  → pr-open（等合入）→ stale（陈年）→ work（真实待修）
+- 硬约束全部程序化：双路对账（REST 全仓分页 × gh search 三排序并集，差集逐单复核定胜负，
+  search 漏单/幽灵单分立）；REST 全程不碰 GraphQL（限速教训）；空页 ≠ 终点（上一页满页时空页重试，
+  timeline 等小端点调低重试成本）；PR 按 `pull_request` 键剔除并与 open_issues_count 对账；
+  --repo 白名单同时约束两条路径；读失败仓记 failed_repos 并 exit 2（读不到 ≠ 没有）
+- 只读契约：整轮无 close/comment/label——关单回执一律走 close_issue.py；自测断言逐条扫描
+  gh 调用日志禁止写型调用
+- `scripts/issue_sweep_selftest.py`：假 gh（无网络无副作用）7 组判据 + 变异自证——
+  砍掉空页重试后，路径 A 截断会被 open_issues_count 对账红灯抓住、丢的单从 search 路标
+  search-only 找回（防线纵深实测）。挂 CI selftest job
+
 ## [v0.2.4] — 2026-11-08
 
 ### fix: 发版/地板工具链 11 连修（PR #263）+ audit 门禁 9 连修 + DESC 27 合 1（PR #264）
