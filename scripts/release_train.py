@@ -21,6 +21,9 @@
   c. go build（GOWORK=off，外部用户视角）
   d. CHANGELOG 含本 tag（版本号必须来自即将发布的内容）
   e. gofmt + golangci-lint（本地可用时；与 org CI 同面——发完才发现红的事不再有）
+  h. apidiff 相邻 tag API 面对比（matrix-tools#270，本地有 apidiff 时）：
+     导出面有不兼容变更而版本节无 BREAKING 标注 ⇒ 红；
+     --skip-apidiff "理由" 显式逃生（理由留痕）
   f. **依赖可解析**：被 tag 模块的每条 github.com/oekit/* require 必须**已发布**
      或**本 train 一起发版**——嵌套模块的 `replace ... => ../` 只对本仓自身构建
      有效（Go 忽略依赖里的 replace）⇒ 父仓版本没发布就发嵌套模块，下游消费方
@@ -906,9 +909,130 @@ def ensure_changelog(repo: str, root, specs, bullets: list[str], apply: bool,
     preflight_gate(root, apply=True)
 
 
+BREAKING_MARKER_RE = re.compile(r"BREAKING|Breaking|破坏性|不兼容")
+
+
+def incompatible_lines(diff_output: str) -> list[str]:
+    """apidiff 输出 → 不兼容变更行（matrix-tools#270）。
+
+    cmd/apidiff 的输出按两个小节组织：
+      Incompatible changes:
+      	<Name>: <message>
+      Compatible changes:
+      	<Name>: <message>
+    取 Incompatible 小节下的行；另留词面兜底（个别输出形态行内带
+    "incompatible change" 字样时也抓，宁可多看一眼不漏报）。
+    空输出 = API 面零差异。
+    """
+    out: list[str] = []
+    in_incompat = False
+    for ln in diff_output.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        low = s.lower()
+        if low.startswith("incompatible changes"):
+            in_incompat = True
+            continue
+        if low.startswith("compatible changes"):
+            in_incompat = False
+            continue
+        if in_incompat or "incompatible change" in low:
+            out.append(s)
+    return out
+
+
+def apidiff_gate_problems(diff_output: str, section: str) -> list[str]:
+    """检查面 H 的判定核：有不兼容变更且版本节无 BREAKING 标注 ⇒ 问题列表。
+
+    section 空（版本节读不到）时**视为无标注**——「判不了」不等于「写了」。
+    这就是 #270 的双实弹形态：PanicHandler 改签名、NewClient 改返回值，
+    release notes 只写了别的，无 BREAKING 标注 ⇒ 下游 11 仓编译断裂。
+    """
+    bad = incompatible_lines(diff_output)
+    if not bad:
+        return []
+    if section and BREAKING_MARKER_RE.search(section):
+        return []          # 标注了 ⇒ 是「有意识的破坏性变更」，放行
+    head = f"apidiff 发现 {len(bad)} 项不兼容变更且本版本节无 BREAKING 标注"
+    return [head] + [f"    {ln}" for ln in bad[:8]]
+
+
+def apidiff_skip_note(why: str) -> None:
+    print(f"  ⚠ apidiff 门禁跳过：{why}（matrix-tools#270：判不了 ≠ 通过，"
+          f"安装：go install golang.org/x/exp/cmd/apidiff@latest）")
+
+
+def check_apidiff_gate(repo: str, specs, failures: list[str], skip_reason: str | None) -> None:
+    """检查面 H 主体：main 模块跑 apidiff（base=远端最新 tag，head=工作树）。
+
+    - apidiff 二进制不在 ⇒ ⚠ 跳过（显式可见）；--skip-apidiff 带理由时同样显式。
+    - 嵌套模块不跑（嵌套依赖父仓 unpublished tag 的解析容易假红；主模块覆盖
+      绝大多数破坏面，嵌套破坏靠下游 CI 兜底——v1 口径，PR 里写明）。
+    - apidiff 本身运行失败（依赖解析/网络）⇒ ⚠ 跳过，不红（环境事实）；
+      跑成了且有 incompatible ⇒ 必须有 BREAKING 标注，否则红。
+    """
+    if skip_reason:
+        print(f"  ⚠ apidiff 门禁显式跳过：{skip_reason}（matrix-tools#270 逃生口，理由已留痕）")
+        return
+    main_spec = next(((n, d, t) for n, d, t in specs if n == "main"), None)
+    if main_spec is None:
+        return                     # 只发嵌套：不跑（见上）
+    _name, mod_dir, tag = main_spec
+    gomod = mod_dir / "go.mod"
+    if not gomod.exists():
+        return
+    module_path = ""
+    for line in gomod.read_text(encoding="utf-8").splitlines():
+        if line.startswith("module "):
+            module_path = line.split()[1].strip()
+            break
+    if not module_path:
+        return
+    apidiff_bin = shutil.which("apidiff")
+    if not apidiff_bin:
+        apidiff_skip_note("apidiff 不在 PATH")
+        return
+    from matrix import RemoteReadError
+    try:
+        base = latest_published_for(repo, "", tags=None)
+    except RemoteReadError as e:
+        apidiff_skip_note(f"基线 tag 读不到（{e}）")
+        return
+    if not base or base == tag:
+        return                     # 无基线（首个 tag）或基线=本次，无从比
+    print(f"  [apidiff] {module_path}@{base} → 工作树（检查面 H）")
+    try:
+        r = subprocess.run([apidiff_bin, "-m", f"{module_path}@{base}", "."],
+                           cwd=str(mod_dir), capture_output=True, text=True,
+                           timeout=300)
+    except (subprocess.TimeoutExpired, OSError) as e:
+        apidiff_skip_note(f"apidiff 运行失败（{e}）")
+        return
+    if r.returncode != 0 and not r.stdout.strip():
+        apidiff_skip_note(f"apidiff 退出码 {r.returncode}（{r.stderr.strip()[:120]}）")
+        return
+    from gen_releases import changelog_section
+    sec = changelog_section(str(mod_dir), tag) or ""
+    problems = apidiff_gate_problems(r.stdout, sec)
+    if problems:
+        failures.append(
+            f"{tag}: {problems[0]}——{'；'.join(p.strip() for p in problems[1:6])}\n"
+            f"  ⇒ 在 --changelog 对应条目补 **BREAKING** 标注与迁移说明，"
+            f"或确属误报时 --skip-apidiff \"理由\" 显式跳过（matrix-tools#270）")
+
+
 def main():
     argv = sys.argv[1:]
     apply = "--apply" in argv
+    skip_apidiff_reason = ""
+    if "--skip-apidiff" in argv:
+        i = argv.index("--skip-apidiff")
+        if i + 1 >= len(argv):
+            print("--skip-apidiff 需要跟理由（写进发版记录）：--skip-apidiff \"为什么可跳\"")
+            sys.exit(2)
+        skip_apidiff_reason = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
     bullets: list[str] = []
     issue_refs: list[tuple[str | None, str]] = []   # 关联问题单（#153）
     args: list[str] = []       # 位置参数（--changelog 的值不属于此处）
@@ -1020,6 +1144,14 @@ def main():
         #   紧贴打 tag 判（不只在建版本节时判）⇒ 「最新已发布版本」这个移动靶
         #   在判定与打 tag 之间不会被人抢先发新版。
         check_requires_latest(repo, name, d, planned_order, failures, cur_idx)
+
+    # ★ **检查面 H**（matrix-tools#270）：apidiff 相邻 tag API 面对比——
+    #   「签名变了但 CHANGELOG 没写 BREAKING」的隐式破坏（concurrency
+    #   PanicHandler、httpx NewClient 双实弹）拦截在上游。工具可用时真跑；
+    #   不可用/运行失败 ⇒ ⚠ 跳过（环境事实，不把发版链钉死在工具安装上），
+    #   但跳过必须显式可见（判不了 ≠ 通过）。
+    check_apidiff_gate(repo, specs, failures,
+                       skip_reason=(skip_apidiff_reason if skip_apidiff_reason else None))
     if failures:
         print(f"\n❌ {len(failures)} 项检查失败，未打任何 tag：")
         for f in failures:

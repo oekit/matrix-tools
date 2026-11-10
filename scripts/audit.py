@@ -1393,17 +1393,21 @@ check_dependabot_directories()
 # 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
 # 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
 # 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
-progress("阶段 5/7 GitHub Release 对账（24 仓）")
+progress("阶段 5/7 GitHub Release 对账（24 仓 + 伞仓 BOM）")
 try:
-    from gen_releases import missing_releases  # noqa: E402
+    from gen_releases import missing_releases, release_repos  # noqa: E402
 
-    rel_missing, rel_skipped = missing_releases(list(MODULES))
+    # 伞仓也在对账名单里（matrix-tools#273）：MODULES 不含 BOM 仓 oekit，
+    # 旧写法按 list(MODULES) 枚举 ⇒ 伞仓「有 tag 无 Release」audit 全绿
+    # （v0.2.10/v0.2.11 存量足迹）。gen_releases 的 release_repos() 是
+    # MODULES + BOM_REPO 的同一份枚举口径，对账必须同源。
+    rel_missing, rel_skipped = missing_releases(release_repos())
     for repo, tags in rel_missing.items():
         check(False, f"{repo}: {len(tags)} 个 tag 缺 GitHub Release（跑 gen_releases.py --apply）：{tags[:3]}…")
     if rel_skipped:
         fused = sum(1 for s in rel_skipped if "限速熔断" in s)
         extra = f"，其中 {fused} 仓因限速熔断**未发起请求**" if fused else ""
-        print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(MODULES)} 仓未取到 Release 列表"
+        print(f"  ⚠ release 对账：{len(rel_skipped)}/{len(release_repos())} 仓未取到 Release 列表"
               f"——这部分本门禁无结论（CI 需注入 GH_TOKEN，见 audit.yml）{extra}")
         for s in rel_skipped[:5]:
             print(f"      · {s}")

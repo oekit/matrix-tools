@@ -287,15 +287,60 @@ def cross_org_floor_warnings(latest: dict[str, str] | None = None,
     return lines, None
 
 
+def emit_upgrade_commands(gomod_path: str, diff_only: bool = False,
+                          latest: dict[str, str] | None = None) -> tuple[str, list[str]]:
+    """消费方 go.mod → 精确的 `go get` 升级命令（matrix-tools#271）。
+
+    输入任意 go.mod 路径（下游仓工作树），输出**单行可复制**的 go get——
+    每个模块钉到远端最新 tag。下游升级轮的「人工 grep go.mod × 17 模块
+    × N 仓、版本号手滑整单回滚」（zeus+fuxi 14 仓实弹）由这一行消灭。
+
+    返回 (命令, 警告)。tag 事实读不到的模块**不进命令**（拼一个错版本号
+    进 go get 是整单回滚的根因）⇒ 但必须显式警告（读不到 ≠ 没有）。
+    diff_only=True 只钉有落差的模块；缺省全量钉最新（幂等重跑安全）。
+    """
+    text = Path(gomod_path).read_text(encoding="utf-8")
+    req = parse_consumer_requires(text)
+    if not req:
+        return "", ["该 go.mod 不 require 任何 github.com/oekit/* 模块 ⇒ 无需升级命令"]
+    if latest is None:
+        latest = unit_latest_versions()
+    missing = [m for m in req if m not in latest]
+    gets: list[str] = []
+    for m, cur in req.items():
+        if m not in latest:
+            continue
+        if diff_only and cur == latest[m]:
+            continue
+        gets.append(f"{m}@{latest[m]}")
+    cmd = f"go get {' '.join(gets)}" if gets else ""
+    warns = [f"{m}：远端最新 tag 读不到 ⇒ 不进升级命令（先修网络/代理再重跑）"
+             for m in missing]
+    return cmd, warns
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="反向依赖地板核查（matrix-tools#267）")
     p.add_argument("--json", help="把报告落成 JSON（站点/面板可用）")
     p.add_argument("--discover", action="store_true",
                    help="另跑 GitHub code search 发现未登记的消费方（有配额，显式才跑）")
+    p.add_argument("--emit", metavar="GOMOD_PATH",
+                   help="消费方 go.mod 路径 ⇒ 输出精确 go get 升级命令（matrix-tools#271）")
+    p.add_argument("--diff", action="store_true",
+                   help="配合 --emit：只输出有落差的模块（缺省全量钉最新）")
     p.add_argument("--selftest", action="store_true", help="离线自测")
     args = p.parse_args()
     if args.selftest:
         return _selftest()
+    if args.emit:
+        cmd, warns = emit_upgrade_commands(args.emit, diff_only=args.diff)
+        for w in warns:
+            print(f"⚠ {w}", file=sys.stderr)
+        if cmd:
+            print(cmd)
+            return 0
+        print("✓ 无需升级（全部 oekit 依赖已在最新）", file=sys.stderr)
+        return 0
 
     consumers = load_consumers()
     latest = unit_latest_versions()
@@ -323,6 +368,9 @@ def main() -> int:
 
 
 def _selftest() -> int:
+    def ns_main_emit(path: str, diff_only: bool = False, latest=None):
+        return emit_upgrade_commands(path, diff_only=diff_only, latest=latest)
+
     """离线自测：fetcher/tag 源全注入，判据有牙齿（变异可证）。"""
     from matrix import RemoteReadError  # noqa: F401  — 保持 import 面与主流程一致
     failures: list[str] = []
@@ -401,7 +449,25 @@ def _selftest() -> int:
     check(len(d) == 1 and "nacos" in d[0] and "textx v0.1.10" in d[0],
           f"5: 嵌套单元的落后也要判——实得 {d}")
 
-    # ── 6：变异自证——把集合比对改成「只记第一个落后者」⇒ 判据失真必须转红 ──
+    # ── 5b：--emit 升级命令生成（#271）——全量钉最新、--diff 只钉落差、
+    #        tag 读不到的模块**不进命令**但显式警告 ──
+    with tempfile.TemporaryDirectory() as td2:
+        gm = Path(td2) / "go.mod"
+        gm.write_text(gomod({"github.com/oekit/pkg": "v0.40.0",
+                             "github.com/oekit/logx": "v0.8.12"}))
+        cmd, warns = ns_main_emit(str(gm), diff_only=False, latest=latest)
+        check(cmd == "go get github.com/oekit/pkg@v0.42.0 github.com/oekit/logx@v0.8.12",
+              f"5b: 全量模式钉最新（含已齐平的）——实得 {cmd!r}")
+        cmd2, _ = ns_main_emit(str(gm), diff_only=True, latest=latest)
+        check(cmd2 == "go get github.com/oekit/pkg@v0.42.0",
+              f"5b--diff: 只钉有落差的——实得 {cmd2!r}")
+        ns_emit = None  # 缺 tag 形态：latest 缺一个模块
+        cmd3, warns3 = ns_main_emit(str(gm), diff_only=False,
+                                    latest={"github.com/oekit/pkg": "v0.42.0"})
+        check("logx" not in cmd3 and any("logx" in w and "读不到" in w for w in warns3),
+              f"5b--missing: tag 读不到的模块不进命令且显式警告——实得 {cmd3!r} / {warns3}")
+
+
     #    （集合判定是本修法的核心：变异后半对齐形态只报一个落后者，
     #      「其余 11 个没跟上」会漏——fixture 用**两个**落后消费方才能分辨。）
     src = (HERE / "reverse_floors.py").read_text(encoding="utf-8")
