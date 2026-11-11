@@ -514,6 +514,73 @@ def case_C5_old_api_shape_no_longer_compiles(gmg=gen_matrix_go) -> None:
                 f"旧写法 oekit.Versions[...] 必须编译不过（破坏属实），实得 rc={r.returncode}")
 
 
+# ── 幽灵/误打 tag（matrix-tools#294，事故记录 #290）────────────────────────
+def make_ghost_repo(root: Path, name: str) -> Path:
+    """含幽灵 tag 的 fixture 仓（#290 形态：别仓的 tag 被打到本仓）。
+
+    c1：真发版点（`redis/go.mod` 在）⇒ tag `redis/v0.2.18`；
+    c2：落点**没有** `redis/go.mod` ⇒ tag `redis/v0.2.19`（幽灵）。
+    """
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    git(d, "init", "-q", "-b", "main")
+    git(d, "config", "user.email", "selftest@example.invalid")
+    git(d, "config", "user.name", "selftest")
+    (d / "go.mod").write_text(
+        f"module example.invalid/{name}\n\ngo 1.26.0\n", encoding="utf-8")
+    sub = d / "redis"
+    sub.mkdir(parents=True, exist_ok=True)
+    (sub / "go.mod").write_text(
+        f"module example.invalid/{name}/redis\n\ngo 1.26.0\n", encoding="utf-8")
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "c1: redis nested module")
+    git(d, "tag", "v0.1.0")
+    git(d, "tag", "redis/v0.2.18")
+    shutil.rmtree(sub)
+    git(d, "add", "-A")
+    git(d, "commit", "-q", "-m", "c2: drop redis dir")
+    git(d, "tag", "redis/v0.2.19")  # 幽灵：落点没有 redis/go.mod
+    return d
+
+
+def case_G1_pure_ghost_subpath_not_enumerated(gmg=gen_matrix_go) -> None:
+    """幽灵 tag 是该子路径唯一 tag ⇒ 整个子路径不进 BOM（跳过、不硬失败）。"""
+    with tempfile.TemporaryDirectory() as td:
+        d = make_repo(Path(td), "ghostonly")
+        git(d, "tag", "redis/v0.2.19")  # 落点没有 redis/go.mod ⇒ 幽灵
+        picked = gmg.select_nested_tags("ghostonly", str(d), ["redis/v0.2.19", "v0.1.0"])
+        _record("G1", picked == [],
+                f"纯幽灵子路径应跳过不进 BOM，实得 {picked}")
+
+
+def case_G2_ghost_skipped_falls_through_to_real_tag(gmg=gen_matrix_go) -> None:
+    """幽灵 tag 与真 tag 并存 ⇒ 取真 tag（幽灵只跳过自己，不放弃子路径）。
+
+    牙齿：旧写法（不跳过）会选中 `redis/v0.2.19` ⇒ 必须转红。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        d = make_ghost_repo(Path(td), "ghost")
+        picked = gmg.select_nested_tags(
+            "ghost", str(d), ["redis/v0.2.19", "redis/v0.2.18", "v0.1.0"])
+        _record("G2", picked == [("redis", "redis/v0.2.18")],
+                f"应取真发版点 redis/v0.2.18，实得 {picked}")
+
+
+def case_G3_missing_tag_yields_no_verdict(gmg=gen_matrix_go) -> None:
+    """tag 没 fetch 到 ⇒ tag_has_gomod 不下结论（True，交由 go_floor 报错）。
+
+    「读不到」≠「不存在」（#79）；#100 的「取不到地板绝不兜底」契约不受影响。
+    """
+    with tempfile.TemporaryDirectory() as td:
+        d = make_ghost_repo(Path(td), "noverdict")
+        ok_missing = gmg.tag_has_gomod(str(d), "v9.9.9") is True
+        ok_ghost = gmg.tag_has_gomod(str(d), "redis/v0.2.19") is False
+        ok_real = gmg.tag_has_gomod(str(d), "redis/v0.2.18") is True
+        _record("G3", ok_missing and ok_ghost and ok_real,
+                f"判据应为 缺tag=不下结论/幽灵=False/真tag=True，实得 "
+                f"{ok_missing}/{ok_ghost}/{ok_real}")
+
+
 # ── 用例表 ────────────────────────────────────────────────────────────────
 CASES = [
     ("A1 正常路径：本地有 tag ⇒ 取到真地板", case_A1_local_tag_present, ["A1"]),
@@ -543,6 +610,12 @@ CASES = [
      case_C4_generated_go_compiles_and_is_race_free, ["C4"]),
     ("C5 破坏点属实：旧写法 oekit.Versions[...] 编译不过",
      case_C5_old_api_shape_no_longer_compiles, ["C5"]),
+    ("G1 #294：纯幽灵子路径 ⇒ 跳过不进 BOM（不硬失败）",
+     case_G1_pure_ghost_subpath_not_enumerated, ["G1"]),
+    ("G2 #294：幽灵 tag 跳过、同子路径回退真 tag（牙齿：旧写法选幽灵）",
+     case_G2_ghost_skipped_falls_through_to_real_tag, ["G2"]),
+    ("G3 #294：tag 未 fetch 到 ⇒ 不下结论（#79 口径）",
+     case_G3_missing_tag_yields_no_verdict, ["G3"]),
 ]
 
 
@@ -617,6 +690,14 @@ def _mutate_exported_mutable_globals():
     ])
 
 
+def _mutate_ghost_not_skipped():
+    """#294 退回旧写法：幽灵 tag 不跳过（落点缺 go.mod 也照选）。"""
+    return _load_mutated("gmg_mut_ghost", [(
+        "        if not tag_has_gomod(repo_dir_path, tag):",
+        "        if False:",
+    )])
+
+
 MUTATIONS = [
     ("改造B 退回旧写法：go_floor 一律读 {tag}:go.mod",
      _mutate_go_floor_old_shape, {"B1", "B2"}),
@@ -628,6 +709,8 @@ MUTATIONS = [
      _mutate_breaking_folded, {"C1", "C1_render"}),
     ("改造A 退回旧写法：导出可变全局（var Versions / var Matrix）",
      _mutate_exported_mutable_globals, {"C2", "C4"}),
+    ("#294 退回旧写法：幽灵 tag 不跳过（落点缺 go.mod 也照选）",
+     _mutate_ghost_not_skipped, {"G1", "G2"}),
 ]
 
 
