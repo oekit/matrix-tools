@@ -242,6 +242,18 @@ def main() -> int:
         _record("I4e2_lint_ascii_spaced_paren_still_hit",
                 any("空占位" in x for x in p_sp),
                 f"I4e2: ASCII 带空白空括号占位仍须命中：{p_sp}")
+        # I4g：Go 调用语法不许误报（#289——与 #286 同族，正则已并收）——recover()/Errors()/Close()/min()
+        # 是合法 API 引用，非「空占位括号」
+        p_call = gate.lint_repair_bullet(
+            "- fix: defer recover() 拦不到、Errors() 恒空、min() 截断、nc.Close()\n", "v1.2.0")
+        _record("I4g_lint_go_call_syntax_no_false_positive", not p_call,
+                f"I4e: Go 调用语法不许误报为空占位括号：{p_call}")
+        # I4f：独立占位 `（）`/`( )` 照拦（#289 修复不放走真缺陷）
+        p_ph = gate.lint_repair_bullet(
+            "- chore: 补齐本版版本节——上一个已发布 tag（ ）的快照缺本版段\n", "v1.2.0")
+        _record("I4f_lint_placeholder_still_caught",
+                len(p_ph) == 1 and "空占位" in p_ph[0],
+                f"I4f: 独立占位括号必须照拦：{p_ph}")
         # I5：端到端——段在但文案残缺 ⇒ EXIT_DRIFT 且点名「文案残缺」；完好 ⇒ EXIT_OK
         run_case("I5_lint_bad_section_drifts", i_files,
                  {"lintbad": i_tags["lintbad"]}, gate.EXIT_DRIFT)

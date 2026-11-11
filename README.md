@@ -19,6 +19,11 @@ python3 scripts/gen_matrix_go.py         # oekit 仓 BOM 模块生成（go.mod �
 # ⚠️ 两个会**整文件覆写**各仓文件的工具——默认只报告，别顺手跑
 python3 scripts/gen_agents.py            # 只认 --new-repo <name>（新仓冷启动）；全量生成已禁用
 python3 scripts/gen_changelog.py          # 默认只报告；--apply 才写（会覆盖 release_train 的详实条目）
+
+# issue 存量扫描（只读，绝不关单）：org 全仓 open issue 盘点 + 分级战报
+python3 scripts/issue_sweep.py --org oekit --out .issue-sweep
+# 分级：merged-pr（修复已合入未关，立即可清）→ re-report（重报单）→ pr-open（等合入）
+#       → stale（陈年）→ work（真实待修）；清零动作走 scripts/close_issue.py
 ```
 
 `MATRIX_BASE` 环境变量指定矩阵检出根目录（默认 `~/my_project/ekit-split`；

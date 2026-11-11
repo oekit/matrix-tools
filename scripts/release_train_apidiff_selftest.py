@@ -60,11 +60,11 @@ Compatible changes:
 def main() -> int:
     src = TOOL.read_text(encoding="utf-8")
     if "--mutate" in sys.argv:
-        mutated = src.replace(
-            'BREAKING_MARKER_RE = re.compile(r"BREAKING|Breaking|破坏性|不兼容")',
-            'BREAKING_MARKER_RE = re.compile(r"NEVER_MATCH_THIS_MARKER")')
+        # 判据已迁 gen_versions.has_breaking_annotation（#292 单一判据源）——
+        # 改瞎判定调用本身（`if False`），证明判据在生效
+        mutated = src.replace("if has_breaking_annotation(section):", "if False:")
         ns = _load_gate(mutated)
-        sec = "## v0.1.0\n\n- fix: **BREAKING** 改签名\n"
+        sec = "## v0.1.0\n\n**BREAKING**: 改签名\n"
         p = ns["apidiff_gate_problems"](DIFF, sec)
         check(bool(p), f"M: 标注判据改瞎后，已标注形态必须转红（证明判据在生效）——实得 {p}")
         if FAILURES:
@@ -83,10 +83,10 @@ def main() -> int:
     check(ns["incompatible_lines"](only_compatible) == [],
           "A1b: Compatible 小节的行不算 incompatible")
 
-    # A2：不兼容 + **BREAKING** 标注 ⇒ 放行
-    sec2 = "## v0.2.0\n\n- refactor(async): PanicHandler 签名变更 **BREAKING** 迁移说明见 xxx\n"
+    # A2：不兼容 + 确定性标注（顶格粗体标记行）⇒ 放行（#292 口径）
+    sec2 = "## v0.2.0\n\n**BREAKING**: PanicHandler 签名变更，迁移说明见 xxx\n"
     check(ns["apidiff_gate_problems"](DIFF, sec2) == [],
-          "A2: 已标注 BREAKING 的破坏性变更必须放行")
+          "A2: 顶格 **BREAKING** 标记行必须放行")
 
     # A3：不兼容 + 无标注 ⇒ 红，且列出 Incompatible 小节的具体行（added 不列）
     p3 = ns["apidiff_gate_problems"](DIFF, "## v0.2.0\n\n- fix: 修了个别的\n")
@@ -98,10 +98,27 @@ def main() -> int:
     check(bool(ns["apidiff_gate_problems"](DIFF, "")),
           "A4: 空版本节必须视为无标注（判不了 ≠ 写了）")
 
-    # A5：中文标注同样放行
-    sec5 = "## v0.3.0\n\n- fix: 改签名，**破坏性**，迁移：xxx\n"
+    # A5：中文标注（条目加粗前缀形态）同样放行
+    sec5 = "## v0.3.0\n\n- **破坏性**：改签名，迁移：xxx\n"
     check(ns["apidiff_gate_problems"](DIFF, sec5) == [],
-          "A5: 中文破坏性标注必须放行（矩阵 CHANGELOG 中英混写是常态）")
+          "A5: 中文破坏性标注（条目加粗前缀）必须放行（矩阵 CHANGELOG 中英混写是常态）")
+
+    # A6：正文裸词/中段粗体强调不算标注（#292 假豁免实锤形态）
+    sec6 = "## v0.4.0\n\n- fix: 修了点别的，本版无破坏性变更\n- build: 升级到不会再静默落到**互不兼容**的旧组合\n"
+    check(bool(ns["apidiff_gate_problems"](DIFF, sec6)),
+          "A6: 「无破坏性变更」「**互不兼容**的旧组合」等无关字样不得豁免未标注的 BREAKING（假绿）")
+
+    # A7：全小写 **breaking** 标记行照认（case-insensitive，#292 假红面）
+    sec7 = "## v0.5.0\n\n**breaking**: 改签名\n"
+    check(ns["apidiff_gate_problems"](DIFF, sec7) == [],
+          "A7: 全小写 **breaking** 标记行必须放行（假红）")
+
+    # A8（#291）：changelog_section 调用形状钉——必须三参显式传 nested；
+    # 两参形状必 TypeError（nested 无缺省值），字面量级断言防再漂移
+    check("changelog_section(str(mod_dir), tag, None)" in src,
+          "A8: apidiff 面必须三参调用 changelog_section(str(mod_dir), tag, None)")
+    check(not re.search(r"changelog_section\(str\(mod_dir\),\s*tag\)", src),
+          "A8b: 两参调用形状必须绝迹（无缺省值必 TypeError，#291）")
 
     if FAILURES:
         for f in FAILURES:
