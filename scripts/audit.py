@@ -731,8 +731,16 @@ try:
     if r.stdout.strip():
         issues.append(f"site: 残留旧引用 {r.stdout.strip().splitlines()[:3]}")
     for g in ["getting-started", "logging", "errors", "caching", "http-service",
-              "rpc-service", "observability", "migration", "ai-agent"]:
+              "rpc-service", "observability", "migration", "ai-agent", "selection"]:
         check((site / "docs" / "guide" / f"{g}.md").exists(), f"site: 缺指南 {g}")
+    # 选型指南与 skill 同源渲染（gen_skill.py）——存在则必须新鲜（漂移即红）
+    if (site / "docs" / "guide" / "selection.md").exists():
+        try:
+            import gen_skill  # noqa: E402
+            if (site / "docs" / "guide" / "selection.md").read_text(encoding="utf-8") != gen_skill.render_site():
+                issues.append("site: guide/selection.md 与 gen_skill.py 渲染不一致（跑 make gen-skill --site）")
+        except Exception as e:  # noqa: BLE001
+            issues.append(gate_unavailable("selection.md 新鲜度判据", e))
     # versions.json 新鲜度：这是站点对外发布的版本口径，陈旧比缺失更有害
     # （消费方照着站点选版本会装到旧版）。此前靠"发版后记得重跑"，
     # 2026-10-18 实测从 06:04 起累积 6/24 条陈旧（concurrency v0.14.0、
@@ -752,6 +760,49 @@ try:
         check_breaking_index(live)
 except FileNotFoundError as e:
     issues.append(f"site: {e}")
+
+# ---------- AI skill 入口（skills/ 渲染产物 + 死键 + LAYERS 覆盖） ----------
+#
+# skills/oekit 是 AI 消费矩阵的选型入口（gen_skill.py 渲染）：产物与渲染器漂移
+# ⇒ AI 拿到过期判据，比没有更糟——所以同 BOM/矩阵表一样按「新鲜度门禁」管：
+# 重渲染比对，不一致即红（跑 make gen-skill 再生）。场景表 mods 是**手写死键面**
+# （模块改名/删仓后表里留死键，AI 会指向不存在的仓），LAYERS 必须恰好覆盖
+# MODULES（新增模块漏分层在这拦）。
+progress("阶段 4/7 AI skill 门禁")
+try:
+    import gen_skill  # noqa: E402  （渲染函数 + 手写数据；import 无副作用）
+except Exception as e:  # noqa: BLE001
+    issues.append(gate_unavailable("skills 渲染器", e))
+else:
+    try:
+        issues += [f"skills: {d}" for d in gen_skill.check_drift()]
+    except Exception as e:  # noqa: BLE001
+        issues.append(gate_unavailable("skills 渲染比对", e))
+    _bad_mods = sorted({m for _, _rows in gen_skill.SCENARIOS for r in _rows
+                        for m in r.get("mods", []) if m not in set(MODULES)})
+    check(not _bad_mods, f"skills: 场景表引用了矩阵不存在的模块（死键）：{_bad_mods}")
+    _layered = {m for _, _mods in gen_skill.LAYERS for m in _mods}
+    check(_layered == set(MODULES),
+          f"skills: LAYERS 与 MODULES 不一致：缺 {sorted(set(MODULES) - _layered)} "
+          f"多 {sorted(_layered - set(MODULES))}")
+    # pkg 速查死键：pkg 仓真实目录为第三只眼（仓不在旁则跳过——desc_count 同纪律）
+    try:
+        _pkg_dir = repo_dir("pkg", BASE)
+        _dead_pkgs = sorted({sub for _, _subs, _ in gen_skill.PKG_QUICK for sub in _subs
+                             if not (_pkg_dir / sub).is_dir()})
+        check(not _dead_pkgs, f"skills: pkg 速查表死键（目录不存在）：{_dead_pkgs}")
+    except FileNotFoundError:
+        pass
+    # 兄弟流程 skill（release/sweep 是手写件，无生成器兜底）——存在性与命名一致性
+    _mt_root = Path(__file__).resolve().parent.parent
+    for _s in ("oekit-release", "oekit-sweep"):
+        _p = _mt_root / "skills" / _s / "SKILL.md"
+        if not _p.exists():
+            check(False, f"skills/{_s}: 缺 SKILL.md")
+            continue
+        _fm = _p.read_text(encoding="utf-8").split("---", 2)
+        if len(_fm) < 3 or not re.search(rf"^name:\s*{_s}\s*$", _fm[1], re.M):
+            check(False, f"skills/{_s}: frontmatter name 与目录名不一致或缺 name（触发不了）")
 
 # 独立 oracle 放在站点块之外：它验的是「CHANGELOG 原文 ↔ 解析器输出」，
 # 与站点是否发布 versions.json 无关——站点文件缺失时，它照样要盯住解析器盲区。

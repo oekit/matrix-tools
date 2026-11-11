@@ -193,6 +193,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 | `scripts/gen_versions.py` | 生成 `versions.json`（最新 tag / 嵌套模块 / 依赖地板 / breaking 索引）供文档站与 llms.txt |
 | `scripts/gen_tables.py` | 重新生成各仓 README「矩阵总览」表 |
 | `scripts/gen_diagram.py` | 生成架构图（站点用） |
+| `scripts/gen_skill.py` | 渲染 **AI 入口 skill**（`skills/oekit/`：场景选型表 + 红线 + pkg 速查 + 模块索引）与站点《选型速查》指南（`--site`）——同一份数据两种产物；`--check` 比对漂移（audit 同款新鲜度门禁）。硬规则单源在 `scripts/rules.py`（2026-11-12 自 gen_agents BODY 提取，字节级验证） |
 | `scripts/gen_deps_doc.py` | 生成依赖文档 |
 | `scripts/refresh_versions.py` | 刷新 README 安装行版本号到最新 tag |
 | `scripts/refresh_agents_desc.py` | 各仓 AGENTS.md 首行 DESC 行同步到 `matrix.py` 的 DESC 真相源（audit 判红时按提示跑它） |
@@ -210,7 +211,7 @@ audit 门禁在 **PR 模式**下比对的是「**当前生成器的输出** vs *
 ### 自测（CI 跑，证明判据抓得住自己要防的东西）
 
 `align_floors_selftest.py` / `close_issue_selftest.py` / `dependabot_dirs_selftest.py` /
-`desc_count_selftest.py` / `gen_matrix_go_selftest.py` / `ghsafe_selftest.py` /
+`desc_count_selftest.py` / `gen_matrix_go_selftest.py` / `gen_skill_selftest.py` / `ghsafe_selftest.py` /
 `ledger_write_selftest.py` / `maintenance_check_selftest.py` / `release_train_selftest.py` /
 `release_train_requires_selftest.py` /
 `remote_reads_selftest.py` / `tag_cache_selftest.py` /
@@ -255,5 +256,5 @@ BOM（github.com/oekit/oekit）是验证过的推荐组合锚点，release_post 
 `go get oekit@latest` 一次拉齐。
 
 写入型生成器（gen_tables/refresh_versions/gen_changelog/gen_versions/gen_diagram/
-gen_matrix_go/regen_readme）一律带干净树守卫：工作树脏直接拒绝执行——生成器产物
+gen_matrix_go/gen_skill/regen_readme）一律带干净树守卫：工作树脏直接拒绝执行——生成器产物
 必须落在已提交基线上（checkout -f 冲产物事故的硬约束）。
