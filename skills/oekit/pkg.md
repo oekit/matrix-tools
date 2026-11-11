@@ -12,7 +12,7 @@
 | JSON 修复/宽松解析 | `jsonrepair` | UnmarshalLenient + ExtractObject/ExtractArray |
 | HTTP + JSON（零依赖） | `httpjson` | 带解析的轻量请求 |
 | 编码 | `encoding` | — |
-| 本地缓存 | `cache` / `cache/cachetest` | CacheAside/LocalCache/SingleFlightCache + 契约套件（Clock 注入） |
+| 本地缓存 | `cache` / `cache/cachetest` | CacheAside/LocalCache/SingleFlightCache + 契约套件（RunWithClock 假时钟；Comparable 仅 int/uint/string） |
 | 泛型容器 | `container` | Set/Ring/Queue/SafeMap/Slice（并发安全） |
 | 布隆过滤器 | `bloomx` | — |
 | ctx 取值/作用域 | `contextx` / `ctxscope` | — |

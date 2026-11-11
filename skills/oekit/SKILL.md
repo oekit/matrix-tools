@@ -51,8 +51,8 @@ description: >-
 
 | 我要做什么 | 用什么 | 组合提示 | 红线 |
 |---|---|---|---|
-| CRUD 缓存编排 | `data/cached`（多实例加 `data/twolevel`） | 三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量 | 模式是 Cache-Aside 不是双写；TTL 必须有限（失效失败唯一安全网）；返回值只读（改写开 CloneOnRead） |
-| 本地缓存 | `pkg/cache` | `LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock` | 命中返回零拷贝引用；`GetEx` 区分 miss 与值为 nil |
+| CRUD 缓存编排 | `data/cached`（多实例加 `data/twolevel`） | 三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量；仓储需实现 `gormx/crud.Repository[T, ID]` 接口（gormrepo 已实现） | 模式是 Cache-Aside 不是双写；TTL 必须有限（失效失败唯一安全网）；返回值只读（改写开 CloneOnRead） |
+| 本地缓存 | `pkg/cache` | `LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`（Comparable 契约仅 int/uint/string，struct 需自定义 Contract） | 命中返回零拷贝引用（改写开 CloneOnRead）；`GetEx` 在 LocalCache 上区分 miss 与显式 nil（装饰器走 Peek） |
 | 分布式缓存 | `data/rediscache` / `redisx` | CacheAside 的 Redis 实现，管道化 MGet | `redis.Nil` 是未命中不是错误 |
 | 分布式锁 / 信号量 | `redisx/distlock` 或 `etcdx/distlock` | Locker 接口同形可互换（换后端不改调用方）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位 | `Renew` 返回 false = 锁丢失；Semaphore 无 Redis fail-fast 不降级 |
 | 泛型 CRUD / 防丢更新 | `gormx/crud`（HTTP 层 `hertz/crudh`） | `NewBaseService[T, ID, Req]`；repo 实现 `TxRepository` 则 Update 自动事务 + FOR UPDATE 行锁读 | afterUpdate 钩子失败整体回滚 |
@@ -109,6 +109,8 @@ description: >-
 ## 深入入口
 
 - 模块索引（层分组 + 嵌套模块安装行）：同目录 `modules.md`
+- 本地多仓联编：各仓平级检出，用 `go.work` 的 `use` 列出**被 import 的 oekit 仓闭包**（含传递依赖）；
+  workspace 模式下 `-mod=mod` 不可用，`go build ./...` 需在模块目录内跑；按需单模块走默认 proxy `go get`
 - 下游/远端 AI：<https://oekit.github.io/llms.txt> · 站点选型指南：
   <https://oekit.github.io/guide/selection.html>
 - oekit 各仓本地检出为平级目录（matrix.py 支持三种布局探测）；找不到检出根时问用户

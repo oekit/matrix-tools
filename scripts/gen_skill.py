@@ -122,13 +122,13 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
     ("数据访问", [
         {"scene": "CRUD 缓存编排",
          "use": "`data/cached`（多实例加 `data/twolevel`）",
-         "tips": "三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量",
+         "tips": "三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量；仓储需实现 `gormx/crud.Repository[T, ID]` 接口（gormrepo 已实现）",
          "redline": "模式是 Cache-Aside 不是双写；TTL 必须有限（失效失败唯一安全网）；返回值只读（改写开 CloneOnRead）",
          "mods": ["data", "gormx"]},
         {"scene": "本地缓存",
          "use": "`pkg/cache`",
-         "tips": "`LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`",
-         "redline": "命中返回零拷贝引用；`GetEx` 区分 miss 与值为 nil",
+         "tips": "`LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`（Comparable 契约仅 int/uint/string，struct 需自定义 Contract）",
+         "redline": "命中返回零拷贝引用（改写开 CloneOnRead）；`GetEx` 在 LocalCache 上区分 miss 与显式 nil（装饰器走 Peek）",
          "mods": ["pkg"]},
         {"scene": "分布式缓存",
          "use": "`data/rediscache` / `redisx`",
@@ -239,7 +239,7 @@ PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("JSON 修复/宽松解析", ["jsonrepair"], "UnmarshalLenient + ExtractObject/ExtractArray"),
     ("HTTP + JSON（零依赖）", ["httpjson"], "带解析的轻量请求"),
     ("编码", ["encoding"], ""),
-    ("本地缓存", ["cache", "cache/cachetest"], "CacheAside/LocalCache/SingleFlightCache + 契约套件（Clock 注入）"),
+    ("本地缓存", ["cache", "cache/cachetest"], "CacheAside/LocalCache/SingleFlightCache + 契约套件（RunWithClock 假时钟；Comparable 仅 int/uint/string）"),
     ("泛型容器", ["container"], "Set/Ring/Queue/SafeMap/Slice（并发安全）"),
     ("布隆过滤器", ["bloomx"], ""),
     ("ctx 取值/作用域", ["contextx", "ctxscope"], ""),
@@ -356,8 +356,10 @@ def _root_module_table() -> str:
 def _nested_module_table() -> str:
     out = ["| 父仓 | 模块 | 一句话 | 安装 |", "|---|---|---|---|"]
     for n in NESTED_MODULES:
+        # n['module'] 已是完整 module 路径（github.com/oekit/<repo>/<path>）——
+        # 不得再拼 org 前缀（曾渲染出 github.com/oekit/github.com/oekit/... 双前缀，端到端测试抓到）
         out.append(f"| {n['repo']} | `{n['path']}` | {desc_head(n['desc'], 110)} | "
-                   f"`go get github.com/oekit/{n['module']}@latest` |")
+                   f"`go get {n['module']}@latest` |")
     return "\n".join(out)
 
 
@@ -421,6 +423,8 @@ def render_skill() -> str:
 ## 深入入口
 
 - 模块索引（层分组 + 嵌套模块安装行）：同目录 `modules.md`
+- 本地多仓联编：各仓平级检出，用 `go.work` 的 `use` 列出**被 import 的 oekit 仓闭包**（含传递依赖）；
+  workspace 模式下 `-mod=mod` 不可用，`go build ./...` 需在模块目录内跑；按需单模块走默认 proxy `go get`
 - 下游/远端 AI：<https://oekit.github.io/llms.txt> · 站点选型指南：
   <https://oekit.github.io/guide/selection.html>
 - oekit 各仓本地检出为平级目录（matrix.py 支持三种布局探测）；找不到检出根时问用户

@@ -41,6 +41,20 @@ for name, fn in (("skill", gen_skill.render_skill), ("rules", gen_skill.render_r
                  ("site", gen_skill.render_site)):
     expect(fn() == fn(), f"render_{name}() 两次渲染不一致（数据区含非确定成分）")
 
+# 1b) 嵌套模块安装行正确性：module 字段已是全路径，模板不得再拼 org 前缀
+# （端到端测试实测抓到 go get github.com/oekit/github.com/oekit/... 双前缀 → 照抄必 404）
+import re as _re
+sys.path.insert(0, str(HERE.parent))
+from matrix import NESTED_MODULES  # noqa: E402
+_mods_md = gen_skill.render_modules()
+for n in NESTED_MODULES:
+    want = f"go get {n['module']}@latest"
+    expect(want in _mods_md, f"modules.md 缺正确安装行：{want}")
+expect("github.com/oekit/github.com/oekit" not in _mods_md,
+       "modules.md 安装行含双 org 前缀（模板重复拼接）")
+expect("github.com/oekit/github.com/oekit" not in gen_skill.render_site(),
+       "站点选型指南安装行含双 org 前缀")
+
 # 2) 场景表死键
 mod_set = set(MODULES)
 bad = sorted({m for _, rows in gen_skill.SCENARIOS for r in rows for m in r.get("mods", [])
