@@ -10,7 +10,25 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 
 - fix: gen_matrix_go 幽灵/误打 tag 跳过——嵌套 tag 落点缺该模块 go.mod 时不再把整个 BOM 生成卡死（#294）：`tag_has_gomod` 判据 + `select_nested_tags` 抽取，幽灵 tag（#290 事故形态：`workflow:v0.2.12`、`tracing:redis/v0.2.19`——别仓的 tag 被打到本仓、落点根本没有那个模块）跳过并告警、不标记 seen、同子路径继续回退更老的真发版点；tag 未 fetch 到仍不下结论（#79「读不到≠没有」），#100「取不到地板绝不兜底」契约原样保留（跳过不是兜底：幽灵 tag 本来就不是有效数据点，选它才是把假数据写进产物）。selftest 新增 G1（纯幽灵子路径不进 BOM）/ G2（幽灵与真 tag 并存取真）/ G3（缺 tag 不下结论）+ 变异体「幽灵 tag 不跳过」精确转红 {G1,G2}（变异自证 6/6）
 
-关联问题单：matrix-tools#294。
+- fix: 同族误报一并锚定（#289）：`recover()`/`min()` 等无参函数名后缀空括号同样不判残缺（实测 4 tag 全假阳性），独立占位空括号（含半角带空白形态）照拦；与 #286 合并成同一判据（后视排除标识符/成员访问收尾），回归钉 I4e/I4e2/I4f/I4g 四向
+
+- fix: release_train apidiff 检查面 H 的 changelog_section 三参显式 None（#291）——两参调用判 BREAKING 标注必 TypeError，#270 的实现陷在「要么崩、要么 skip」两态，门禁从未产出过一次真实判定；自测 A8/A8b 钉调用形状
+
+- fix: BREAKING 标注判据统一到 gen_versions.has_breaking_annotation 单一判据源（#292：段标题/顶格粗体/条目加粗前缀三形态，case-insensitive）——此前 apidiff 裸 search 被「无破坏性变更」等无关字样假豁免、全小写 breaking 假红，三口径分裂
+
+- fix: land_generator_change 三重缺陷收口（#293）——advisory 键不再被 PRODUCTS 守卫拒（默认运行即崩的存量）、advisory 触发面取消 diff 过滤（矩阵事实输入变更无旁路）、check 模式 todo/advisory 任一非空统一非零退出（原退出码倒挂）
+
+- chore: 幽灵 tag/抢跑 tag 豁免登记进 HISTORIC_SNAPSHOT_EXEMPT（#290 事故四例 + nns#126-#129 收口）：`workflow:v0.2.12`、`tracing:redis/v0.2.19`、`data:v0.21.0`、`workflow:v0.10.1`、`nns:v0.6.0`——tag 快照不可变走名单口径，各条带事故/收口注释
+
+- chore: workflow v0.2.12 发布序列倒挂登记进 version_line_known.json（#290 旁支：误贴 tag 被接受为最新，版本行判据不判倒挂）
+
+- fix(matrix): DESC 真相源全口径 31 合 1（pkg 的 config/tarx/resumable 收口段 + k8s 失权语义回填）——README/AGENTS 文案统一由 gen_tables/refresh_agents_desc 派生，doc_wave 精简版措辞废弃
+
+- fix: gen_matrix_go classify_check 消息取判定行（本 PR 顺手修）——audit 拼 stdout+stderr 后取最后一行被 stderr 过程告警顶掉，真因「BOM 陈旧」被吞、排查方向被指去 #290；过滤 `[gen_matrix_go]` 告警 + 剥行首判定符，A7 补回归
+
+- ci: issue_sweep 自测接线进 audit.yml selftest job（#260 接线门禁——吸收 #278 工具面时漏接）
+
+关联问题单：matrix-tools#286 #289 #290 #291 #292 #293 #294。
 
 ## [v0.2.6] — 2026-11-10
 
