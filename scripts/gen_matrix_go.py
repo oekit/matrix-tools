@@ -69,8 +69,18 @@ def classify_check(rc: int, out: str) -> tuple[str, str]:
 
     kind ∈ {"ok", "stale", "unreadable"}；message 是可直接进审计报告的一句话。
     契约的**生产方**是本脚本（子进程），消费方是 audit.py —— 口径只此一处。
+
+    ★ message 取**判定行**，不取「最后一行」（实测 2026-11-11）：audit 拼接
+    stdout+stderr 后，stderr 的过程告警（`[gen_matrix_go] ⚠ 跳过幽灵 tag`）
+    排在 stdout 判定行之后 ⇒ 旧写法把告警顶成漂移消息——真因「BOM 陈旧」
+    被吞，报告把排查方向指去告警里的 issue 而不是「重生成 BOM」。过程告警
+    归提示，判定行才是一句话结论；行首的 ❌/✓/⚠️ 判定符也剥掉（审计报告
+    自己会加 ❌，不剥就是「❌ ❌ …」双重判定符）。
     """
-    last = out.splitlines()[-1].strip() if out.strip() else ""
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    lines = [l for l in lines if not l.startswith("[gen_matrix_go]")]
+    last = lines[-1] if lines else ""
+    last = re.sub(r"^[❌✓⚠️]+\s*", "", last)
     if rc == EXIT_OK:
         return "ok", last
     if rc == EXIT_UNREADABLE:

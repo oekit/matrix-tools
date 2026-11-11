@@ -206,7 +206,17 @@ def case_A7_classify_check_kinds(gmg=gen_matrix_go) -> None:
     ok2 = kind == "stale" and "BOM 陈旧" in msg
     kind, msg = gmg.classify_check(gmg.EXIT_UNREADABLE, "读不到远端 tag ⇒ 无法核对 BOM 新鲜度")
     ok3 = kind == "unreadable" and "未核对" in msg and "判不了" in msg
-    _record("A7", ok1 and ok2 and ok3, f"退出码分类不对：{ok1}/{ok2}/{ok3}")
+    # 消息取**判定行**不取最后一行（实测 2026-11-11）：audit 拼 stdout+stderr，
+    # stderr 的幽灵 tag 过程告警排在判定行后 ⇒ 旧写法把告警顶成漂移消息，
+    # 真因「BOM 陈旧：go.mod, matrix.go」被吞、排查方向被指去 #290。
+    kind, msg = gmg.classify_check(
+        gmg.EXIT_STALE,
+        "❌ oekit BOM 陈旧（跑 gen_matrix_go.py 重生成并打新 tag）：go.mod, matrix.go\n"
+        "[gen_matrix_go] ⚠ 跳过 tracing:redis/v0.2.19——落点没有 redis/go.mod（误打/幽灵 tag，"
+        "matrix-tools#290 口径），继续看同子路径更老的 tag")
+    ok4 = (kind == "stale" and "BOM 陈旧" in msg and "跳过" not in msg
+           and not msg.startswith("❌"))  # 判定符剥掉：报告自己加 ❌
+    _record("A7", ok1 and ok2 and ok3 and ok4, f"退出码分类不对：{ok1}/{ok2}/{ok3}/{ok4}")
 
 
 # ── 改造B：嵌套模块的 Go 地板 ──────────────────────────────────────────────
