@@ -136,10 +136,10 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "redline": "`redis.Nil` 是未命中不是错误",
          "mods": ["data", "redisx"]},
         {"scene": "分布式锁 / 信号量",
-         "use": "`redisx/distlock` 或 `etcdx/distlock`",
-         "tips": "Locker 接口同形可互换（换后端不改调用方）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位",
+         "use": "`redisx/distlock` 或 `etcdx/distlock`（接口契约单源 `pkg/distlock`）",
+         "tips": "Locker/哨兵集/WithLock 定义在 `pkg/distlock` 一次（后端中立，errors.Is 跨包正确分类）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位",
          "redline": "`Renew` 返回 false = 锁丢失；Semaphore 无 Redis fail-fast 不降级",
-         "mods": ["redisx", "etcdx"]},
+         "mods": ["redisx", "etcdx", "pkg"]},
         {"scene": "泛型 CRUD / 防丢更新",
          "use": "`gormx/crud`（HTTP 层 `hertz/crudh`）",
          "tips": "`NewBaseService[T, ID, Req]`；repo 实现 `TxRepository` 则 Update 自动事务 + FOR UPDATE 行锁读",
@@ -255,6 +255,7 @@ PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("断点续传/分片上传", ["resumable"], "会话状态机 + ChunkStore 接口"),
     ("子进程治理", ["procx"], "内存上限 cgroup v2；与 shellx 配套"),
     ("零依赖静态配置", ["config"], "yaml 子集 + env 覆盖 + Redact"),
+    ("分布式锁契约（后端中立）", ["distlock"], "Locker/哨兵集/WithLock 单源——redisx·etcdx 后端消费（etcdx#123 治本）"),
     ("singleflight 契约测试", ["singleflighttest"], "共享契约套件"),
 ]
 

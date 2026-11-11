@@ -54,7 +54,7 @@ description: >-
 | CRUD 缓存编排 | `data/cached`（多实例加 `data/twolevel`） | 三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量；仓储需实现 `gormx/crud.Repository[T, ID]` 接口（gormrepo 已实现） | 模式是 Cache-Aside 不是双写；TTL 必须有限（失效失败唯一安全网）；返回值只读（改写开 CloneOnRead） |
 | 本地缓存 | `pkg/cache` | `LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`（Comparable 契约仅 int/uint/string，struct 需自定义 Contract） | 命中返回零拷贝引用（改写开 CloneOnRead）；`GetEx` 在 LocalCache 上区分 miss 与显式 nil（装饰器走 Peek） |
 | 分布式缓存 | `data/rediscache` / `redisx` | CacheAside 的 Redis 实现，管道化 MGet | `redis.Nil` 是未命中不是错误 |
-| 分布式锁 / 信号量 | `redisx/distlock` 或 `etcdx/distlock` | Locker 接口同形可互换（换后端不改调用方）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位 | `Renew` 返回 false = 锁丢失；Semaphore 无 Redis fail-fast 不降级 |
+| 分布式锁 / 信号量 | `redisx/distlock` 或 `etcdx/distlock`（接口契约单源 `pkg/distlock`） | Locker/哨兵集/WithLock 定义在 `pkg/distlock` 一次（后端中立，errors.Is 跨包正确分类）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位 | `Renew` 返回 false = 锁丢失；Semaphore 无 Redis fail-fast 不降级 |
 | 泛型 CRUD / 防丢更新 | `gormx/crud`（HTTP 层 `hertz/crudh`） | `NewBaseService[T, ID, Req]`；repo 实现 `TxRepository` 则 Update 自动事务 + FOR UPDATE 行锁读 | afterUpdate 钩子失败整体回滚 |
 | 分片定时任务 | `timertask`（分布式加嵌套 `timertask/redis`） | 单机 `Scheduler`（cron 表达式复用 pkg/timex/cron，FakeClock 确定性断言）；分布式 RedisBackend + 可靠投递 | 可靠投递要接入生命周期才真正生效 |
 

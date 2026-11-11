@@ -28,4 +28,5 @@
 | 断点续传/分片上传 | `resumable` | 会话状态机 + ChunkStore 接口 |
 | 子进程治理 | `procx` | 内存上限 cgroup v2；与 shellx 配套 |
 | 零依赖静态配置 | `config` | yaml 子集 + env 覆盖 + Redact |
+| 分布式锁契约（后端中立） | `distlock` | Locker/哨兵集/WithLock 单源——redisx·etcdx 后端消费（etcdx#123 治本） |
 | singleflight 契约测试 | `singleflighttest` | 共享契约套件 |
