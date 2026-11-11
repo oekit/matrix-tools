@@ -69,8 +69,18 @@ def classify_check(rc: int, out: str) -> tuple[str, str]:
 
     kind ∈ {"ok", "stale", "unreadable"}；message 是可直接进审计报告的一句话。
     契约的**生产方**是本脚本（子进程），消费方是 audit.py —— 口径只此一处。
+
+    ★ message 取**判定行**，不取「最后一行」（实测 2026-11-11）：audit 拼接
+    stdout+stderr 后，stderr 的过程告警（`[gen_matrix_go] ⚠ 跳过幽灵 tag`）
+    排在 stdout 判定行之后 ⇒ 旧写法把告警顶成漂移消息——真因「BOM 陈旧」
+    被吞，报告把排查方向指去告警里的 issue 而不是「重生成 BOM」。过程告警
+    归提示，判定行才是一句话结论；行首的 ❌/✓/⚠️ 判定符也剥掉（审计报告
+    自己会加 ❌，不剥就是「❌ ❌ …」双重判定符）。
     """
-    last = out.splitlines()[-1].strip() if out.strip() else ""
+    lines = [l.strip() for l in out.splitlines() if l.strip()]
+    lines = [l for l in lines if not l.startswith("[gen_matrix_go]")]
+    last = lines[-1] if lines else ""
+    last = re.sub(r"^[❌✓⚠️]+\s*", "", last)
     if rc == EXIT_OK:
         return "ok", last
     if rc == EXIT_UNREADABLE:
@@ -162,6 +172,56 @@ def go_floor(repo_dir_path: str, tag: str) -> str:
             f"{repo_dir_path}: {tag} 的 go.mod 里没有 go 指令——不兜底默认地板"
             f"（兜底值会写进 BOM 产物，与真实地板无法分辨，见 matrix-tools#100）")
     return m.group(1)
+
+
+def tag_has_gomod(repo_dir_path: str, tag: str) -> bool:
+    """该 tag 落点是否存在**本模块**的 go.mod（幽灵/误打 tag 判据，matrix-tools#294）。
+
+    tag 名声明了 `<sub>/vX.Y.Z`，落点提交里却没有 `<sub>/go.mod` ⇒ 这个 tag
+    不是该模块的发版点——连续发版命令 cd 断链、在错误仓目录打了别仓的 tag
+    （实测 2026-11-11 两枚：`workflow:v0.2.12`、`tracing:redis/v0.2.19`，
+    事故记录 matrix-tools#290）。这类 tag **跳过并告警**：跳过不是「兜底」
+    ——#100 禁的是往产物里写**假地板**；幽灵 tag 本来就不是有效数据点，
+    选它才是把假数据写进产物。
+
+    tag 本身没 fetch 到时**不下结论**（返回 True）：「读不到」≠「不存在」
+    （matrix-tools#79 口径），仍由 ensure_local_tag / go_floor 走既有报错。
+    """
+    subpath = tag.rsplit("/", 1)[0] if "/" in tag else ""
+    rel = f"{subpath}/go.mod" if subpath else "go.mod"
+    have = subprocess.run(["git", "-C", repo_dir_path, "rev-parse", "--verify", "--quiet",
+                           f"refs/tags/{tag}"], capture_output=True, text=True)
+    if have.returncode != 0:
+        return True
+    r = subprocess.run(["git", "-C", repo_dir_path, "cat-file", "-e", f"{tag}:{rel}"],
+                       capture_output=True, text=True)
+    return r.returncode == 0
+
+
+def select_nested_tags(repo: str, repo_dir_path: str, tags: list[str]) -> list[tuple[str, str]]:
+    """[(子路径, tag)]：每个嵌套子路径选**最新的有效** tag（tags 为降序）。
+
+    幽灵/误打 tag（`tag_has_gomod` 为 False，matrix-tools#294）跳过并告警，
+    **不标记 seen** ⇒ 同子路径继续看更老的 tag（最新一个是幽灵时，
+    不放弃整个子路径——更老的真发版点仍然有效）。SKIP_NESTED（已废弃
+    嵌套模块，tag 还在、模块不再发版）语义不变。
+    """
+    seen: set[str] = set()
+    picked: list[tuple[str, str]] = []
+    for tag in tags:
+        m = NESTED_ONLY_TAGS.match(tag)
+        if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
+            continue
+        sub = m.group(1)
+        ensure_local_tag(repo_dir_path, tag)
+        if not tag_has_gomod(repo_dir_path, tag):
+            print(f"[gen_matrix_go] ⚠ 跳过 {repo}:{tag}——落点没有 {sub}/go.mod"
+                  f"（误打/幽灵 tag，matrix-tools#290 口径），继续看同子路径更老的 tag",
+                  file=sys.stderr)
+            continue
+        seen.add(sub)
+        picked.append((sub, tag))
+    return picked
 
 
 def _ver_key(v: str) -> tuple[int, int, int]:
@@ -308,15 +368,8 @@ def collect() -> list[dict]:
         out.append({"repo": repo, "path": f"github.com/{ORG}/{repo}", "version": ver,
                     "go": go_floor(d, ver), "nested": False,
                     "breaking": breaking_for(breaking_by_module, "", ver)})
-        seen: set[str] = set()
         nested: list[dict] = []
-        for tag in tags:
-            m = NESTED_ONLY_TAGS.match(tag)
-            if not m or m.group(1) in seen or (repo, m.group(1)) in SKIP_NESTED:
-                continue
-            seen.add(m.group(1))
-            ensure_local_tag(d, tag)
-            sub = m.group(1)
+        for sub, tag in select_nested_tags(repo, d, tags):
             nested.append({"repo": repo, "path": f"github.com/{ORG}/{repo}/{sub}",
                            "version": tag.rsplit("/", 1)[1], "go": go_floor(d, tag), "nested": True,
                            "breaking": breaking_for(breaking_by_module, sub,

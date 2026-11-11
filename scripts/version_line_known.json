@@ -37,6 +37,11 @@
       "repo": "middleware",
       "tag": "v0.5.1",
       "reason": "2026-10-17 16:52 发布，晚于同线 v0.6.0（16:08）44 分钟；自带 registry v0.3.1 地板（该版本仍有 registry/registry），现路径可安装可编译。处置：middleware CHANGELOG v0.5.1 节声明不在主线版本线上，不删 tag。"
+    },
+    {
+      "repo": "workflow",
+      "tag": "v0.2.12",
+      "reason": "2026-11-10 误打的幽灵 tag：发版命令 cd 断链在错误仓目录打 tag，本意是 etcdx v0.2.12（同一发版序列、同一根因的另一枚是 tracing:redis/v0.2.19，事实详见 matrix-tools#290）。落点是 workflow 的 v0.4.0 提交（4266f6d），时间戳晚于同线 v0.4.0 ⇒ 版本线判据上呈「后发更低」。tag 保护 ruleset protect-release-tags 禁删禁改（重推 = 已缓存消费方集体中毒，oekit/.github#5）⇒ 不删 tag、不建 Release。处置：matrix-tools#290 记录事故事实；gen_matrix_go 按幽灵 tag 口径跳过该 tag（matrix-tools#295）；本条登记消除版本线判红，版本线以 v0.4.0 为准。"
     }
   ]
 }

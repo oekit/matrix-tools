@@ -67,6 +67,29 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "gormx:v0.11.5",
     "middleware:v0.13.14",
     "data:v0.20.5",
+    # 2026-11-11 nns#126-#129 收口：v0.6.0 tag 打在补段前（fixes 经并发会话
+    # PR#130 合入即 tag，CHANGELOG 段随后经 #132 定版进 main）——段已补 main，
+    # 快照不可变，按名单口径豁免。
+    "nns:v0.6.0",
+    # 2026-11-11 事故（matrix-tools#290）：workflow 幽灵 tag v0.2.12——批量发版
+    # 连续命令未重新 cd 验目录，etcdx 的 tag 误打在 workflow 仓（内容=v0.4.0
+    # 提交，快照顶部 [v0.4.0] 段、无 [v0.2.12] 段），protect-release-tags 禁删
+    # 永久留存。显式钉 v0.2.12 的消费方会拿到 v0.4.0 内容（@latest 不受影响）。
+    "workflow:v0.2.12",
+    # 2026-11-11 同因第二例（matrix-tools#290 附记）：tracing 幽灵 tag
+    # redis/v0.2.19——timertask 的嵌套 tag 误打在 tracing 仓（批量打 tag
+    # 连续命令漏 cd），protect-release-tags 禁删；tracing 无 redis 嵌套
+    # 模块，go get 该路径直接失败，纯 tag 空间噪声。
+    "tracing:redis/v0.2.19",
+    # 2026-11-11 nns v0.6.0 同款第三例：data:v0.21.0 tag 打在补段 PR 合入前
+    # （merge 被 pending check 拒后仍执行了 tag——链式命令未对拒合止步），
+    # 段随后经 #173 定版进 main；内容含 pkg#355 改名（代码先经 #171 落地）。
+    "data:v0.21.0",
+    # 2026-11-11 同因第四例（matrix-tools#290 附记）：workflow 幽灵 tag
+    # v0.10.1——network 的 tag 误打进 workflow 仓（链式命令 cwd 漂移未验目录，
+    # 第二次栽进同一仓），protect-release-tags 禁删；内容 = workflow main HEAD
+    # （v0.4.0 线），@latest 不受影响。
+    "workflow:v0.10.1",
     # 2026-11-08 bootstrap#115 收口：nacos/obs 历史嵌套 tag 的段在 tag 发布后补齐
     # （快照不可变）——15 个，段已按「tag 切段取 conventional commit」重构进 main。
     "bootstrap:nacos/v0.2.0",
@@ -233,7 +256,15 @@ def repair_template(repo: str, tag: str, prev: str | None, read_fn) -> str:
 # 半成品文案的四种残缺形态（#259 实测的三条 Release 正文全中）：
 #   ① 空括号 `（）`／`( )`；② 括号里只有路径前缀、没有版本号 `（hertzlog/）`；
 #   ③ 「新的地板」后缺分隔符 `地板v0.13.2`；④ 「新的地板：vX」处不是本版号。
-_LINT_EMPTY_PAREN_RE = re.compile(r"（[\s\u3000]*）|\([\s]*\)")
+# ①的空括号判据只锚定「占位残留」形态（matrix-tools#286 #289 实测误报）：
+# 全宽空括号无条件命中；ASCII 空括号仅在「前面不是标识符/成员访问收尾」
+# 或「括号内有空白」时命中——`Err()`/`Strict()`/`recover()`/`min()`/`nc.Close()`
+# 这类 Go 方法名/无参函数名后缀空括号是合法行文（gormx v0.11.12 /
+# network v0.9.2 两段被误判、#289 实测 4 tag 全假阳性），不许判残缺；
+# 成员访问/索引/调用链收尾（`.()`/`]()`/`)()`）同理合法。ASCII 带空白
+# 占位 `( )` 无条件命中（模板占位残留形态，散文无合法用途）。
+_LINT_EMPTY_PAREN_RE = re.compile(
+    r"（[\s\u3000]*）|(?<![\w.)\]])\(\s*\)|\(\s+\)")
 _LINT_PREFIX_ONLY_RE = re.compile(r"[（(][A-Za-z0-9._\-]+/[\s]*[）)]")
 _LINT_FLOOR_NO_SEP_RE = re.compile(r"新的地板\s*v\d")
 _LINT_FLOOR_VER_RE = re.compile(r"新的地板\s*[:：]\s*(v\d+\.\d+\.\d+)")

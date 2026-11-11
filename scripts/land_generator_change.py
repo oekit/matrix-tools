@@ -93,14 +93,6 @@ ADVISORY = {
 }
 
 
-def _changed_generators(here: Path, branch: str) -> set[str]:
-    """本分支相对 main 改了哪些生成器脚本（文件名集合）。"""
-    r = subprocess.run(
-        ["git", "-C", str(here), "diff", "--name-only", "origin/main...HEAD", "--", "scripts/"],
-        capture_output=True, text=True)
-    return {Path(line).name for line in r.stdout.splitlines() if line.strip()}
-
-
 def sh(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess:
     r = subprocess.run(args, cwd=cwd, capture_output=True, text=True)
     if check and r.returncode != 0:
@@ -224,12 +216,13 @@ def main() -> int:
     for k in keys:
         if k not in all_keys:
             raise SystemExit(f"未知产物 {k}（可选：{', '.join(all_keys)}）")
-    changed_gens = _changed_generators(here, branch)
     todo: list[tuple[str, str, list[str]]] = []
     advisory_todo: list[str] = []
     for key in keys:
+        if key not in all_keys:  # #293①：advisory 键合法（--only help 明列五键），不许被 PRODUCTS 守卫拒
+            raise SystemExit(f"未知产物 {key}（可选：{', '.join(all_keys)}）")
         if key not in PRODUCTS:
-            raise SystemExit(f"未知产物 {key}（可选：{', '.join(PRODUCTS)}）")
+            continue  # advisory 键走下方 ADVISORY 循环
         script, repo, files, _title, _body = PRODUCTS[key]
         d = repo_dir(repo, BASE)
         if is_dirty(d):
@@ -251,8 +244,11 @@ def main() -> int:
     # refresh_agents_desc ⇒ 必须先用**新**生成器把 N 仓产物落完（plan 归零）
     # 才能「直接合入生成器 PR」——否则就是本单实测的 24 仓瞬间全漂移。
     for key, (gen, mode) in ADVISORY.items():
-        if key not in keys or gen not in changed_gens:
+        if key not in keys:
             continue
+        # #293②：不再按「分支 diff 里的生成器文件名」过滤触发——matrix.py 等
+        # 事实输入变更同样产出漂移（947f182 纯 DESC 编辑零提示实证），且 plan
+        # 归零本就是状态判据（注释模型）：统一跑，靠归零判定，触发面无旁路。
         r = subprocess.run(
             [sys.executable, str(here / "scripts" / "doc_wave.py"), f"--{mode}", "--plan"],
             capture_output=True, text=True, timeout=600)
@@ -285,7 +281,7 @@ def main() -> int:
         print("\n（只检查模式；加 --apply 开 PR）")
         print("⚠ 关键：产物必须由**新**生成器产出——上面跑的就是新生成器，"
               "不要用旧生成器重跑后再落地（那样门禁会报「多出」，见 matrix-tools#34）")
-        return 0
+        return 1  # #293③：check 模式 todo/advisory_todo 任一非空统一非零（此前 todo 非空反而 0，退出码倒挂）
 
     prs = []
     for key, repo, _ch in todo:
