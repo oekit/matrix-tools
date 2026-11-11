@@ -4,6 +4,13 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.8] — 2026-11-12
+
+- feat: AI 入口 skill 体系（PR #302）——`skills/oekit` 场景选型表（34 场景 × 组合提示 × 红线：限流进程内 vs 分布式、锁 redisx/etcdx 同形互换、配置 core/pkg 分工等跨模块判据单点化）+ `skills/oekit-release`、`oekit-sweep` 流程 skill（release_train / issue_sweep 程序化教训提炼）+ Makefile `install-skills` 用户级软链
+- feat: `scripts/rules.py` 硬规则速览单源——自 gen_agents BODY 字节级提取（旧 BODY 逐字节比对相等），gen_agents 冷启动模板与 skill 红线同源；存量仓 AGENTS.md 不受影响（gen_agents 仅冷启动）
+- feat: `scripts/gen_skill.py` 渲染器——skill 四件（SKILL/rules/modules/pkg）+ `--site` 站点《选型速查》指南同源渲染（site#196）+ `--check` 漂移比对 + 写入型生成器干净树守卫；`gen_skill_selftest.py` 接线 audit.yml
+- feat: audit 新门禁六项——渲染新鲜度（重渲染比对）/ 场景表 mods 死键 / LAYERS 恰好覆盖 MODULES / pkg 速查目录死键 / 兄弟 skill frontmatter 一致性 / 站点 selection.md 新鲜度；站点指南清单补 `selection`
+
 ## [v0.2.7] — 2026-11-11
 
 - fix: changelog 文案 lint 空括号判据锚定占位形态——Go 方法名后缀 `Err()`/`Strict()`/`Close()` 空括号不再误报（#286）
