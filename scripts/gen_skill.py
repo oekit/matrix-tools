@@ -24,12 +24,20 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from matrix import DESC, MODULES, NESTED_MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
 from rules import HARD_RULES_MD  # noqa: E402
+
+# 「N 合 1」的 N **从 DESC 真相源派生**：这个数字曾经被硬编码在本文件三处，
+# pkg 新增子包后（31→33）三处一起过期、skill 与站点标题口径漂移（#117 同款）。
+_PKG_N = int(re.search(r"微工具集\s*(\d+)\s*合\s*1", DESC["pkg"]).group(1))
+PKG_CLAIM = f"{_PKG_N} 合 1"
+# 站点里指向该标题的锚点同样随 N 变（渲染器把空格转 -、去掉全半角标点）
+PKG_ANCHOR = f"pkg-子包速查{_PKG_N}-合-1零第三方依赖"
 
 HERE = pathlib.Path(__file__).resolve().parent
 MT_ROOT = HERE.parent
@@ -228,7 +236,7 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
     ]),
 ]
 
-# pkg 子包速查（31 合 1 的「想做什么 → 用哪个子包」）。
+# pkg 子包速查（PKG_CLAIM 的「想做什么 → 用哪个子包」；N 由 DESC 派生）。
 # 形状 (想做什么, [子包路径], 一句话)——audit 拿 pkg 仓真实目录校验死键（仓不在旁则跳过）
 PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("错误包装/业务错误", ["errors"], "nil-safe Wrap/Cause + BizError 双码（服务形态唯一载体）"),
@@ -256,6 +264,8 @@ PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("子进程治理", ["procx"], "内存上限 cgroup v2；与 shellx 配套"),
     ("零依赖静态配置", ["config"], "yaml 子集 + env 覆盖 + Redact"),
     ("singleflight 契约测试", ["singleflighttest"], "共享契约套件"),
+    ("分布式锁契约（后端中立）", ["distlock"], "Locker 接口 + 哨兵错误集 + WithLock（WithoutCancel 释放）；redisx/etcdx 消费同一份"),
+    ("反射深拷贝 / 类型解析", ["reflectx"], "DeepCopyValue 指针环防护；config.SetFromString 字符串按 reflect.Kind 落位"),
 ]
 
 # SKILL.md 红线精华（完整版在 rules.md；前五条判据必须能在 HARD_RULES_MD 里找到出处）
@@ -430,7 +440,7 @@ def render_skill() -> str:
 
 def render_pkg() -> str:
     return (
-        "# pkg 子包速查（31 合 1，零第三方依赖）\n\n"
+        f"# pkg 子包速查（{PKG_CLAIM}，零第三方依赖）\n\n"
         "> 由 gen_skill.py 渲染——修订改 gen_skill.py 的 PKG_QUICK；"
         "audit 会拿 pkg 仓真实目录校验死键。API 以 `go doc github.com/oekit/pkg/<sub>` 为准。\n\n"
         f"{_pkg_table()}\n"
@@ -448,7 +458,7 @@ title: 选型速查（场景 → 包）
 
 ## 使用流
 
-1. 下面场景表定位模块/子包；基础工具需求查 [pkg 子包速查](#pkg-子包速查31-合-1零第三方依赖)
+1. 下面场景表定位模块/子包；基础工具需求查 [pkg 子包速查](#{PKG_ANCHOR})
 2. `go doc github.com/oekit/<pkg>` 或读包 `doc.go` 拿准签名
 3. 对照[硬规则](#硬规则速览全矩阵适用)
 4. 深入：该仓 AGENTS.md / 对应指南（[日志](/guide/logging) · [错误](/guide/errors) ·
@@ -459,7 +469,7 @@ title: 选型速查（场景 → 包）
 
 {_scenario_tables()}
 
-## pkg 子包速查（31 合 1，零第三方依赖）
+## pkg 子包速查（{PKG_CLAIM}，零第三方依赖）
 
 {_pkg_table()}
 
