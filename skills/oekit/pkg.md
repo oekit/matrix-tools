@@ -1,4 +1,4 @@
-# pkg 子包速查（31 合 1，零第三方依赖）
+# pkg 子包速查（33 合 1，零第三方依赖）
 
 > 由 gen_skill.py 渲染——修订改 gen_skill.py 的 PKG_QUICK；audit 会拿 pkg 仓真实目录校验死键。API 以 `go doc github.com/oekit/pkg/<sub>` 为准。
 
@@ -29,3 +29,5 @@
 | 子进程治理 | `procx` | 内存上限 cgroup v2；与 shellx 配套 |
 | 零依赖静态配置 | `config` | yaml 子集 + env 覆盖 + Redact |
 | singleflight 契约测试 | `singleflighttest` | 共享契约套件 |
+| 分布式锁契约（后端中立） | `distlock` | Locker 接口 + 哨兵错误集 + WithLock（WithoutCancel 释放）；redisx/etcdx 消费同一份 |
+| 反射深拷贝 / 类型解析 | `reflectx` | DeepCopyValue 指针环防护；config.SetFromString 字符串按 reflect.Kind 落位 |
