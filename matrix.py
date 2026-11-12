@@ -95,15 +95,29 @@ STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
 # 裁决原文：「我接受有些包依赖高版本的 golang。基础包需要依赖低版本的 go1.24，
 # 业务包依赖 1.24 / 1.25 / 1.26 都行。」
 #
+# ⚠️ 2026-11-12 基础层上限 1.24 → 1.26（裁决的地板值一侧被已发布产物推翻，
+# 上限放宽；「成对」与业务层档位不变）——依据三条既成事实：
+#   1. **已发布 tag 不可重推**：pkg v0.45.0 / v0.46.0（11-12 发布）的 go.mod
+#      声明 `go 1.26.0`（v0.44.0 才是 1.24.0）；release_train 检查 a 明写
+#      重推 tag = 代理/sumdb 集体中毒（.github#9）⇒ 想回到 1.24 只能弃用
+#      已发布的 pkg ≥ v0.45.0；
+#   2. **传染已经完成**：全矩阵 25 仓 go 指令现均为 1.26.0、CI 成对 1.26
+#      （基础层 6 仓 11-12 主动抬升：concurrency 039018d / logx fdfff0f /
+#      kitx 580f319 / metrics 530cdc9 / core 4d2f6ed / pkg 741472e，提交信息
+#      逐字写「Go 地板 1.24.0 → 1.26.0」）；
+#   3. **地板已对齐 v0.46.0**：下游 require 指向的 pkg 就是 go 1.26 的 tag，
+#      基础层回 1.24 只会让 go.mod 声明与实际最低支持版本撒谎（go 命令对
+#      「主模块 go 1.24 + 依赖 go 1.26」会 GOTOOLCHAIN 自动切 1.26 构建）。
+#
 # 因此门禁**只放宽「地板值」，不放宽「成对」**：
-#   · 基础层：go.mod 的 go 指令必须 ≤ 1.24（基础包是所有服务的地基，
-#     地板抬高会传染到全部下游）
+#   · 基础层：go.mod 的 go 指令必须 ≤ 1.26（上限仍是防「地板无界爬升」的
+#     护栏；1.24 的历史使命——基础包依赖低版本 go——已随 pkg v0.45.0 终结）
 #   · tracing：豁免——go.opentelemetry.io/otel v1.47.0 的 go.mod 明写 go 1.26.0，
 #     属「接受高版本依赖」那一类，门禁不得报它
 #   · 业务层：1.24 / 1.25 / 1.26 均可，不报
 #   · **全矩阵通用**：go.mod 的 go 指令与 CI 的 go-version 必须成对——
 #     CI 用 1.26 构建、go.mod 声明 1.24，等于最低支持版本从来没被验证过
-GO_FLOOR_BASE_MAX = (1, 24)
+GO_FLOOR_BASE_MAX = (1, 26)
 GO_FLOOR_BUSINESS_OK = {(1, 24), (1, 25), (1, 26)}
 GO_FLOOR_BASE_LAYER = {"pkg", "concurrency", "logx", "core", "kitx", "metrics"}
 GO_FLOOR_EXEMPT = {"tracing"}
