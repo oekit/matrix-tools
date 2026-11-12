@@ -450,6 +450,10 @@ def check_go_floor_pairing(repo: str, d):
     """Go 地板三层口径 + go.mod/CI 成对一致。
 
     负责人裁决（#33）：「基础包需要依赖低版本的 go1.24，业务包依赖 1.24 / 1.25 / 1.26 都行。」
+    2026-11-12 修订（#307）：基础层上限随五波次现代化的既成事实抬至 1.26——
+    上限值与修订说明单源在 matrix.py 的 GO_FLOOR_BASE_MAX 裁决注释里，
+    本函数的判红文案从常量推导（不再写死 1.24），自测见
+    audit_go_floor_pairing_selftest.py。
     门禁**只放宽「地板值」，不放宽「成对」**——CI 必须用 go.mod 声明的版本构建：
     CI 用 1.26 构建、go.mod 声明 1.24，等于**最低支持版本从来没被验证过**，
     下游在 1.24 上装这个包可能到 CI 才第一次发现构建失败。
@@ -469,7 +473,8 @@ def check_go_floor_pairing(repo: str, d):
         return
     if repo in GO_FLOOR_BASE_LAYER:
         if gm > GO_FLOOR_BASE_MAX:
-            check(False, f"{repo}: 基础层 Go 地板 {gm[0]}.{gm[1]} 高于 1.24"
+            check(False, f"{repo}: 基础层 Go 地板 {gm[0]}.{gm[1]} 高于 "
+                         f"{GO_FLOOR_BASE_MAX[0]}.{GO_FLOOR_BASE_MAX[1]}"
                          f"（基础包地板抬高会传染全部下游）")
     elif gm not in GO_FLOOR_BUSINESS_OK:
         check(False, f"{repo}: 业务层 Go 地板 {gm[0]}.{gm[1]} 不在允许档位 "

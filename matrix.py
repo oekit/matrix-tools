@@ -90,20 +90,24 @@ ORG = "oekit"
 SITE_REPO = "oekit.github.io"
 STALE_RE = re.compile(r"yi-nology|openekit|github\.com/oekit/ekit-")
 
-# ---------- Go 版本地板三层口径（matrix-tools#33，负责人裁决） ----------
+# ---------- Go 版本地板三层口径（matrix-tools#33，负责人裁决；2026-11-12 修订） ----------
 #
-# 裁决原文：「我接受有些包依赖高版本的 golang。基础包需要依赖低版本的 go1.24，
+# 裁决原文（#33）：「我接受有些包依赖高版本的 golang。基础包需要依赖低版本的 go1.24，
 # 业务包依赖 1.24 / 1.25 / 1.26 都行。」
 #
-# 因此门禁**只放宽「地板值」，不放宽「成对」**：
-#   · 基础层：go.mod 的 go 指令必须 ≤ 1.24（基础包是所有服务的地基，
-#     地板抬高会传染到全部下游）
+# **2026-11-12 修订（五波次现代化既成事实收编）**：基础层已整体迁移 go 1.24.0 → 1.26.0
+# （pkg/logx/concurrency/core 等根与 ci.yml/lint 成对改齐，随 timertask v0.5.0 等
+# **BREAKING 标注**的 tag 发布，tag 不可变 ⇒ 回退只能再发版）；getting-started 的
+# 对外口径同日改为全矩阵 Go ≥ 1.26。门禁随既成事实抬高，**「成对」红线不变**：
+#   · 基础层：go.mod 的 go 指令必须 ≤ 1.26（原 1.24——现代代化后 1.26 是新地板；
+#     基础包是所有服务的地基，地板抬高会传染到全部下游，所以这条门禁继续存在，
+#     只是上限跟到新地板）
 #   · tracing：豁免——go.opentelemetry.io/otel v1.47.0 的 go.mod 明写 go 1.26.0，
 #     属「接受高版本依赖」那一类，门禁不得报它
 #   · 业务层：1.24 / 1.25 / 1.26 均可，不报
 #   · **全矩阵通用**：go.mod 的 go 指令与 CI 的 go-version 必须成对——
 #     CI 用 1.26 构建、go.mod 声明 1.24，等于最低支持版本从来没被验证过
-GO_FLOOR_BASE_MAX = (1, 24)
+GO_FLOOR_BASE_MAX = (1, 26)
 GO_FLOOR_BUSINESS_OK = {(1, 24), (1, 25), (1, 26)}
 GO_FLOOR_BASE_LAYER = {"pkg", "concurrency", "logx", "core", "kitx", "metrics"}
 GO_FLOOR_EXEMPT = {"tracing"}
