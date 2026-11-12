@@ -49,14 +49,29 @@ def repo_state(d: Path, fetch: bool) -> dict:
 
 
 def open_prs() -> list[dict]:
-    for fields in ("repository,number,title,headRefName,updatedAt",
-                   "repository,number,title"):
-        r = subprocess.run(["gh", "search", "prs", "--owner", "oekit", "--state", "open",
-                            "--limit", "100", "--json", fields],
-                           capture_output=True, text=True)
-        if r.returncode == 0:
-            return json.loads(r.stdout or "[]")
-    return []
+    """org open PR 清单（branch 提示走 REST 逐条补——#309）。
+
+    `gh search prs --json` **不支持 headRefName**（字段级确定性错误，实测
+    gh 2.102.0）——第一档带该字段永远非零退出、静默降级到无 branch 的第二档，
+    branch 提示 100% 不渲染。基线字段只取确定支持的；branch 用 REST pulls
+    端点补（只补打印面用的前 30 条，别为 100 条每条发一次请求）。
+    """
+    r = subprocess.run(["gh", "search", "prs", "--owner", "oekit", "--state", "open",
+                        "--limit", "100", "--json", "repository,number,title,updatedAt"],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return []
+    prs = json.loads(r.stdout or "[]")
+    for pr in prs[:30]:
+        full = (pr.get("repository") or {}).get("nameWithOwner")
+        if not full:
+            continue
+        rr = subprocess.run(["gh", "api", f"repos/{full}/pulls/{pr['number']}",
+                             "--jq", ".head.ref"],
+                            capture_output=True, text=True)
+        if rr.returncode == 0 and rr.stdout.strip():
+            pr["headRefName"] = rr.stdout.strip()
+    return prs
 
 
 def main() -> None:

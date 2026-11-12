@@ -153,6 +153,22 @@ def selftest() -> int:
               f"自测3c：同一路径内的回退仍被抓到（得到 {[r['tag'] for r in regs]}）")
         ok_all.append(ok)
 
+        # ── 自测3d：多层嵌套 tag（kitexotel 4 层形态）也是独立版本线（#305） ──
+        # 旧「多层 return None」让这些 tag 整条对倒挂判定隐身
+        # （读不到被当成没有——nested_tag_prefix docstring 点名的假绿形态）。
+        d = make_repo(root / "r3d", [
+            ("v0.1.0", "2026-01-01T00:00:00Z"),
+            ("v0.3.0", "2026-01-02T00:00:00Z"),
+            ("observability/tracing/instrumentation/kitexotel/v0.7.4", "2026-01-03T00:00:00Z"),
+            ("observability/tracing/instrumentation/kitexotel/v0.7.2", "2026-01-04T00:00:00Z"),
+        ])
+        regs = regressions_of(d)
+        ok = (len(regs) == 1 and regs[0]["tag"].endswith("kitexotel/v0.7.2")
+              and regs[0]["higher_tag"].endswith("kitexotel/v0.7.4"))
+        print(("✅" if ok else "❌"),
+              f"自测3d：多层嵌套 tag 版本线独立可判倒挂（得到 {[r['tag'] for r in regs]}）")
+        ok_all.append(ok)
+
         # ── 自测4：例外表只放行登记的那一处，新出现的仍须判红 ──
         known_file = root / "known.json"
         known_file.write_text(json.dumps({

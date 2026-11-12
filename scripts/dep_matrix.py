@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from matrix import MODULES, OEKIT_REQ_RE, latest_tag, repo_dir  # noqa: E402
+from matrix import MODULES, OEKIT_REQ_RE, latest_tag, repo_dir, strip_pseudo  # noqa: E402
 
 def floors_of(repo: str) -> dict[str, str]:
     """repo 根 go.mod 的全部 oekit 依赖地板（嵌套 go.mod 不计——那是父模块跟随面）。"""
@@ -25,7 +25,9 @@ def floors_of(repo: str) -> dict[str, str]:
 
 
 def semver(v: str) -> tuple[int, int, int]:
-    a, b, c = v[1:].split(".")
+    # 伪版本（#306）：按基础三段比较——伪版本指向未发布 commit，其基础段
+    # 即语义上的地板；整串按 `.` split 会把 `-0.<时间戳>-<sha>` 撕进元组。
+    a, b, c = strip_pseudo(v)[1:].split(".")
     return (int(a), int(b), int(c))
 
 

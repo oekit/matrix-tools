@@ -942,7 +942,9 @@ check_go_comment_paths()
 # tidy/直连直接失败；「主模块已发新版而嵌套地板滞后」的漂移此前也靠人记。
 
 def parse_semver(v: str):
-    m = re.match(r"v(\d+)\.(\d+)\.(\d+)$", v)
+    # 伪版本（#306）：`vX.Y.Z-0.<14位时间戳>-<12位sha>` / `v0.0.0-<时间戳>-<sha>`——
+    # 基础三段之后的部分不参与地板比较（保守口径：比基础版本即可）。
+    m = re.match(r"v(\d+)\.(\d+)\.(\d+)(?:-0\.\d{14}-[0-9a-f]{12}|-\d{14}-[0-9a-f]{12})?$", v)
     return (int(m.group(1)), int(m.group(2)), int(m.group(3))) if m else None
 
 
@@ -987,15 +989,18 @@ check_nested_module_floors()
 #   · 嵌套模块形态 → check_nested_floors_of_other_repo（#104 方向），
 #     比「**该嵌套模块**的远端最新 tag」——两者的「最新」不是同一个东西。
 # 合并成一个正则会让「最新」的定义自相矛盾。
+# 版本段接受伪版本（#306）：指向未发布 commit 的依赖行此前对地板门禁隐身，
+# 「v0.14.3-0.20261111201459-c0f8a3febb68」这类行被当成不存在——假绿。
 _FLOOR_REQ_RE = re.compile(
-    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)( // indirect)?$",
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) "
+    r"(v\d+\.\d+\.\d+(?:-0\.\d{14}-[0-9a-f]{12}|-\d{14}-[0-9a-f]{12})?)( // indirect)?$",
     re.M)
 
 # 嵌套模块形态（oekit/oekit#104）：`github.com/oekit/<仓>/<子路径>`
 # ⚠️ 路径段允许 `-`（仓名带连字符）与 `.`（如 hertzlog），**不含** `/` 开头/结尾。
 _NESTED_FLOOR_REQ_RE = re.compile(
     r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)/([a-z0-9._-]+(?:/[a-z0-9._-]+)*))"
-    r" (v\d+\.\d+\.\d+)( // indirect)?$",
+    r" (v\d+\.\d+\.\d+(?:-0\.\d{14}-[0-9a-f]{12}|-\d{14}-[0-9a-f]{12})?)( // indirect)?$",
     re.M)
 
 

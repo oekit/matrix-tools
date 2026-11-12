@@ -78,12 +78,16 @@ KNOWN_PATH = HERE / "version_line_known.json"
 def _parse_tag(tag: str) -> tuple[str, str] | None:
     """tag 名 → (版本线, 版本号文本)；不是 semver 则返回 None。
 
-    版本线：根模块 tag = ""；嵌套模块 tag = "<子目录>"（如 logx/sink 的 "sink"）。
+    版本线：根模块 tag = ""；嵌套模块 tag = "<子目录路径>"——**子目录可以是
+    任意深度**（#305）：matrix.py 事实源登记了 4 层的 kitexotel
+    （observability/tracing/instrumentation/kitexotel）与 2 层的 thrift2openapi
+    （cmd/thrift2openapi），且 nested_tag_prefix 的 docstring 早就明写
+    「前缀是完整子路径，不是最后一段」——此前「多层 return None」让这些 tag
+    整条被跳过 ⇒ 对应版本线永远进不了倒挂判定（读不到被当成没有）。
     """
     if "/" in tag:
         line, name = tag.rsplit("/", 1)
-        # 嵌套模块只认单层目录（多层的 tag 不在本仓约定内）
-        if "/" in line:
+        if not line:      # 形态拒绝："/v1.2.3" 这类前缀为空的不是模块 tag
             return None
     else:
         line, name = "", tag
