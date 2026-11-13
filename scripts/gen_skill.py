@@ -24,12 +24,20 @@ from __future__ import annotations
 
 import os
 import pathlib
+import re
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from matrix import DESC, MODULES, NESTED_MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
 from rules import HARD_RULES_MD  # noqa: E402
+
+# 「N 合 1」的 N **从 DESC 真相源派生**：这个数字曾经被硬编码在本文件三处，
+# pkg 新增子包后（31→33）三处一起过期、skill 与站点标题口径漂移（#117 同款）。
+_PKG_N = int(re.search(r"微工具集\s*(\d+)\s*合\s*1", DESC["pkg"]).group(1))
+PKG_CLAIM = f"{_PKG_N} 合 1"
+# 站点里指向该标题的锚点同样随 N 变（渲染器把空格转 -、去掉全半角标点）
+PKG_ANCHOR = f"pkg-子包速查{_PKG_N}-合-1零第三方依赖"
 
 HERE = pathlib.Path(__file__).resolve().parent
 MT_ROOT = HERE.parent
@@ -122,13 +130,13 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
     ("数据访问", [
         {"scene": "CRUD 缓存编排",
          "use": "`data/cached`（多实例加 `data/twolevel`）",
-         "tips": "三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量",
+         "tips": "三行接入 `cached.NewRepository`：写后失效/事务提交后失效/查询缓存版本号失效/GetByIDs 批量；仓储需实现 `gormx/crud.Repository[T, ID]` 接口（gormrepo 已实现）",
          "redline": "模式是 Cache-Aside 不是双写；TTL 必须有限（失效失败唯一安全网）；返回值只读（改写开 CloneOnRead）",
          "mods": ["data", "gormx"]},
         {"scene": "本地缓存",
          "use": "`pkg/cache`",
-         "tips": "`LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`",
-         "redline": "命中返回零拷贝引用；`GetEx` 区分 miss 与值为 nil",
+         "tips": "`LocalCache` + `SingleFlightCache` 防击穿；确定性 TTL 测试用 `cachetest.RunWithClock`（Comparable 契约仅 int/uint/string，struct 需自定义 Contract）",
+         "redline": "命中返回零拷贝引用（改写开 CloneOnRead）；`GetEx` 在 LocalCache 上区分 miss 与显式 nil（装饰器走 Peek）",
          "mods": ["pkg"]},
         {"scene": "分布式缓存",
          "use": "`data/rediscache` / `redisx`",
@@ -136,10 +144,10 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "redline": "`redis.Nil` 是未命中不是错误",
          "mods": ["data", "redisx"]},
         {"scene": "分布式锁 / 信号量",
-         "use": "`redisx/distlock` 或 `etcdx/distlock`",
-         "tips": "Locker 接口同形可互换（换后端不改调用方）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位",
+         "use": "`redisx/distlock` 或 `etcdx/distlock`（接口契约单源 `pkg/distlock`）",
+         "tips": "Locker/哨兵集/WithLock 定义在 `pkg/distlock` 一次（后端中立，errors.Is 跨包正确分类）；自动续期 `WithAutoRenew`；Semaphore ZSET 槽位",
          "redline": "`Renew` 返回 false = 锁丢失；Semaphore 无 Redis fail-fast 不降级",
-         "mods": ["redisx", "etcdx"]},
+         "mods": ["redisx", "etcdx", "pkg"]},
         {"scene": "泛型 CRUD / 防丢更新",
          "use": "`gormx/crud`（HTTP 层 `hertz/crudh`）",
          "tips": "`NewBaseService[T, ID, Req]`；repo 实现 `TxRepository` 则 Update 自动事务 + FOR UPDATE 行锁读",
@@ -228,12 +236,10 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
     ]),
 ]
 
-# pkg 子包速查（33 合 1 的「想做什么 → 用哪个子包」）。
+# pkg 子包速查（PKG_CLAIM 的「想做什么 → 用哪个子包」；N 由 DESC 派生）。
 # 形状 (想做什么, [子包路径], 一句话)——audit 拿 pkg 仓真实目录校验死键（仓不在旁则跳过）
 PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("错误包装/业务错误", ["errors"], "nil-safe Wrap/Cause + BizError 双码（服务形态唯一载体）"),
-    ("分布式锁契约", ["distlock"], "Locker 接口 + 哨兵 + WithLock——redisx/etcdx 双后端互换单源（v0.45.0）"),
-    ("深拷贝/环防护", ["reflectx"], "DeepCopy 按指针身份记环，map/slice 自引用同栈防护（v0.45.0）"),
     ("字符串/脱敏/敏感词", ["stringx"], "工具集 + Replacer 最长匹配替换 + Masker 正则脱敏"),
     ("切片/枚举/类型转换", ["slicex", "enumx", "convert"], ""),
     ("时间边界/cron", ["timex", "timex/cron"], "BeginningOf/EndOf 七对 + cron 表达式"),
@@ -241,7 +247,7 @@ PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("JSON 修复/宽松解析", ["jsonrepair"], "UnmarshalLenient + ExtractObject/ExtractArray"),
     ("HTTP + JSON（零依赖）", ["httpjson"], "带解析的轻量请求"),
     ("编码", ["encoding"], ""),
-    ("本地缓存", ["cache", "cache/cachetest"], "CacheAside/LocalCache/SingleFlightCache + 契约套件（Clock 注入）"),
+    ("本地缓存", ["cache", "cache/cachetest"], "CacheAside/LocalCache/SingleFlightCache + 契约套件（RunWithClock 假时钟；Comparable 仅 int/uint/string）"),
     ("泛型容器", ["container"], "Set/Ring/Queue/SafeMap/Slice（并发安全）"),
     ("布隆过滤器", ["bloomx"], ""),
     ("ctx 取值/作用域", ["contextx", "ctxscope"], ""),
@@ -257,7 +263,9 @@ PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("断点续传/分片上传", ["resumable"], "会话状态机 + ChunkStore 接口"),
     ("子进程治理", ["procx"], "内存上限 cgroup v2；与 shellx 配套"),
     ("零依赖静态配置", ["config"], "yaml 子集 + env 覆盖 + Redact"),
+    ("分布式锁契约（后端中立）", ["distlock"], "Locker/哨兵集/WithLock 单源——redisx·etcdx 后端消费（etcdx#123 治本）"),
     ("singleflight 契约测试", ["singleflighttest"], "共享契约套件"),
+    ("反射深拷贝 / 类型解析", ["reflectx"], "DeepCopyValue 指针环防护；config.SetFromString 字符串按 reflect.Kind 落位"),
 ]
 
 # SKILL.md 红线精华（完整版在 rules.md；前五条判据必须能在 HARD_RULES_MD 里找到出处）
@@ -358,8 +366,10 @@ def _root_module_table() -> str:
 def _nested_module_table() -> str:
     out = ["| 父仓 | 模块 | 一句话 | 安装 |", "|---|---|---|---|"]
     for n in NESTED_MODULES:
+        # n['module'] 已是完整 module 路径（github.com/oekit/<repo>/<path>）——
+        # 不得再拼 org 前缀（曾渲染出 github.com/oekit/github.com/oekit/... 双前缀，端到端测试抓到）
         out.append(f"| {n['repo']} | `{n['path']}` | {desc_head(n['desc'], 110)} | "
-                   f"`go get github.com/oekit/{n['module']}@latest` |")
+                   f"`go get {n['module']}@latest` |")
     return "\n".join(out)
 
 
@@ -423,6 +433,8 @@ def render_skill() -> str:
 ## 深入入口
 
 - 模块索引（层分组 + 嵌套模块安装行）：同目录 `modules.md`
+- 本地多仓联编：各仓平级检出，用 `go.work` 的 `use` 列出**被 import 的 oekit 仓闭包**（含传递依赖）；
+  workspace 模式下 `-mod=mod` 不可用，`go build ./...` 需在模块目录内跑；按需单模块走默认 proxy `go get`
 - 下游/远端 AI：<https://oekit.github.io/llms.txt> · 站点选型指南：
   <https://oekit.github.io/guide/selection.html>
 - oekit 各仓本地检出为平级目录（matrix.py 支持三种布局探测）；找不到检出根时问用户
@@ -432,7 +444,7 @@ def render_skill() -> str:
 
 def render_pkg() -> str:
     return (
-        "# pkg 子包速查（33 合 1，零第三方依赖）\n\n"
+        f"# pkg 子包速查（{PKG_CLAIM}，零第三方依赖）\n\n"
         "> 由 gen_skill.py 渲染——修订改 gen_skill.py 的 PKG_QUICK；"
         "audit 会拿 pkg 仓真实目录校验死键。API 以 `go doc github.com/oekit/pkg/<sub>` 为准。\n\n"
         f"{_pkg_table()}\n"
@@ -450,7 +462,7 @@ title: 选型速查（场景 → 包）
 
 ## 使用流
 
-1. 下面场景表定位模块/子包；基础工具需求查 [pkg 子包速查](#pkg-子包速查31-合-1零第三方依赖)
+1. 下面场景表定位模块/子包；基础工具需求查 [pkg 子包速查](#{PKG_ANCHOR})
 2. `go doc github.com/oekit/<pkg>` 或读包 `doc.go` 拿准签名
 3. 对照[硬规则](#硬规则速览全矩阵适用)
 4. 深入：该仓 AGENTS.md / 对应指南（[日志](/guide/logging) · [错误](/guide/errors) ·
@@ -461,7 +473,7 @@ title: 选型速查（场景 → 包）
 
 {_scenario_tables()}
 
-## pkg 子包速查（33 合 1，零第三方依赖）
+## pkg 子包速查（{PKG_CLAIM}，零第三方依赖）
 
 {_pkg_table()}
 

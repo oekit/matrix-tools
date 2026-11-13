@@ -16,11 +16,16 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, SITE_REPO, ensure_clean_all, git_env, repo_dir  # noqa: E402
+from matrix import DESC, MODULES, SITE_REPO, ensure_clean_all, git_env, repo_dir  # noqa: E402
+
+# pkg 芯片标签里的「N 合 1」从 DESC 真相源派生——数字曾被写死成 23，
+# pkg 子包 23→31→33 两次扩张它都不动（与 gen_skill 同款漂移，#117 口径）
+PKG_CLAIM_N = int(re.search(r"微工具集\s*(\d+)\s*合\s*1", DESC["pkg"]).group(1))
 
 BASE = Path(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", ".."))).resolve()
 HOMEPAGE_REPO = "oekit"
@@ -47,18 +52,16 @@ SHORT = {
     "logx": "统一门面 · 多后端 · Sink",
     "tracing": "OpenTelemetry · trace_id",
     "metrics": "Prometheus · 弹性指标族",
-    "pkg": "微工具集 33 合 1",
+    "pkg": f"微工具集 {PKG_CLAIM_N} 合 1",  # N 从 DESC 派生（曾写死 23，与 31→33 一起过期）
     "kitx": "UUID/雪花 · 校验门面",
     "concurrency": "GoSafe · singleflight · retry",
     "core": "config · transport/chain · lifecycle",
 }
 
-PKG_SUBS = [  # pkg 芯片内的微库清单（33 合 1；与 DESC/pkg 仓保持一致；uidgen/validator 已拆至 kitx）
+PKG_SUBS = [  # pkg 芯片内的微库清单**节选**（完整 33 包清单以 DESC/README 为准；uidgen/validator 已拆至 kitx）
     "errors · stringx · slicex · enumx · convert · encoding · jsonrepair · httpjson",
     "mathx · pathx · pagination · ptrx · timex · bloomx · cache · container",
     "contextx · bufiox · strmap · singleflighttest · urlguard · cli · pack",
-    "config · tarx · resumable · procx · webhook · secretx · shellx · ctxscope",
-    "distlock · reflectx",
 ]
 
 # 双主题调色板：band/边框/层标题/芯片名/注释框填充/注释文字；另有全局色与箭头四色

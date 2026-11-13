@@ -5,8 +5,6 @@
 | 想做什么 | 子包 | 说明 |
 |---|---|---|
 | 错误包装/业务错误 | `errors` | nil-safe Wrap/Cause + BizError 双码（服务形态唯一载体） |
-| 分布式锁契约 | `distlock` | Locker 接口 + 哨兵 + WithLock——redisx/etcdx 双后端互换单源（v0.45.0） |
-| 深拷贝/环防护 | `reflectx` | DeepCopy 按指针身份记环，map/slice 自引用同栈防护（v0.45.0） |
 | 字符串/脱敏/敏感词 | `stringx` | 工具集 + Replacer 最长匹配替换 + Masker 正则脱敏 |
 | 切片/枚举/类型转换 | `slicex` / `enumx` / `convert` | — |
 | 时间边界/cron | `timex` / `timex/cron` | BeginningOf/EndOf 七对 + cron 表达式 |
@@ -14,7 +12,7 @@
 | JSON 修复/宽松解析 | `jsonrepair` | UnmarshalLenient + ExtractObject/ExtractArray |
 | HTTP + JSON（零依赖） | `httpjson` | 带解析的轻量请求 |
 | 编码 | `encoding` | — |
-| 本地缓存 | `cache` / `cache/cachetest` | CacheAside/LocalCache/SingleFlightCache + 契约套件（Clock 注入） |
+| 本地缓存 | `cache` / `cache/cachetest` | CacheAside/LocalCache/SingleFlightCache + 契约套件（RunWithClock 假时钟；Comparable 仅 int/uint/string） |
 | 泛型容器 | `container` | Set/Ring/Queue/SafeMap/Slice（并发安全） |
 | 布隆过滤器 | `bloomx` | — |
 | ctx 取值/作用域 | `contextx` / `ctxscope` | — |
@@ -30,4 +28,6 @@
 | 断点续传/分片上传 | `resumable` | 会话状态机 + ChunkStore 接口 |
 | 子进程治理 | `procx` | 内存上限 cgroup v2；与 shellx 配套 |
 | 零依赖静态配置 | `config` | yaml 子集 + env 覆盖 + Redact |
+| 分布式锁契约（后端中立） | `distlock` | Locker/哨兵集/WithLock 单源——redisx·etcdx 后端消费（etcdx#123 治本） |
 | singleflight 契约测试 | `singleflighttest` | 共享契约套件 |
+| 反射深拷贝 / 类型解析 | `reflectx` | DeepCopyValue 指针环防护；config.SetFromString 字符串按 reflect.Kind 落位 |
