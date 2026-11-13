@@ -42,6 +42,11 @@
       "repo": "workflow",
       "tag": "v0.2.12",
       "reason": "2026-11-10 误打的幽灵 tag：发版命令 cd 断链在错误仓目录打 tag，本意是 etcdx v0.2.12（同一发版序列、同一根因的另一枚是 tracing:redis/v0.2.19，事实详见 matrix-tools#290）。落点是 workflow 的 v0.4.0 提交（4266f6d），时间戳晚于同线 v0.4.0 ⇒ 版本线判据上呈「后发更低」。tag 保护 ruleset protect-release-tags 禁删禁改（重推 = 已缓存消费方集体中毒，oekit/.github#5）⇒ 不删 tag、不建 Release。处置：matrix-tools#290 记录事故事实；gen_matrix_go 按幽灵 tag 口径跳过该 tag（matrix-tools#295）；本条登记消除版本线判红，版本线以 v0.4.0 为准。"
+    },
+    {
+      "repo": "network",
+      "tag": "v0.10.4",
+      "reason": "2026-11-13 21:25 发布，晚于同线 v0.11.0（20:29）56 分钟；v0.11.0（PR #208）是其祖先——chore/floor-pkg-v0.48 分支（PR #204）合入 main 时已带上 v0.11.0，内容 = v0.11.0 + 地板追平 pkg v0.48.0 + 安装行对齐（#209），却按旧线补发了 v0.10.4。现路径 github.com/oekit/network 可安装可编译；CHANGELOG 有 v0.10.4 节但未声明旁支身份（补声明 PR 随本轮）。处置：network CHANGELOG v0.10.4 节声明不在主线版本线上（主线以 v0.11.0 为准），不删 tag。"
     }
   ]
 }

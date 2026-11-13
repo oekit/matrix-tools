@@ -67,8 +67,11 @@ def count_units(repos_dir: str | None = None) -> dict:
     # 只扫「仓根下一层」会漏数多层嵌套模块（实测：kitex v0.7.0 拆出多层嵌套模块
     # 后，单层 glob 数出 10、真实是 11，站点文案据此判漂移）。
     # 排除：仓根本身、.git、vendor/third_party/testdata/examples（与共享 CI 的
-    # 嵌套模块发现口径一致）。
-    skip = {".git", "vendor", "third_party", "testdata", "examples"}
+    # 嵌套模块发现口径一致），以及 tests——tracing/tests 是 #122 的测试隔离
+    # 模块（hertz 契约例外面的测试独立 go.mod，**无独立 tag、不可 go get**），
+    # 属非发版目录，与 vendor 同类；计入会让「文件系统推导 38」与
+    # 「声明口径 NESTED_MODULES 12 → 37」分裂（audit 口径分裂报错的根因）。
+    skip = {".git", "vendor", "third_party", "testdata", "examples", "tests"}
     nested = 0
     for r in roots:
         for g in r.glob("**/go.mod"):

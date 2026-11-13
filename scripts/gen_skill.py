@@ -228,10 +228,12 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
     ]),
 ]
 
-# pkg 子包速查（31 合 1 的「想做什么 → 用哪个子包」）。
+# pkg 子包速查（33 合 1 的「想做什么 → 用哪个子包」）。
 # 形状 (想做什么, [子包路径], 一句话)——audit 拿 pkg 仓真实目录校验死键（仓不在旁则跳过）
 PKG_QUICK: list[tuple[str, list[str], str]] = [
     ("错误包装/业务错误", ["errors"], "nil-safe Wrap/Cause + BizError 双码（服务形态唯一载体）"),
+    ("分布式锁契约", ["distlock"], "Locker 接口 + 哨兵 + WithLock——redisx/etcdx 双后端互换单源（v0.45.0）"),
+    ("深拷贝/环防护", ["reflectx"], "DeepCopy 按指针身份记环，map/slice 自引用同栈防护（v0.45.0）"),
     ("字符串/脱敏/敏感词", ["stringx"], "工具集 + Replacer 最长匹配替换 + Masker 正则脱敏"),
     ("切片/枚举/类型转换", ["slicex", "enumx", "convert"], ""),
     ("时间边界/cron", ["timex", "timex/cron"], "BeginningOf/EndOf 七对 + cron 表达式"),
@@ -430,7 +432,7 @@ def render_skill() -> str:
 
 def render_pkg() -> str:
     return (
-        "# pkg 子包速查（31 合 1，零第三方依赖）\n\n"
+        "# pkg 子包速查（33 合 1，零第三方依赖）\n\n"
         "> 由 gen_skill.py 渲染——修订改 gen_skill.py 的 PKG_QUICK；"
         "audit 会拿 pkg 仓真实目录校验死键。API 以 `go doc github.com/oekit/pkg/<sub>` 为准。\n\n"
         f"{_pkg_table()}\n"
@@ -459,7 +461,7 @@ title: 选型速查（场景 → 包）
 
 {_scenario_tables()}
 
-## pkg 子包速查（31 合 1，零第三方依赖）
+## pkg 子包速查（33 合 1，零第三方依赖）
 
 {_pkg_table()}
 
