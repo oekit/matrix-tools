@@ -4,6 +4,19 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.2.9] — 2026-11-14
+
+- fix: 伪版本 require 正则接受 Go 伪版本形态（#306）——`vX.Y.Z-0.<时间戳>-<sha>` 对矩阵表/地板门禁/align_floors 不再隐身（hertz→core 现场实证），`strip_pseudo` 保守比较口径
+- fix: `verify_version_line` 多层嵌套 tag 解析（#305）——kitexotel 4 层/thrift2openapi 2 层版本线进倒挂判定（18 枚 tag 不再失明）
+- fix: `ledger_write` PR 判别走 REST 面 `has("pull_request")`（#308）——`gh issue view --json isPullRequest` 字段不存在致 fail-closed 全阻断，selftest stub 按真实 gh 字段清单
+- fix: `handoff` open PR 字段集改真 gh 支持面（#309）——`headRefName` 死档删除，分支提示不再静默全灭
+- fix: `flake_scan` git 前置逐条查 returncode + 读 in-flight 登记（#313）——陈旧/错分支测试结果不再冠以「全矩阵扫描」进报告
+- feat: `release_train` 检查面 I（#318）——`--issue` 绑定修复必须是待打 tag 祖先（timertask#217 prewrite→tag→等合入声称劈叉在上游拦截），REST timeline 定位引用 PR（不走 search 索引）
+- feat: `release_train` lint 版本 preflight（oagentkit/matrix-tools#212 同源）——本机 golangci-lint ≠ CI default 即 fail-loud；版本检测裸 `version`+正则（`--format` 在 v2.x CLI 不存在会静默失效）
+- feat: `emit_consumer_upgrade` 下游升级命令生成器（#271）——下游消费方 oekit 地板升级命令单行输出
+- fix: audit 残留引用判据带 `github.com/` 前缀——裸 org 名不再误伤注释事实陈述
+- docs: pkg DESC 31→33 合 1（distlock/reflectx 收编，#316）+ GO_FLOOR_BASE_MAX 1.24→1.26（#307）+ 架构图/svg/模块表随真相源重渲染（伞仓 #193/#194、站点 #223）
+
 ## [v0.2.8] — 2026-11-12
 
 - feat: AI 入口 skill 体系（PR #302）——`skills/oekit` 场景选型表（34 场景 × 组合提示 × 红线：限流进程内 vs 分布式、锁 redisx/etcdx 同形互换、配置 core/pkg 分工等跨模块判据单点化）+ `skills/oekit-release`、`oekit-sweep` 流程 skill（release_train / issue_sweep 程序化教训提炼）+ Makefile `install-skills` 用户级软链
