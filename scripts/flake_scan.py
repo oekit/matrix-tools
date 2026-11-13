@@ -45,6 +45,7 @@ sys.path.insert(0, str(HERE.parent))
 sys.path.insert(0, str(HERE))
 
 from matrix import MODULES, git_branch, repo_dir  # noqa: E402
+import inflight  # noqa: E402
 
 FAIL_RE = re.compile(r"^\s*--- FAIL: (\S+)", re.M)
 # 编译/构建失败（不是用例失败）：go test 退出码非 0 且没有 "--- FAIL" 行
@@ -62,27 +63,53 @@ def go_available() -> bool:
     return shutil.which("go") is not None
 
 
-def scan_one(repo: str, base: str, count: int) -> tuple[str, list[str], str]:
+def scan_one(repo: str, base: str, count: int) -> tuple[str, list[str], str, str]:
     """跑一个仓的 -race -count=N。
 
-    返回 (仓名, 失败用例名列表, 构建错误摘要)。
+    返回 (仓名, 失败用例名列表, 构建错误摘要, 跳过原因)。
 
     **构建错误必须与「用例失败」分开报**（2026-10-30 加）：`go test` 在
     **编译不过**时退出码非 0，但输出里**没有** `--- FAIL` 行 ⇒ 若只按
     `--- FAIL` 收集，这个仓会被记成「无失败用例」⇒ **扫描看起来跑过了，
     实际什么都没测**——比报错危险得多（与 align_floors 的三个假绿同族：
     判据没覆盖真实失败面）。
+
+    **git 前置与 inflight 同口径**（#313）：fetch/checkout/pull 任一失败、
+    仓缺失（repo_dir 的 FileNotFoundError——原 `if not d.exists()` 是死
+    分支，异常会打崩整轮）、inflight 被活进程持有，一律进「没跑起来/
+    跳过」桶——**绝不落进「无失败用例」**（2026-10-30 假报事故的复发
+    面：陈旧/错分支上的测试结果冠以「全矩阵 flaky 扫描」进报告）。
     """
-    d = repo_dir(repo, base)
-    if not d.exists():
-        return repo, [], ""
+    # 并行会话互斥（#313）：同机有活进程持有该仓检出时跳过——本工具的
+    # checkout/pull 会把对方现场切走（inflight.py 文档明写要防的撞车类）。
+    info = inflight.read(repo)
+    if info and inflight.held(info):
+        return repo, [], "", (f"inflight 持有中（pid {info.get('pid')} "
+                              f"{info.get('note') or ''}）——跳过，未检验")
+
+    try:
+        d = repo_dir(repo, base)
+    except FileNotFoundError:
+        # 缺仓 ≠ 零失败（#139 口径）：原 `if not d.exists()` 永不可达，
+        # FileNotFoundError 会穿过 fut.result() 打崩整轮扫描。
+        return repo, [], "repo missing: repo_dir raised FileNotFoundError", ""
+
     # 测试必须跑在**干净且最新**的 main 上：陈旧的 checkout 会把「已修」
     # 的用例报成仍失败（2026-10-30 踩过：本地落后 ⇒ audit/扫描都假报）。
-    subprocess.run(["git", "-C", str(d), "fetch", "origin", "--quiet"],
-                   capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(d), "checkout", "main"], capture_output=True, text=True)
-    subprocess.run(["git", "-C", str(d), "pull", "--ff-only", "origin", "main"],
-                   capture_output=True, text=True)
+    # 三个前置命令逐个查 returncode（#313）：静默失败 = 在错误的快照/分支
+    # 上跑 -race，结果不可信——按「没跑起来」上报（对齐 audit.py 对 fetch
+    # 的显式分支处理）。
+    for label, cmd in (
+        ("fetch", ["git", "-C", str(d), "fetch", "origin", "--quiet"]),
+        ("checkout", ["git", "-C", str(d), "checkout", "main"]),
+        ("pull", ["git", "-C", str(d), "pull", "--ff-only", "origin", "main"]),
+    ):
+        gr = subprocess.run(cmd, capture_output=True, text=True)
+        if gr.returncode != 0:
+            tail = ((gr.stderr or gr.stdout).strip().splitlines() or
+                    [f"exit={gr.returncode}"])[-1]
+            return repo, [], f"git {label} failed: {tail[:200]}", ""
+
     env = dict(os.environ, GOWORK="off")
     r = subprocess.run(["go", "test", "-race", f"-count={count}", "./..."],
                        cwd=d, env=env, capture_output=True, text=True)
@@ -95,7 +122,7 @@ def scan_one(repo: str, base: str, count: int) -> tuple[str, list[str], str]:
         build_err = (m.group(0).strip().splitlines()[-1] if m
                      else out.strip().splitlines()[-1] if out.strip()
                      else f"exit={r.returncode}")
-    return repo, names, build_err
+    return repo, names, build_err, ""
 
 
 def main() -> None:
@@ -125,8 +152,12 @@ def main() -> None:
     build_broken: dict[str, str] = {}
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.jobs) as ex:
         futs = {ex.submit(scan_one, r, base, args.count): r for r in repos}
+        skipped: dict[str, str] = {}
         for fut in concurrent.futures.as_completed(futs):
-            repo, names, build_err = fut.result()
+            repo, names, build_err, skip = fut.result()
+            if skip:
+                skipped[repo] = skip
+                print(f"  ⏭ {repo}: {skip}")
             if build_err:
                 build_broken[repo] = build_err
                 print(f"  ✗ {repo}: **构建/编译失败**（不是用例失败）——{build_err}")
@@ -145,7 +176,12 @@ def main() -> None:
         print(f"\n发现 {len(bad)} 仓有失败用例（共 "
               f"{sum(len(v) for v in bad.values())} 个）。")
         print("⚠️ 并发跑会放大真 flaky；**复跑确认**：同一用例单独再跑一次仍红 ⇒ 真缺陷。")
-    if bad or build_broken:
+    if skipped:
+        print(f"\n⏭ {len(skipped)} 仓**跳过未检验**（inflight 占用）：")
+        for repo, why in skipped.items():
+            print(f"    {repo}: {why}")
+        print("  ⇒ 跳过 ≠ 无失败用例（#139 口径），判据不完整即红。")
+    if bad or build_broken or skipped:
         sys.exit(1)
     print("\n✓ 全矩阵无失败用例")
 
