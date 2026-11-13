@@ -92,6 +92,10 @@ jobs:
         run: python3 scripts/release_train_requires_selftest.py
       - name: 发版「依赖可解析」门禁·变异自证（注入变异体 ⇒ 精确转红集合必须精确）
         run: python3 scripts/release_train_requires_selftest.py --mutate
+      - name: 发版「issue 修复祖先」门禁自测（--issue 的修复 PR 必须 OPEN 拦/非祖先拦/祖先放行/跨仓口径/fail-closed）
+        run: python3 scripts/release_train_issue_ancestor_selftest.py
+      - name: 发版「issue 修复祖先」门禁·变异自证（OPEN 不拦/非祖先不拦 ⇒ 对应用例必须转红）
+        run: python3 scripts/release_train_issue_ancestor_selftest.py --mutate
       - name: DESC 子包口径自测（声明的「N 合 1」必须等于实际公开子包；兄弟仓已检出 ⇒ 判据真跑，零核对必须 fail-loud——#254）
         env:
           MATRIX_BASE: ${{ github.workspace }}/repos

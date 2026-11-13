@@ -32,6 +32,9 @@
      该依赖**当前最新的已发布版本**——否则打出去的 tag 把**旧地板**焊进已发布
      产物（消费方 `go get <mod>@<tag>` 拿到的是那个 tag 的 go.mod，抬工作树也
      改不了它；而已发布的 tag 不可重推 ⇒ 只能发新号补 ⇒ 欠一版）（matrix-tools#212）
+  i. **--issue 的修复是 tag 祖先**（matrix-tools#318）：CHANGELOG 版本节绑定的
+     issue，其修复 PR 必须已合入且是待打 tag 的祖先——prewrite→tag→等合入
+     的声称劈叉（timertask#217：tag 后 16 分钟修复才合）在上游拦住
   0. train 前自动 fetch + ff 拉齐 main（tag 永远打在远端 main 最新基线上，
      不再依赖"记得先 pull"——并行会话推过 main 也不落空）
 """
@@ -1027,6 +1030,130 @@ def check_apidiff_gate(repo: str, specs, failures: list[str], skip_reason: str |
             f"或确属误报时 --skip-apidiff \"理由\" 显式跳过（matrix-tools#270）")
 
 
+# ---------- 检查面 I（matrix-tools#318）：--issue 的修复必须是待打 tag 的祖先 ----------
+
+def issue_fix_prs(repo: str, num: str) -> list[int]:
+    """引用了 `<repo>#<num>` 的 PR 编号清单（REST timeline，**不走 search**）。
+
+    为什么不用 `gh search prs`：search 索引有分片延迟——「修复 PR 刚合入」
+    正是本判据的主场景，search 搜不到 ⇒ 判不了 ⇒ 假绿。timeline
+    （cross-referenced 事件）是实时的。
+
+    timeline 事件里 `source.issue` 带 `pull_request` 键 = 提到本 issue 的 PR。
+    issue 编号不存在（404）⇒ 空清单（调用方按「定位不到」口径处理）；
+    其余读失败由 ghsafe 抛错冒泡（fail closed——读不到 ≠ 没有）。
+
+    v1 口径：一页 timeline（100 条）足够覆盖单 issue 的引用面；
+    引用数超过一页的巨型 issue 取前 100（缺失方向是「少判红多放行」，
+    且这种 issue 的修复定位本来就该人工复核）。
+    """
+    import ghsafe
+    try:
+        events = ghsafe.gh_json(["api", f"repos/{ORG}/{repo}/issues/{num}/timeline",
+                                 "--per-page=100"])
+    except ghsafe.GhCommandError as e:
+        if e.is_not_found:
+            return []
+        raise
+    seen: list[int] = []
+    for ev in events if isinstance(events, list) else []:
+        if ev.get("event") != "cross-referenced":
+            continue
+        src = (ev.get("source") or {}).get("issue") or {}
+        if not src.get("pull_request"):
+            continue                     # 提到本 issue 的普通 issue：不是修复载体
+        n = src.get("number")
+        if isinstance(n, int) and n not in seen:
+            seen.append(n)
+    return seen
+
+
+def pr_merge_state(repo: str, num: int) -> dict:
+    """单个引用 PR 的状态面（state + mergeCommit）。读不到 ⇒ 抛错（fail closed）。"""
+    import ghsafe
+    return ghsafe.gh_json(["pr", "view", str(num), "--repo", f"{ORG}/{repo}",
+                           "--json", "state,mergeCommit"])
+
+
+def check_issue_fix_ancestor(repo: str, repo_root, issues: list[str], failures: list[str]) -> None:
+    """★ **检查面 I**（matrix-tools#318）：CHANGELOG 绑定的 issue，其修复必须已是
+    待打 tag（= HEAD）的祖先——防 prewrite→tag→等合入 的**声称劈叉**。
+
+    timertask#217 实锤：04:56 prewrite CHANGELOG（声称含 #197）→ 同分钟 tag
+    v0.5.3 → 05:12 修复 PR #209 才合入 main ⇒ 消费者按 CHANGELOG 定位
+    `go get @v0.5.3` 拿不到声称的修复；issue 回执「已在 v0.5.3 修复并发布」
+    同样不实（回执按版本节定位 ⇒ 定位链整体失效）。
+
+    判据（对每个 --issue `<r>#<N>`）：
+    - 引用它的 PR 仍 **OPEN** ⇒ 红——修复还没落地就 tag，声称必然劈叉
+      （修法：先合 PR 再重跑 train；prewrite 的版本节可以留着等）。
+    - **同仓**已合 PR 的 mergeCommit 不满足
+      `git merge-base --is-ancestor <sha> HEAD` ⇒ 红——PR 合了但不在
+      待打 tag 里（比如 tag 基线是 PR 合入前拉的；preflight 已 ff 拉齐，
+      走到这里还非祖先 ⇒ git 历史真的没有它）。
+    - 定位不到任何引用 PR ⇒ ⚠ 放行——纯手改/直推场景定位不到载体，
+      不误杀（判不了 ≠ 红；#318 建议的最小实现只约束「有 PR 的修复」）。
+    - **跨仓**引用（r ≠ repo）：修复在别仓，本仓版本节只是「关联问题单」——
+      无祖先关系可判；别仓有 OPEN PR ⇒ ⚠ 提示（声称了关联但对方没落地）。
+    """
+    if not issues:
+        return
+    print(f"[check] --issue 修复祖先（检查面 I，{len(issues)} 张单）")
+    import ghsafe
+    head = sh(["git", "rev-parse", "HEAD"], repo_root).stdout.strip()
+    for ref in issues:
+        m = re.fullmatch(r"([a-z0-9.-]+)#(\d+)", ref)
+        if not m:
+            failures.append(f"{ref}: --issue 形态不认识（应 <repo>#<N>）")
+            continue
+        r, n = m.group(1), m.group(2)
+        try:
+            prs = issue_fix_prs(r, n)
+        except (ghsafe.GhCommandError, ghsafe.GhReadError) as e:
+            failures.append(f"{ref}: timeline 读不到（{e}）——判不了 ≠ 放行（fail closed）")
+            continue
+        if not prs:
+            print(f"  ⚠ {ref}: 定位不到引用它的 PR（纯手改/直推？）——跳过祖先校验")
+            continue
+        merged_ok = False
+        for pr in prs:
+            try:
+                st = pr_merge_state(r, pr)
+            except (ghsafe.GhCommandError, ghsafe.GhReadError) as e:
+                failures.append(f"{ref}: 引用 PR #{pr} 状态读不到（{e}）——fail closed")
+                continue
+            if st.get("state") == "OPEN":
+                if r == repo:
+                    failures.append(
+                        f"{ref}: 修复 PR #{pr} 仍 OPEN——先合入再 tag，"
+                        f"否则 CHANGELOG 声称与 tag 内容劈叉（timertask#217 形态）")
+                else:
+                    print(f"  ⚠ {ref}: 别仓 {r} 的关联 PR #{pr} 仍 OPEN（本仓不判祖先，仅提示）")
+                continue
+            if st.get("state") != "MERGED":
+                continue               # CLOSED 未合：不是修复载体
+            sha = (st.get("mergeCommit") or {}).get("oid")
+            if not sha:
+                failures.append(f"{ref}: PR #{pr} 已合但 mergeCommit 读不到——fail closed")
+                continue
+            if r != repo:
+                merged_ok = True       # 跨仓：无法判祖先，合了即认
+                continue
+            anc = sh(["git", "merge-base", "--is-ancestor", sha, head],
+                     repo_root, check=False)
+            if anc.returncode == 0:
+                merged_ok = True
+            else:
+                failures.append(
+                    f"{ref}: 修复 PR #{pr}（{sha[:8]}）已合但**不是待打 tag 的祖先**——"
+                    f"CHANGELOG 声称含本修复而 tag 里没有（声称劈叉）。"
+                    f"修法：确认 main 已含该 PR 后重跑 train")
+        if prs and not merged_ok and not any(f.startswith(f"{ref}:") for f in failures):
+            # 有引用 PR、没有一个判成「已落地」、也没有已记录的红——
+            # 剩下的形态是全部 CLOSED 未合：提示但放行（修复可能走了直推改道）。
+            print(f"  ⚠ {ref}: 引用 PR 均未合入（改道直推？）——跳过祖先校验，请人工确认")
+
+
 def main():
     argv = sys.argv[1:]
     apply = "--apply" in argv
@@ -1157,6 +1284,9 @@ def main():
     #   但跳过必须显式可见（判不了 ≠ 通过）。
     check_apidiff_gate(repo, specs, failures,
                        skip_reason=(skip_apidiff_reason if skip_apidiff_reason else None))
+    # ★ **检查面 I**（matrix-tools#318）：--issue 绑定的修复必须已是待打 tag 的
+    #   祖先——prewrite→tag→等合入 的声称劈叉（timertask#217）在上游拦住。
+    check_issue_fix_ancestor(repo, root, issues, failures)
     if failures:
         print(f"\n❌ {len(failures)} 项检查失败，未打任何 tag：")
         for f in failures:
