@@ -48,7 +48,7 @@
 
 | 模块 | 一句话 | 深入 |
 |---|---|---|
-| [pkg](https://github.com/oekit/pkg) | 微工具集 33 合 1（errors/bloomx/contextx/ctxscope/container/stringx/slicex/enumx/convert… | `pkg/AGENTS.md` |
+| [pkg](https://github.com/oekit/pkg) | 微工具集 33 合 1（errors/bloomx/contextx/ctxscope/container/distlock/stringx/slicex/enumx… | `pkg/AGENTS.md` |
 | [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口… | `concurrency/AGENTS.md` |
 | [core](https://github.com/oekit/core) | 应用基建件——governance 治理 schema、config 配置加载（LoadBootstrap/LoadDotEnv/Get* 系、default/env… | `core/AGENTS.md` |
 | [kitx](https://github.com/oekit/kitx) | 标识与校验——uidgen（Snowflake 全局单例+Extract 元数据、手写 RFC 4122 v4 UUID 零第三方依赖、RandomHex… | `kitx/AGENTS.md` |
@@ -57,15 +57,15 @@
 
 | 父仓 | 模块 | 一句话 | 安装 |
 |---|---|---|---|
-| bootstrap | `nacos` | bootstrap 的 Nacos/NNS 服务治理接入——以 BootstrapperOption 注入，父仓保持零 Nacos 依赖（v0.3.0 起注册延迟到 App.Ready 之后） | `go get github.com/oekit/bootstrap/nacos@latest` |
-| bootstrap | `obs` | bootstrap 的可观测性接入——以 BootstrapperOption 注入 Prometheus 指标（oekit/metrics）与 OpenTelemetry 追踪（oekit… | `go get github.com/oekit/bootstrap/obs@latest` |
-| logx | `sink` | logx 的输出目标实现——Sink 抽象 + MultiSink/FileSink/RotatingSink 三个内置实现，重依赖隔离在此，根包纯 stdlib | `go get github.com/oekit/logx/sink@latest` |
-| logx | `hlog` | 基于 Hertz hlog 的 logx.Logger 实现（结构化 kv 降级为字符串拼接，输出格式与 Hertz hlog 对齐） | `go get github.com/oekit/logx/hlog@latest` |
-| logx | `hertzlog` | Hertz 日志后端桥接——logrus/zap/zerolog/slog 四后端各自实现 hlog.FullLogger（依赖隔离，logx 根包不引三方日志库） | `go get github.com/oekit/logx/hertzlog@latest` |
-| logx | `kitexlog` | Kitex 日志后端桥接——把 logx.Logger 适配为 Kitex klog.FullLogger（依赖隔离，logx 根包不引 kitex） | `go get github.com/oekit/logx/kitexlog@latest` |
-| timertask | `redis` | timertask 的 Redis 后端——RedisBackend/ShardManager 与可靠投递，go-redis 隔离在此，根包零 redis 依赖（v0.2.0 起） | `go get github.com/oekit/timertask/redis@latest` |
-| registry | `nacosimpl` | Nacos SPI 实现——Discoverer/ConfigStore/Registrar 基于 nacos-sdk-go v2（nacos-sdk 重依赖隔离在此，registry 根仓零 nacos-sdk） | `go get github.com/oekit/registry/nacosimpl@latest` |
-| registry | `nacos` | Nacos 客户端门面——Bootstrap 配置、client 工厂与 config 加载（实现 core/config.ConfigSource，配 ConfigWatcher 热更新） | `go get github.com/oekit/registry/nacos@latest` |
-| kitex | `observability/tracing/instrumentation/kitexotel` | Kitex 的 OpenTelemetry tracing 接入——client/server suite + metainfo 透传（obs-opentelemetry 重依赖隔离在此，kitex 根仓回归零… | `go get github.com/oekit/kitex/observability/tracing/instrumentation/kitexotel@latest` |
-| kitex | `istio` | Kitex 的 xDS / Proxyless / Istio 集成桥接——xDS 资源管理器 + 动态熔断（kitex-contrib/xds 重依赖隔离在此，kitex 根仓回归零 apache/thrift） | `go get github.com/oekit/kitex/istio@latest` |
-| kitex | `cmd/thrift2openapi` | thrift IDL（api.* 注解体系）→ OpenAPI 3.0 文档生成器（thriftgo 真 parser，go install 即用）——替换各服务手搓 regex… | `go get github.com/oekit/kitex/cmd/thrift2openapi@latest` |
+| bootstrap | `nacos` | bootstrap 的 Nacos/NNS 服务治理接入——以 BootstrapperOption 注入，父仓保持零 Nacos 依赖（v0.3.0 起注册延迟到 App.Ready 之后） | `go get github.com/oekit/github.com/oekit/bootstrap/nacos@latest` |
+| bootstrap | `obs` | bootstrap 的可观测性接入——以 BootstrapperOption 注入 Prometheus 指标（oekit/metrics）与 OpenTelemetry 追踪（oekit… | `go get github.com/oekit/github.com/oekit/bootstrap/obs@latest` |
+| logx | `sink` | logx 的输出目标实现——Sink 抽象 + MultiSink/FileSink/RotatingSink 三个内置实现，重依赖隔离在此，根包纯 stdlib | `go get github.com/oekit/github.com/oekit/logx/sink@latest` |
+| logx | `hlog` | 基于 Hertz hlog 的 logx.Logger 实现（结构化 kv 降级为字符串拼接，输出格式与 Hertz hlog 对齐） | `go get github.com/oekit/github.com/oekit/logx/hlog@latest` |
+| logx | `hertzlog` | Hertz 日志后端桥接——logrus/zap/zerolog/slog 四后端各自实现 hlog.FullLogger（依赖隔离，logx 根包不引三方日志库） | `go get github.com/oekit/github.com/oekit/logx/hertzlog@latest` |
+| logx | `kitexlog` | Kitex 日志后端桥接——把 logx.Logger 适配为 Kitex klog.FullLogger（依赖隔离，logx 根包不引 kitex） | `go get github.com/oekit/github.com/oekit/logx/kitexlog@latest` |
+| timertask | `redis` | timertask 的 Redis 后端——RedisBackend/ShardManager 与可靠投递，go-redis 隔离在此，根包零 redis 依赖（v0.2.0 起） | `go get github.com/oekit/github.com/oekit/timertask/redis@latest` |
+| registry | `nacosimpl` | Nacos SPI 实现——Discoverer/ConfigStore/Registrar 基于 nacos-sdk-go v2（nacos-sdk 重依赖隔离在此，registry 根仓零 nacos-sdk） | `go get github.com/oekit/github.com/oekit/registry/nacosimpl@latest` |
+| registry | `nacos` | Nacos 客户端门面——Bootstrap 配置、client 工厂与 config 加载（实现 core/config.ConfigSource，配 ConfigWatcher 热更新） | `go get github.com/oekit/github.com/oekit/registry/nacos@latest` |
+| kitex | `observability/tracing/instrumentation/kitexotel` | Kitex 的 OpenTelemetry tracing 接入——client/server suite + metainfo 透传（obs-opentelemetry 重依赖隔离在此，kitex 根仓回归零… | `go get github.com/oekit/github.com/oekit/kitex/observability/tracing/instrumentation/kitexotel@latest` |
+| kitex | `istio` | Kitex 的 xDS / Proxyless / Istio 集成桥接——xDS 资源管理器 + 动态熔断（kitex-contrib/xds 重依赖隔离在此，kitex 根仓回归零 apache/thrift） | `go get github.com/oekit/github.com/oekit/kitex/istio@latest` |
+| kitex | `cmd/thrift2openapi` | thrift IDL（api.* 注解体系）→ OpenAPI 3.0 文档生成器（thriftgo 真 parser，go install 即用）——替换各服务手搓 regex… | `go get github.com/oekit/github.com/oekit/kitex/cmd/thrift2openapi@latest` |
