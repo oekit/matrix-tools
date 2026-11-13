@@ -5,8 +5,6 @@
 | 想做什么 | 子包 | 说明 |
 |---|---|---|
 | 错误包装/业务错误 | `errors` | nil-safe Wrap/Cause + BizError 双码（服务形态唯一载体） |
-| 分布式锁契约 | `distlock` | Locker 接口 + 哨兵 + WithLock——redisx/etcdx 双后端互换单源（v0.45.0） |
-| 深拷贝/环防护 | `reflectx` | DeepCopy 按指针身份记环，map/slice 自引用同栈防护（v0.45.0） |
 | 字符串/脱敏/敏感词 | `stringx` | 工具集 + Replacer 最长匹配替换 + Masker 正则脱敏 |
 | 切片/枚举/类型转换 | `slicex` / `enumx` / `convert` | — |
 | 时间边界/cron | `timex` / `timex/cron` | BeginningOf/EndOf 七对 + cron 表达式 |
