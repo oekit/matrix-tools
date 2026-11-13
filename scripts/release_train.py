@@ -92,6 +92,12 @@ def tag_exists_remote(repo: str, tag: str) -> bool:
     return remote_tag_exists(repo, tag)
 
 
+# CI 共享 workflow（oekit/.github go-ci.yml）的 golangci-lint-version default——
+# 本机 lint 版本与此不一致时 check_repo fail-loud（oagentkit/matrix-tools#212：
+# v2.15 与 v2.14 对 errcheck channel receive 判定相反，假红卡发版）。
+CI_GOLANGCI_VERSION = "2.14.0"
+
+
 def go_env(root=None):
     """go / golangci-lint 子进程环境（matrix-tools#249 / #245）。
 
@@ -141,8 +147,24 @@ def check_repo(root, failures: list[str]) -> None:
     if not shutil.which("golangci-lint"):
         print("[check] golangci-lint 本地不可用，跳过（CI 兜底）")
         return
+    # lint 版本 preflight（oagentkit/matrix-tools#212）：CI（oekit/.github go-ci.yml）
+    # 固定 golangci-lint-version default——本机版本不一致时，同一份代码两版结论
+    # 可能相反（v2.15 起 errcheck 检查 error 型 channel 接收、与 staticcheck S1005
+    # 对 `_ =` 形态互斥，v2.14 不报 ⇒ 假红卡发版）。fail-loud 提示，不用错版本判。
+    import subprocess as _sp
+    _lv = _sp.run(["golangci-lint", "version", "--format", "short"],
+                  capture_output=True, text=True)
+    _local = (_lv.stdout or _lv.stderr or "").strip().split()[-1] if _lv.returncode == 0 else ""
+    _ci = CI_GOLANGCI_VERSION  # 与 go-ci.yml default 同源的常量
+    if _local and _ci and not _local.lstrip("vV").startswith(_ci.lstrip("vV")):
+        failures.append(
+            f"golangci-lint 版本与 CI 不一致：本机 {_local} ≠ CI {_ci}（go-ci.yml "
+            f"golangci-lint-version default）——两版判据有差（如 v2.15 errcheck 对 "
+            f"channel receive 的新检查），用错版本会假红/假绿；请装 {_ci} 后重跑"
+            f"（brew/官方 install 脚本指定版本）")
+        return
     env = go_env(root)
-    print(f"[check] lint 工具链：{toolchain_note(env)}")
+    print(f"[check] lint 工具链：{toolchain_note(env)}（golangci-lint {_local or '版本未知'}）")
     r = subprocess.run(["golangci-lint", "run", "--timeout", "5m"],
                        cwd=root, capture_output=True, text=True, env=env)
     if r.returncode != 0:
