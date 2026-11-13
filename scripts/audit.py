@@ -554,8 +554,12 @@ for _i, repo in enumerate(MODULES, 1):
     ml = module_line(repo, BASE)
     check(ml == f"module github.com/oekit/{repo}", f"{repo}: module 行 = {ml!r}")
     # 2) 残留引用
+    # ⚠️ `yi-nology` 必须带 `github.com/` 前缀（与 site 侧判据同口径）：
+    # 裸 org 名会误伤注释里的合法事实陈述（pkg errors/format.go 记录跨 org
+    # 消费方 72+4 处、logkv_test 记录两矩阵字段名——都是 audit 自己 reverse_floors
+    # 依赖的事实），而真正的旧引用（import 路径/URL）必然带 github.com/ 前缀。
     r = subprocess.run(["grep", "-rl", "--exclude-dir=.git",
-                        "-e", "yi-nology", "-e", "openekit", "-e", "github.com/oekit/ekit-", "."],
+                        "-e", "github.com/yi-nology", "-e", "openekit", "-e", "github.com/oekit/ekit-", "."],
                        cwd=d, capture_output=True, text=True)
     if r.stdout.strip():
         issues.append(f"{repo}: 残留旧引用 {r.stdout.strip().splitlines()[:3]}")
