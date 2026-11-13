@@ -189,8 +189,20 @@ def module_line(repo: str, base: str | None = None) -> str:
 # go.mod 的 oekit 依赖行两种形态：require( 块内 tab 前缀 + 单行 require。
 # 此前只匹配 tab 形态——logx/bootstrap 的单行 require core 被解析为无依赖
 # （矩阵表依赖列错、地板对齐漏仓），logx#22 揭示。
+#
+# 版本段必须接受 **Go 伪版本**（#306）：`vX.Y.Z-0.<14位时间戳>-<12位sha>`（有
+# 基础 tag 的 post-tag 形态）与 `v0.0.0-<时间戳>-<sha>`（尚无 tag 的形态）——
+# 此前三段数字 + 行尾的写法让指向未发布 commit 的依赖行对矩阵表 / 地板门禁 /
+# align_floors 四个消费面**同时隐身**（hertz→core 的 v0.14.3-0.… 现场实证），
+# 矩阵表把依赖整列抹掉还把这种抹除当正确。
 OEKIT_REQ_RE = re.compile(
-    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) (v\d+\.\d+\.\d+)$", re.M)
+    r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)) "
+    r"(v\d+\.\d+\.\d+(?:-0\.\d{14}-[0-9a-f]{12})?|v\d+\.\d+\.\d+-\d{14}-[0-9a-f]{12})$", re.M)
+
+
+def strip_pseudo(v: str) -> str:
+    """伪版本 → 基础三段 semver（比较口径：地板比基础版本，保守不激进）。"""
+    return re.sub(r"(-0\.\d{14}|-\d{14})-[0-9a-f]{12}$", "", v)
 
 
 def sibling_deps(repo: str, base: str | None = None) -> list[str]:

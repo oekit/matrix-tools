@@ -127,6 +127,21 @@ def main() -> None:
         out = scan("pkg", root5, {"pkg": "v0.31.1"})
         check(not out, f"自己的 tag 不与自己比、非矩阵模块不判：out={out}")
 
+        # ── 形态⑧：伪版本行要被看见且按基础段比较（#306） ──
+        # post-tag 形态 v0.14.3-0.<ts>-<sha> 与无 tag 形态 v0.0.0-<ts>-<sha>：
+        # 旧正则（三段数字+行尾）让它们整条隐身 ⇒ 门禁假绿。
+        # （dep 取本自测假 MODULES 清单内的仓——known 判据只放行矩阵模块。）
+        root6 = base / "data"
+        write_gomod(root6 / "go.mod", [("concurrency", "v0.14.3-0.20261111201459-c0f8a3febb68")])
+        out = scan("data", root6, {"concurrency": "v0.15.0"})
+        check(len(out) == 1, f"伪版本行要被看见且落后要判（v0.14.3-0.… < v0.15.0）：out={out}")
+        out = scan("data", root6, {"concurrency": "v0.14.3"})
+        check(not out, f"伪版本基础段齐平不误报（v0.14.3-0.… ≥ v0.14.3）：out={out}")
+        root7 = base / "middleware"
+        write_gomod(root7 / "go.mod", [("pkg", "v0.0.0-20261111201459-c0f8a3febb68")])
+        out = scan("middleware", root7, {"pkg": "v0.46.0"})
+        check(len(out) == 1, f"无 tag 伪版本（v0.0.0-<ts>-<sha>）也要判：out={out}")
+
     # ── 形态⑦：变异自证 —— 数字比改成字符串比 ⇒ 形态③必须转红 ──
     src = (HERE / "audit.py").read_text(encoding="utf-8")
     check("parse_semver(ver), parse_semver(lt)" in src,

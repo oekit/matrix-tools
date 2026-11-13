@@ -72,11 +72,15 @@ from prkit import land_pr  # noqa: E402
 # 禁止 `//`。
 FLOOR_REQ_RE = re.compile(
     r"^(?:\t|require )(github\.com/oekit/([a-z0-9-]+)(/[a-z0-9._-]+(?:/[a-z0-9._-]+)*)?)"
-    r" (v\d+\.\d+\.\d+)( // indirect)?$", re.M)
+    r" (v\d+\.\d+\.\d+(?:-0\.\d{14}-[0-9a-f]{12}|-\d{14}-[0-9a-f]{12})?)( // indirect)?$", re.M)
 
 def parse_semver(v: str) -> tuple[int, int, int]:
-    a, b, c = v[1:].split(".")
-    return (int(a), int(b), int(c))
+    # 伪版本（#306）：基础三段之后跟随 `-0.<时间戳>-<sha>`——此前 strict unpack
+    # 在伪版本行上直接 ValueError（CRASH 比「隐身」好，但抬升计划根本没法跑）。
+    m = re.match(r"^v(\d+)\.(\d+)\.(\d+)(?:-0\.\d{14}-[0-9a-f]{12}|-\d{14}-[0-9a-f]{12})?$", v)
+    if not m:
+        raise ValueError(f"not a semver/pseudo-version: {v!r}")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)))
 
 
 def find_gomods(root: Path) -> list[Path]:

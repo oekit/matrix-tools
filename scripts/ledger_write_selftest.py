@@ -37,11 +37,28 @@ ROOT = HERE.parent
 TOOL = ROOT / "scripts" / "ledger_write.py"
 
 # 假 gh：复刻真实 gh 在这几个查询上的**取值形态**（2026-11-01 实测踩坑：
-# 真实 `gh issue view --json state` 返回**大写** CLOSED / OPEN）。
+# 真实 `gh issue view --json state` 返回**大写** CLOSED / OPEN；
+# 2026-11-12 #308 起 issue 事实改走 REST `gh api repos/<org>/<repo>/issues/<N>`
+# ——PR 判据是响应里的 `pull_request` 键）。
 FAKE_GH = """#!/bin/sh
 case "$1" in
-  issue)
-    printf '{"state":"%s","isPullRequest":%s}\\n' "${FAKE_ISSUE_STATE:-CLOSED}" "${FAKE_ISSUE_IS_PR:-false}"
+  api)
+    case "$2" in
+      *"/issues/"*)
+        if [ "${FAKE_ISSUE_IS_PR:-false}" = "true" ]; then
+          printf '{"state":"%s","pull_request":{"url":"fake"}}\\n' "${FAKE_ISSUE_STATE:-CLOSED}"
+        else
+          printf '{"state":"%s"}\\n' "${FAKE_ISSUE_STATE:-CLOSED}"
+        fi
+        ;;
+      *"/${FAKE_MISSING_TAG:-__no_such_tag__}")
+        echo "gh: HTTP 404: Not Found (https://api.github.com/$2)" >&2
+        exit 1
+        ;;
+      *)
+        printf '{"ref":"refs/tags/fake","object":{"sha":"%s"}}\\n' "${FAKE_TAG_SHA:-2222222222222222222222222222222222222222}"
+        ;;
+    esac
     ;;
   pr)
     if [ "${FAKE_PR_STATE:-MERGED}" = "MERGED" ]; then

@@ -26,8 +26,9 @@
 ——后者是个已合并 PR，账上凭空多出一条）。旧台账里的 `repo#N` 键仍可读
 （复核时 org 回退到条目自身的 org 字段）。
 
-**PR 与 issue 显式区分**（#268）：`gh issue view <n>` 对 PR 号返回的是 PR
-状态（MERGED/OPEN）⇒ 记入时读 `isPullRequest`，是 PR 一律拒绝并说清
+**PR 与 issue 显式区分**（#268）：记入时读 REST issue 端点的 `pull_request`
+键（#308：`gh issue view --json isPullRequest` 在 gh 2.102.0 是字段级确定性
+错误 ⇒ 全量 fail-closed），是 PR 一律拒绝并说清
 （要记交付请把号填进 --pr 字段，别冒充 issue 主语）。
 
 `--org` 显式给了且与串里的 org 冲突 ⇒ **用法错误**（退出码 2），不静默猜。
@@ -175,15 +176,17 @@ def save_ledger(path: Path, data: dict[str, Any]) -> None:
 def issue_facts(org: str, repo: str, num: int) -> tuple[str, bool]:
     """issue 在 GitHub 上的真实状态（大写 OPEN/CLOSED）与「是不是 PR」。
 
-    ★ PR 与 issue 显式区分（matrix-tools#268）：`gh issue view <n>` 对 **PR 号**
-    返回的是 PR 的状态（MERGED/OPEN），且带 `isPullRequest=true`——旧行为只读
-    state ⇒ 把已合并的 PR 静默记成 issue（且若恰逢 CLOSED 形态还会自动推断
-    closed=True，账上凭空多出「已关单」）。现在显式读 isPullRequest，
-    调用方据此拒绝「把 PR 记成 issue」。
+    ★ PR 与 issue 显式区分（matrix-tools#268）：旧行为只读 state ⇒ 把已合并的
+    PR 静默记成 issue（且若恰逢 CLOSED 形态还会自动推断 closed=True，账上
+    凭空多出「已关单」）。调用方据此拒绝「把 PR 记成 issue」。
+
+    读法走 REST（#308）：`gh issue view --json isPullRequest` 在 gh 2.102.0
+    是字段级**确定性**错误（`Unknown JSON field`，两个入口都没有该字段）⇒
+    任何 `--issue` 记录 100% fail-closed 写不进。REST 的 issue 端点对 PR
+    返回 `pull_request` 键（等价判据，且 REST 不吃 GraphQL 限流）。
     """
-    data = ghsafe.gh_json(["issue", "view", str(num), "--repo", f"{org}/{repo}",
-                           "--json", "state,isPullRequest"])
-    return str(data.get("state", "")).upper(), bool(data.get("isPullRequest"))
+    data = ghsafe.gh_json(["api", f"repos/{org}/{repo}/issues/{num}"])
+    return str(data.get("state", "")).upper(), "pull_request" in data
 
 
 def pr_facts(org: str, repo: str, num: int) -> tuple[str, str]:
@@ -448,7 +451,7 @@ def cmd_add_entry(args, data: dict[str, Any]) -> None:
     if is_pr:
         # PR 一律拒绝记成 issue（#268）：不管它 MERGED 还是 OPEN——
         # 「记一条 issue」与「记一条交付」是两件事，主语混用会让去重失效。
-        raise Refused(f"{org}/{repo}#{num} 是 **PR**（gh 报 isPullRequest=true，"
+        raise Refused(f"{org}/{repo}#{num} 是 **PR**（REST 端点带 pull_request 键，"
                       f"状态 {state or '未知'}），不是 issue ⇒ 拒绝把 PR 记成 issue；"
                       f"要记交付请把号填进 --pr 字段（或用 --release-only 记发版）")
 
@@ -702,8 +705,8 @@ def cmd_run_end(args, data: dict[str, Any]) -> None:
             except Exception as e:  # noqa: BLE001 —— 读不到就报「无法判定」，不猜
                 drift.append(f"{issue}：issue 状态读不到（{e}）⇒ 无法判定")
                 continue
-            # 形态自查（#268 的第⑤条）：主语是 PR（isPullRequest 或状态 MERGED）
-            # 却被记成 issue ⇒ 判漂移——写入端已拒绝新犯，这里拦历史存量。
+            # 形态自查（#268 的第⑤条）：主语是 PR（REST 带 pull_request 键或
+            # 状态 MERGED）却被记成 issue ⇒ 判漂移——写入端已拒绝新犯，这里拦历史存量。
             if is_pr or state == "MERGED":
                 drift.append(f"{issue}：主语是 **PR**（状态 {state or '未知'}）"
                              f"不是 issue ⇒ 台账把它记成了 issue（#268 形态自查）")
