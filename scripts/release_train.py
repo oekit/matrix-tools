@@ -152,9 +152,12 @@ def check_repo(root, failures: list[str]) -> None:
     # 可能相反（v2.15 起 errcheck 检查 error 型 channel 接收、与 staticcheck S1005
     # 对 `_ =` 形态互斥，v2.14 不报 ⇒ 假红卡发版）。fail-loud 提示，不用错版本判。
     import subprocess as _sp
-    _lv = _sp.run(["golangci-lint", "version", "--format", "short"],
-                  capture_output=True, text=True)
-    _local = (_lv.stdout or _lv.stderr or "").strip().split()[-1] if _lv.returncode == 0 else ""
+    # ⚠️ 不用 --format short：v2.x CLI 无该 flag（实测 2.15.0 报 unknown flag、
+    # returncode=1 ⇒ _local="" ⇒ preflight 静默失效——本 commit 修复的正是它）。
+    # 裸 version 输出正则提版（"golangci-lint has version 2.15.0 built with…"）。
+    _lv = _sp.run(["golangci-lint", "version"], capture_output=True, text=True)
+    _m = re.search(r"v?\d+\.\d+\.\d+", (_lv.stdout or "") + (_lv.stderr or ""))
+    _local = _m.group(0) if (_lv.returncode == 0 and _m) else ""
     _ci = CI_GOLANGCI_VERSION  # 与 go-ci.yml default 同源的常量
     if _local and _ci and not _local.lstrip("vV").startswith(_ci.lstrip("vV")):
         failures.append(
