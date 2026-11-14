@@ -1075,7 +1075,7 @@ def issue_fix_prs(repo: str, num: str) -> list[int]:
     import ghsafe
     try:
         events = ghsafe.gh_json(["api", f"repos/{ORG}/{repo}/issues/{num}/timeline",
-                                 "--per-page=100"])
+                                 "-F", "per_page=100"])
     except ghsafe.GhCommandError as e:
         if e.is_not_found:
             return []
