@@ -3,10 +3,11 @@
 转发，拦截「源包新增导出符号时本壳需同步」的跟版税漏项。
 （2026-10-16 曾漏 pkg v0.6.0 的 BatchGetter——靠人记不如 audit 拦。）
 
-检查范围 = data 门面的八个壳。规则：
+检查范围 = data 门面的全部 re-export 壳（十壳；原生实现 cached/twolevel 不在内）。规则：
   - 源侧导出符号（跳过 const——壳无法 alias 常量；跳过方法——随类型走）
     必须在壳侧出现（type alias / var 转发 / generic.go 包装函数均算）；
   - 壳侧多出的符号（源已删）为残留，一并报告（会直接编译失败）；
+    SHELL_EXTRA 登记的门面便捷别名（源包本就没有）豁免；
   - **版本地板**（data#6）：壳引用的每个符号必须存在于 data/go.mod 钉住的那个源版本里。
     只比对源仓 HEAD 会漏掉「符号在 HEAD 有、在钉住的 tag 没有」——本地 go.work 把
     data 与源仓拼在一起 `go build` 绿，CI（GOWORK=off）才 `undefined: src.X`。
@@ -40,7 +41,18 @@ SHELLS = [
     ("redisx", "redisx", ""),
     ("timertask", "timertask", ""),
     ("cachetest", "pkg", "cache/cachetest"),
+    # data#298：CRUD 装配栈进门面——实现壳（gormrepo）与 JSON 列类型壳
+    # （datatypes）此前只能回源仓 gormx/... import。
+    ("gormrepo", "gormx", "gormrepo"),
+    ("datatypes", "gormx", "datatypes"),
 ]
+
+# 壳侧允许存在的「源包没有」的便捷符号：门面为装配点补的转发别名
+# （data/gormrepo 把 crud.Repository/Query 一并转出，让装配只 import 一个
+# 包）。这些符号不是源包导出面的一部分，不能按「源已删除」判残留。
+SHELL_EXTRA = {
+    "gormrepo": {"Repository", "Query"},
+}
 
 # 顶层声明：type/var/func + 首个标识符。方法行（func (recv) Name）在此之前
 # 被 FUNC_METHOD_RE 拦截；const 组整体跳过（壳无法 alias 常量）。
@@ -183,17 +195,24 @@ def check_sync(base: str = BASE) -> list[str]:
         shell_dir = os.path.join(data_dir, sub)
         src_repo_dir = str(repo_dir(src_repo, base))
         src_dir = os.path.join(src_repo_dir, src_sub) if src_sub else src_repo_dir
+        # 新壳先登记、data 侧 PR 后合入的过渡期：目录缺失给可读报告，
+        # 不让 os.listdir 抛 FileNotFoundError（data 分支未含新壳时常见）。
+        if not os.path.isdir(shell_dir):
+            issues.append(f"data/{sub}: 壳目录不存在（新壳尚未合入 data 目标分支）")
+            continue
         shell_syms = package_symbols(shell_dir)
         src_syms = package_symbols(src_dir)
+        extra = SHELL_EXTRA.get(sub, set())
         missing = sorted(src_syms - shell_syms)
-        stale = sorted(shell_syms - src_syms)
+        stale = sorted(shell_syms - src_syms - extra)
         label = f"data/{sub} ← {src_repo}/{src_sub}" if src_sub else f"data/{sub} ← {src_repo}"
         if missing:
             issues.append(f"{label}: 壳缺导出符号 {missing}（源仓新增未同步壳，跑壳同步）")
         if stale:
             issues.append(f"{label}: 壳残留符号 {stale}（源仓已删除，壳需清理）")
-        # 地板只核对壳真正转发的符号（残留符号已单列，排除后免重复报）
-        for line in floor_hint(data_dir, src_repo, src_repo_dir, src_sub, shell_syms - set(stale), missing):
+        # 地板只核对壳真正转发的符号（残留符号已单列，排除后免重复报；
+        # 门面自带的便捷别名不来自源包，同样不参与地板核对）
+        for line in floor_hint(data_dir, src_repo, src_repo_dir, src_sub, shell_syms - set(stale) - extra, missing):
             issues.append(f"{label}: {line}")
     return issues
 
@@ -237,6 +256,13 @@ func Baz(ctx context.Context) error
     missing = sorted(got_src - got_shell)
     if missing != ["Bar"]:
         print(f"✗ 差集 {missing} ≠ ['Bar']（分组别名必须被捕获）")
+        ok = False
+
+    # 门面便捷别名（SHELL_EXTRA）：源包没有但壳合法拥有的符号不得判残留，
+    # 未登记的多余符号仍须抓出来。
+    extra = {"Repository", "Query"}
+    if sorted({"Repository", "Query", "Ghost"} - got_src - extra) != ["Ghost"]:
+        print("✗ SHELL_EXTRA 豁免逻辑失效：登记别名被误判残留或未登记符号被吞")
         ok = False
 
     go_mod = """module github.com/oekit/data
