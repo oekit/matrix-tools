@@ -221,7 +221,8 @@ GEN_ORDER_HINT = ("｜若本次改的是生成器（gen_versions.py / gen_matrix
 # 那些 tag」时把条目误判为未发布而跳过——那是**门禁假通过**的最典型形态。
 # 本地 CHANGELOG 只会写已发布版本，多报最多是提示重跑生成器，漏报是断链。
 def check_breaking_index(live: dict):
-    from gen_versions import breaking_index, breaking_suspects  # noqa: 延迟导入
+    from gen_versions import (breaking_index, breaking_suspects,  # noqa: 延迟导入
+                              load_breaking_adjudications)
     indexed = {m["module"]: m.get("breakingIndex") or [] for m in live.get("modules", [])}
     for repo in MODULES:
         try:
@@ -245,18 +246,43 @@ def check_breaking_index(live: dict):
             check(False, f"{repo}: breakingIndex 多出 {len(extra)} 条 CHANGELOG 里没有的条目"
                          f"（跑 gen_versions.py）：{sample}{GEN_ORDER_HINT}")
 
-    # 疑似破坏性（机器判不了语义）：不阻塞，但必须显式提示，不能静默吞掉
+    # 疑似破坏性（机器判不了语义）：不阻塞，但必须显式提示，不能静默吞掉。
+    # 人工裁决登记表（matrix-tools#323）：not-breaking 的条目已被
+    # breaking_suspects 过滤；breaking 的条目**仍然出现**在这里（附裁决理由），
+    # 提醒「真破坏还没进 breakingIndex」——真破坏不许被「已登记」静默吞掉。
     suspects = []
-    for repo in MODULES:
+    adjudicated_breaking = []
+    adjudications_ok = True
+    try:
+        load_breaking_adjudications()   # 先验一次，形状坏了别在每个仓重复报
+    except Exception as e:  # noqa: BLE001 —— 判不了 ⇒ 判红，不静默当空表
+        check(False, gate_unavailable("breaking 疑似条目人工裁决登记表", e))
+        adjudications_ok = False
+    for repo in (MODULES if adjudications_ok else []):
         try:
             s = breaking_suspects(repo)
         except FileNotFoundError:
+            continue                    # 仓不在本地：逐仓检查已单独判红
+        except Exception as e:  # noqa: BLE001 —— 读 CHANGELOG 失败 ⇒ 判不了
+            check(False, gate_unavailable(f"{repo}: breaking 疑似条目", e))
             continue
-        if s:
-            suspects.append(f"{repo}×{len(s)}")
+        rest = []
+        for it in s:
+            adj = it.get("adjudication")
+            if adj and adj.get("verdict") == "breaking":
+                adjudicated_breaking.append(
+                    f"{repo} {it.get('version', '')}：{adj.get('reason', '')}")
+            else:
+                rest.append(it)
+        if rest:
+            suspects.append(f"{repo}×{len(rest)}")
     if suspects:
         print(f"  ⚠ 疑似破坏性变更未标注（`**refactor(...)**` / `### Changed` 段等，"
               f"机器判不了语义，请人工确认是否需进 breakingIndex）：{'; '.join(suspects)}")
+    if adjudicated_breaking:
+        print(f"  ⚠ 已裁决为破坏性但源仓 CHANGELOG 未标 BREAKING（登记待补，"
+              f"不静默吞掉；补标后随生成进 breakingIndex）："
+              f"{'; '.join(adjudicated_breaking)}")
 
 
 # ---------- breakingIndex 独立 oracle（matrix-tools#31 复审补漏） ----------
@@ -889,7 +915,44 @@ def check_version_line():
           + "; ".join(res["unreadable"][:4]))
 
 
-progress("阶段 4/7 独立门禁（breakingIndex oracle / 死路径 / 版本线）")
+def check_breaking_adjudications():
+    """人工裁决登记表必须与 CHANGELOG 锚点一致（matrix-tools#323）。
+
+    登记表的过滤能力建立在「(repo, version, line_prefix) 精确锚定」上：
+    CHANGELOG 条目被改写/删除后，旧裁决不再对应任何条目 ⇒ 必须判红让人重新核，
+    不能继续用旧结论静默过滤。命中多条（前缀太短/重复）同样判红——宁可多提示，
+    不可误吞真破坏。
+    """
+    try:
+        from gen_versions import (load_breaking_adjudications,
+                                  unanchored_breaking_adjudications)  # noqa: 延迟导入
+        known = load_breaking_adjudications()
+        stale = unanchored_breaking_adjudications()
+    except Exception as e:  # noqa: BLE001 —— 判不了 ⇒ 判红，不静默当空表
+        check(False, gate_unavailable("breaking 疑似条目人工裁决登记表", e))
+        return
+    unknown_repo = sorted({e["repo"] for e in known if e["repo"] not in MODULES})
+    check(not unknown_repo,
+          f"breaking 裁决登记表引用了矩阵不存在的仓：{unknown_repo}"
+          f"（scripts/breaking_suspects_known.json）")
+    if stale:
+        parts = []
+        for e in stale[:6]:
+            why = ("锚点失配（CHANGELOG 条目已改/删？）" if e["matched"] == 0
+                   else f"锚点命中 {e['matched']} 条（前缀太短/重复）")
+            parts.append(f"{e['repo']} {e['version']} {why}：{e['line_prefix'][:40]}…")
+        check(False, f"breaking 裁决登记表有 {len(stale)} 条锚点失效"
+                     f"（scripts/breaking_suspects_known.json）：" + "；".join(parts))
+        return
+    nb = sum(1 for e in known if e["verdict"] == "not-breaking")
+    br = len(known) - nb
+    print(f"  · 疑似破坏性变更人工裁决登记：{len(known)} 条已裁决"
+          f"（not-breaking {nb} / breaking {br}）——"
+          f"scripts/breaking_suspects_known.json（matrix-tools#323）")
+
+
+progress("阶段 4/7 独立门禁（裁决登记 / breakingIndex oracle / 死路径 / 版本线）")
+check_breaking_adjudications()
 check_breaking_oracle()
 check_dead_paths()
 check_version_line()
