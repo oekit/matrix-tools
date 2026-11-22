@@ -20,8 +20,13 @@ MODULES = [
     "metrics", "tracing", "registry",
     "data", "gormx", "redisx", "etcdx", "httpx", "network", "timertask", "middleware", "k8s",
     "nns", "nns-endpoint",
-    "bootstrap", "hertz", "kitex", "workflow", "kitex-examples",
+    "bootstrap", "hertz", "kitex", "workflow",
 ]
+
+# kitex-examples 自 BOM 移除（2026-11-23）：端到端示例仓零库消费方，进 require
+# 地板只会让下游模块图挂示例仓 + 每次小版本变动 BOM 空转发版。示例的组合冒烟
+# 价值保留在矩阵 CI（它 require 全套 oekit 模块，天然是编译冒烟载体）。
+EXCLUDED_FROM_BOM = ["kitex-examples"]
 
 # 嵌套模块清单（7 个，matrix-tools#37）
 #
@@ -136,7 +141,6 @@ DESC = {
     "hertz": "Hertz 运行时集成（模块根扁平化）——日志桥接、生命周期、SSE/health/metrics、适配器、OTel、crudh/validatorh（基于 authx/validator）/versionh（原 handler 微库收编）；RunServer 变参就绪门 WithOnReady（全部 HostPort TCP 探活可建连后回调，探活超时按启动失败优雅关机；缺省超时 5s 经 WithReadyProbeTimeout 调整——探活目标是 server 自动取到的全部 HostPort，**无探活地址覆盖选项**（kitex 侧才有 WithReadyAddr）），配合 bootstrap Ready 实现 NNS 延迟注册；transportx（hertz→core/transport 同构适配器）+ chainmw 桥接",
     "kitex": "Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel、istio（xDS 动态熔断，原 istio 微库收编）；RunServer 变参就绪门（WithOnReady/WithReadyAddr/WithReadyProbeTimeout）+ chainmw.ToKitex（core/chain.Middleware → kitex 中间件，与 hertz 共享 middleware/chainmw 实现）+ transportx",
     "workflow": "组合式流程编排——串行/并行/异步/条件分支 + Hook AOP",
-    "kitex-examples": "Kitex echo 示例——client/server + IDL + 治理配置",
 }
 
 # 矩阵检出根（base）的兜底位置。
