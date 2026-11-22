@@ -39,7 +39,8 @@ SHELLS = [
     ("distlock", "redisx", "distlock"),
     ("gormx", "gormx", ""),
     ("redisx", "redisx", ""),
-    ("timertask", "timertask", ""),
+    # data#314：timertask 门面壳已拆除（零消费方的门面跟版税）⇒ 壳清单同步移除，
+    # 否则声明面仍要求一个仓里已不存在的目录（审计判「壳目录不存在」）。
     ("cachetest", "pkg", "cache/cachetest"),
     # data#298：CRUD 装配栈进门面——实现壳（gormrepo）与 JSON 列类型壳
     # （datatypes）此前只能回源仓 gormx/... import。
