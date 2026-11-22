@@ -53,7 +53,7 @@ LAYERS: list[tuple[str, list[str]]] = [
     ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
     ("数据访问", ["gormx", "redisx", "etcdx", "data", "timertask"]),
     ("可观测性", ["logx", "tracing", "metrics"]),
-    ("基础库", ["pkg", "concurrency", "core", "kitx"]),
+    ("基础库", ["pkg", "concurrency", "core", "authx"]),
 ]
 
 # 场景选型表：scene=我要做什么 / use=用什么（可含子包路径） / tips=组合与姿势 /
@@ -221,9 +221,9 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "redline": "组件 Close 统一 `Close(ctx) error` + sync.Once 幂等",
          "mods": ["core", "bootstrap"]},
         {"scene": "ID 生成 / 校验 / 哈希",
-         "use": "`kitx`",
+         "use": "`authx`（原 kitx）",
          "tips": "uidgen（Snowflake 单例 + Extract 元数据 / RFC4122 v4）；validator 校验失败 Unwrap 即 BizError 400；hash 非密码学缓存键",
-         "mods": ["kitx"]},
+         "mods": ["authx"]},
         {"scene": "日志后端桥接 / 文件轮转",
          "use": "`logx/sink` · `logx/hlog` · `logx/hertzlog` · `logx/kitexlog`（嵌套模块按需引入）",
          "tips": "文件/轮转/多目标 Sink；logrus/zap/zerolog/slog 四后端桥 hlog；Kitex klog 桥接",
