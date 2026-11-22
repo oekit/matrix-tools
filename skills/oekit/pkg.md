@@ -1,4 +1,4 @@
-# pkg 子包速查（36 合 1，零第三方依赖）
+# pkg 子包速查（38 合 1，零第三方依赖）
 
 > 由 gen_skill.py 渲染——修订改 gen_skill.py 的 PKG_QUICK；audit 会拿 pkg 仓真实目录校验死键。API 以 `go doc github.com/oekit/pkg/<sub>` 为准。
 
