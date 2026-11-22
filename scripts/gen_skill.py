@@ -49,7 +49,7 @@ SKILL_DIR = MT_ROOT / "skills" / "oekit"
 
 # 能力层分组（口径与伞仓 README 架构总览一致，纯展示分组）
 LAYERS: list[tuple[str, list[str]]] = [
-    ("应用引导 · 框架生态", ["bootstrap", "hertz", "kitex", "middleware", "workflow", "kitex-examples", "k8s"]),
+    ("应用引导 · 框架生态", ["bootstrap", "hertz", "kitex", "middleware", "workflow", "k8s"]),
     ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
     ("数据访问", ["gormx", "redisx", "etcdx", "data", "timertask"]),
     ("可观测性", ["logx", "tracing", "metrics"]),

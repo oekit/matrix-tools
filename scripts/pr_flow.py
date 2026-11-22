@@ -46,7 +46,7 @@ MODULES = [
     "metrics", "tracing", "registry",
     "data", "gormx", "redisx", "etcdx", "httpx", "network", "timertask", "middleware", "k8s",
     "nns", "nns-endpoint",
-    "bootstrap", "hertz", "kitex", "workflow", "kitex-examples",
+    "bootstrap", "hertz", "kitex", "workflow",
 ]
 META = ["oekit", "matrix-tools", "oekit.github.io", ".github"]
 
