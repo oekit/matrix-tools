@@ -42,7 +42,7 @@ ORG = "oekit"
 
 # 目标仓：24 个模块仓 + 4 个元仓。
 MODULES = [
-    "pkg", "concurrency", "logx", "core", "kitx",
+    "pkg", "concurrency", "logx", "core", "authx",
     "metrics", "tracing", "registry",
     "data", "gormx", "redisx", "etcdx", "httpx", "network", "timertask", "middleware", "k8s",
     "nns", "nns-endpoint",
