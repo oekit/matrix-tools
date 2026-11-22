@@ -4,6 +4,16 @@ oekit 模块矩阵的自动化工具：生成器 + 全量审计 + 定时巡检�
 本仓此前无版本化（工具仓，随用随改）；v0.1.0 起建立版本记录，
 以便回执类流程能指向「哪个版本落地了哪次变更」。
 
+## [v0.3.0] — 2026-11-23
+
+- feat: 子包口径的**提取层**（`scripts/subpkg_claims.py`）——「某模块有多少公开子包」这件事**只算一次**：DESC 声明面 + 仓内真实目录两路合成「数字 + 出处」；判定层（`desc_count_selftest.py` / `verify_site_copy.py`）只比对、不自己算 ⇒ 两张脸不可能各算各的（与 oagentkit 侧同形）
+- feat: 站点手写面的「N 合 1」包数判据（`verify_site_copy.check_subpackage_counts`）——站点 CI 只有 VitePress 构建 + 死链检查，`llms.txt` / `docs/guide/*.md` 里的「pkg 38 合 1」过期**无人拦**（原判据只管模块规模 24/12/37 与集合，不管每模块包数）；本判据接进 `audit.py` 的站点面（CI 跑得到），站点仓自己的 Content gate 也会 checkout matrix-tools 跑它
+- feat: 归属判定按**区间间隙**取最近的模块提及——站点一行常有多个模块（能力层表格行 pkg · concurrency · core · kitx），按起点算会把 pkg 的声明归给 concurrency（实测踩过）
+- fix: 未归属的「N 合 1」（同行无模块提及，如代码块注释）**只记账不判红**——主语不确定时判红是**假红**（本仓既有判据对泛用行文也是「跳过而非误报」），但**不许静默**：照样列进报告
+- test: `verify_site_copy_selftest.py` 补 V8/V9/V10 三条用例 + 第二条变异自证（短路「数字 ≠ 事实」分支 ⇒ V8b 必须从红转绿，证明它真在比数字）
+- test: `desc_count_selftest.py` 改用提取层，变异自证迁到提取层模块（**变异对象与实现同处一处**，否则变异改的是副本、判据没被变异到）
+- 实证：新判据上线即抓出**站点真实存量漂移**——`oekit.github.io` README 的能力层表格行与快速开始注释仍写「23 合 1」（实际 38）⇒ 站点 PR #256 修复（**判据的第一个真实猎物**）
+
 ## [v0.2.9] — 2026-11-14
 
 - fix: 伪版本 require 正则接受 Go 伪版本形态（#306）——`vX.Y.Z-0.<时间戳>-<sha>` 对矩阵表/地板门禁/align_floors 不再隐身（hertz→core 现场实证），`strip_pseudo` 保守比较口径

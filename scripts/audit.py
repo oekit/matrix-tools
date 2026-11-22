@@ -28,7 +28,8 @@ from matrix import (  # noqa: E402
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
     RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags, remote_tags,
 )
-from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
+from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units, check_subpackage_counts  # noqa: E402
+import subpkg_claims  # noqa: E402  子包口径的提取层（与 DESC 子包自测共用同一份提取结果）
 import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
 from install_lines import check_readme_install_lines, nested_units_of  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
@@ -690,6 +691,15 @@ try:
     _site_counts = count_units(BASE if os.path.isdir(BASE) else None)
     issues += site_check_counts(site, _site_counts)
     issues += check_llms_coverage(site)
+    # 子包口径（2026-11-23 补）：站点手写面的「N 合 1」必须等于事实。
+    # 期望值来自**提取层**（subpkg_claims.truth），与 DESC 子包自测同一份提取
+    # 结果 ⇒ 两张判定面不可能各算各的（站点 CI 只有 VitePress 构建 + 死链检查，
+    # 此前这类数字过期无人拦）。
+    _subpkg_problems, _subpkg_undecided = check_subpackage_counts(
+        site, subpkg_claims.truth(BASE if os.path.isdir(BASE) else None))
+    issues += _subpkg_problems
+    for _u in _subpkg_undecided:
+        print(f"  ⚠ 站点子包声明未归属（未判定，非漂移）：{_u}")
     # 发版单元全集（根 24 + 嵌套 7 + 伞仓 1 = 32）：verify_site_copy 只管**根模块**条目集合，
     # 嵌套模块的独立条目与 go get 安装行是另一件事——llms.txt 是 Agent 唯一会抓的
     # 机器可读索引，嵌套模块（零依赖隔离的载体）不给安装行 = 装不上。

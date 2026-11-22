@@ -51,8 +51,10 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent))
+sys.path.insert(0, str(HERE))          # scripts/ 自身（子包提取层在这里）
 from matrix import MODULES, NESTED_MODULES  # noqa: E402
 from gen_tables import BOM_REPO, COUNT_UNITS, count_units  # noqa: E402  口径单一真相
+import subpkg_claims  # noqa: E402  子包口径的提取层（与 DESC 自测共用同一份提取结果）
 
 _COUNT_RE = re.compile(
     r"(\d+)\s*个\s*(" + "|".join(re.escape(u) for u in
@@ -144,6 +146,122 @@ def check_llms_coverage(site: Path) -> list[str]:
     if extra:
         problems.append(f"llms.txt 的「## 模块」段有 {len(extra)} 个矩阵里没有的条目：{extra}")
     return problems
+
+
+# ---------- 站点手写面的「N 合 1」包数（2026-11-23 补） ----------
+#
+# 为什么补这条：verify_site_copy.py 原先只判**模块规模**（24/12/37）与**集合**
+# （llms.txt / deps.json / deps-table / 嵌套段），**不判每模块的包数**。
+# 而「pkg 38 合 1」这类数字写在**站点手写面**（llms.txt、docs/guide/*.md——
+# 它们没有生成器）⇒ pkg 加到第 39 个子包时，真相源会红、**站点照旧挂着旧数字**，
+# 且没有任何门禁会红（站点 CI 只有 VitePress 构建 + 死链检查）。
+#
+# 期望值来自**提取层**（subpkg_claims.truth）：与 DESC 子包自测共用同一份提取
+# 结果 ⇒ 两张判定面不可能各算各的。
+
+# 站点侧句式「N 合 1」（比 DESC 的宽：不要求后接括号——站点的写法是
+# 「38 合 1 微工具集」「38 合 1，零第三方依赖」）
+_SITE_COUNT_RE = re.compile(r"(\d+)\s*合\s*1")
+
+# 模块链接形态：站点清单行/表格行的标准形态
+_SITE_LINK_RE = re.compile(r"\[([A-Za-z0-9_.\-/]+)\]\(https://github\.com/oekit/[^)]+\)")
+
+
+def _module_mentions(line: str) -> list[tuple[int, int, str]]:
+    """这一行里所有模块提及（起点, 终点, 模块名）。
+
+    两种形态都收：**模块链接**（pkg → github.com/oekit/pkg 的方括号链接）与
+    **独立词元**（如「## pkg 子包速查（38 合 1…）」）——两者都要求模块名不被
+    斜杠或字母数字粘连：否则 pkg/errors、oekit/pkg 里的「pkg」会被误当成
+    独立模块名（**归属错 ⇒ 判红在错误的模块上**）。
+    """
+    out: list[tuple[int, int, str]] = []
+    for m in _SITE_LINK_RE.finditer(line):
+        head = m.group(1).split("/")[0]
+        if head in MODULES:
+            out.append((m.start(), m.end(), head))
+    for mod in MODULES:
+        pat = r"(?<![A-Za-z0-9_.\-/])" + re.escape(mod) + r"(?![A-Za-z0-9_.\-/])"
+        for m in re.finditer(pat, line):
+            out.append((m.start(), m.end(), mod))
+    return out
+
+
+def _module_of_claim(line: str, start: int, end: int) -> str | None:
+    """把某个区间上的「N 合 1」归到**离它最近**的模块提及上。
+
+    为什么是「最近」而不是「同行唯一」：站点的一行常有多个模块
+    （能力层表格行：pkg · concurrency · core · kitx），其中只有紧挨着数字的
+    那个才是这个数字的 subject ⇒ 唯一性判据会误判成「无法归属」。
+
+    距离用**区间间隙**（不是起点差）：链接形态的模块名在**链接文本里**，
+    而链接正文（URL）可能很长 ⇒ 按起点算会认为「后面那个模块更近」
+    （实测踩过：pkg 的声明被归给了 concurrency）。
+
+    等距（两个模块一样近）⇒ 无法归属（**不猜**：猜错＝判红在错误的模块上）。
+    """
+    mentions = _module_mentions(line)
+    if not mentions:
+        return None
+    gaps: list[tuple[int, str]] = []
+    for ms, me, name in mentions:
+        if me <= start:
+            gap = start - me
+        elif end <= ms:
+            gap = ms - end
+        else:
+            gap = 0
+        gaps.append((gap, name))
+    best = min(g for g, _ in gaps)
+    tied = {n for g, n in gaps if g == best}
+    if len(tied) != 1:
+        return None
+    return next(iter(tied))
+
+
+def check_subpackage_counts(site: Path, truth_map: dict[str, dict]) -> tuple[list[str], list[str]]:
+    """站点手写面的「N 合 1」必须等于提取层给出的包数。
+
+    返回 (问题, 未归属声明)：
+      - **问题**（判红）：站点写了 N 而 N ≠ 事实；真相源声明了「N 合 1」的模块
+        而站点**没写**（漏写也是漂移）。
+      - **未归属声明**（只记账，不判红）：同一行找不到可归属的模块提及。
+        这类句子的**主语本身就不确定**（如代码块注释「# 微工具集（38 合 1…）」）
+        ⇒ 判红是**假红**（本仓既有判据对泛用行文也是「跳过而非误报」，
+        见 _MATRIX_CTX）。但**不许静默**：照样列进报告，让人看得见。
+
+    双向都判：数字错 ⇒ 红；声明缺 ⇒ 红。
+    """
+    problems: list[str] = []
+    undecided: list[str] = []
+    seen: dict[str, list[str]] = {}
+    for f in scan_site_files(site):
+        text = f.read_text(encoding="utf-8", errors="ignore")
+        for i, line in enumerate(text.splitlines(), 1):
+            for m in _SITE_COUNT_RE.finditer(line):
+                num = int(m.group(1))
+                where = f"{f.relative_to(site)}:{i}"
+                mod = _module_of_claim(line, m.start(), m.end())
+                if mod is None:
+                    undecided.append(f"{where} 「{num} 合 1」（同行无模块提及 ⇒ 未判定）")
+                    continue
+                t = truth_map.get(mod)
+                if t is None:
+                    problems.append(
+                        f"{where} 「{num} 合 1」归属到 {mod}，但提取层没有它的包数事实"
+                        "（该模块的 DESC 未声明「N 合 1」？）")
+                    continue
+                if num != t["expected"]:
+                    problems.append(
+                        f"{where} 「{num} 合 1」与事实不符：{mod} 应为 {t['expected']} 个公开子包"
+                        f"（出处：{t['source']}）")
+                seen.setdefault(mod, []).append(f"{where} 「{num} 合 1」")
+    for mod, t in truth_map.items():
+        if mod not in seen:
+            problems.append(
+                f"站点没写 {mod} 的「{t['expected']} 合 1」（真相源声明了，站点缺这张脸）"
+                f"——出处：{t['source']}")
+    return problems, undecided
 
 
 def check_ghost_roots(repos_dir: Path, counts: dict) -> list[str]:
@@ -306,6 +424,10 @@ def main() -> int:
     problems: list[str] = []
     problems += check_counts(site, counts)
     problems += check_llms_coverage(site)
+    # 子包口径（提取层与 DESC 自测共用）：站点手写面的「N 合 1」必须等于事实
+    subpkg_problems, subpkg_undecided = check_subpackage_counts(
+        site, subpkg_claims.truth(repos_dir))
+    problems += subpkg_problems
     problems += check_deps_units(site)
     deps_units, _deps_problems = read_deps_units(site)
     problems += check_deps_table(site, deps_units)
@@ -313,6 +435,8 @@ def main() -> int:
     if repos_dir is not None:
         problems += check_ghost_roots(repos_dir, counts)
 
+    for u in subpkg_undecided:
+        print(f"   ⚠ 未归属声明（未判定，非漂移）：{u}")
     if problems:
         print(f"❌ 站点内容门禁失败：{len(problems)} 处\n")
         for p in problems:
@@ -322,9 +446,14 @@ def main() -> int:
               " matrix-tools 的 gen_deps_doc.py 重生成。")
         return 1
 
+    subpkg_truth = subpkg_claims.truth(repos_dir)
+    subpkg_desc = "；".join(
+        f"{m} {t['expected']} 合 1（{t['source']}）" for m, t in sorted(subpkg_truth.items()))
     print(f"✅ 站点内容门禁通过（口径：{_fmt_counts(counts)}；llms.txt 覆盖 {len(MODULES)} 个模块；"
           f"deps.json/deps-table 覆盖 {len(expected_units())} 个发版单元；"
           f"llms.txt 嵌套段覆盖 {len(NESTED_MODULES)} 个嵌套单元）")
+    if subpkg_desc:
+        print(f"   子包口径：{subpkg_desc}")
     return 0
 
 
