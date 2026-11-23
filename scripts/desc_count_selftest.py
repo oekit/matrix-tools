@@ -19,47 +19,22 @@
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 # matrix.py 在仓根（不在 scripts/）⇒ sys.path 要指向仓根
 sys.path.insert(0, str(HERE.parent))
-from matrix import DESC, MODULES, repo_dir  # noqa: E402
+from matrix import DESC, MODULES  # noqa: E402
+# 子包口径的**提取层**（2026-11-23 起）：CLAIM_RE 与 public_subpackages 只在
+# subpkg_claims.py 里实现一次，本自测与站点门禁共用同一份提取结果 ⇒
+# 两张判定面不可能各算各的（详见该文件头注）。
+#
+# ⚠️ 这里 import 的是**模块**而不是名字：变异自证要把模块对象整体换掉
+#    （见 _mutate），绑名字的话换不进去、变异就变成空转。
+import subpkg_claims  # noqa: E402
 
-# 「N 合 1（包1/包2/…；后续说明）」⇒ 取 N 与括号里的包名清单
-# 注意：包名清单到「；」才结束（「）」在整段描述之后）⇒ **不能**要求闭合括号，
-# 否则整条匹配失败 ⇒ 检查被静默跳过（这正是本自测自己踩过的坑）。
-CLAIM_RE = re.compile(r"(\d+)\s*合\s*1\s*（([^；）]*)")
-
-SKIP_DIRS = {"internal", "testdata", "vendor", "node_modules"}
-
-
-def public_subpackages(repo: str) -> set[str] | None:
-    """仓里的公开子包（有 .go 文件、且不是 internal/testdata 之类）。
-
-    **读不到仓时返回 None**（不是空集）——「读不到 ≠ 事实为空」：
-    matrix-tools 在 CI 里是**独立 clone**（兄弟仓不在旁边）⇒ 此时应当**跳过**
-    而不是「判定为 0 个子包 ⇒ 判红」（否则 CI 恒红，且报的还是假问题）。
-    """
-    try:
-        d = repo_dir(repo)
-    except Exception:  # noqa: BLE001 — 仓读不到（独立 clone / 布局不同）⇒ 跳过
-        return None
-    out: set[str] = set()
-    try:
-        children = list(d.iterdir())
-    except Exception:  # noqa: BLE001
-        return None
-    for sub in children:
-        if not sub.is_dir():
-            continue
-        if sub.name in SKIP_DIRS or sub.name.startswith((".", "_")):
-            continue
-        if any(sub.glob("*.go")):
-            out.add(sub.name)
-    return out
+CLAIM_RE = subpkg_claims.CLAIM_RE
 
 
 def main() -> int:
@@ -76,7 +51,7 @@ def main() -> int:
         applicable += 1
         claimed_n = int(m.group(1))
         claimed_names = {x.strip() for x in m.group(2).split("/") if x.strip()}
-        actual = public_subpackages(repo)
+        actual = subpkg_claims.public_subpackages(repo)
         if actual is None:
             # 仓读不到（CI 里 matrix-tools 是独立 clone，兄弟仓不在旁边）⇒ 记账。
             # 「读不到 ≠ 事实为空」——既不当假红，也**不许**静默绿（见下）。
@@ -131,16 +106,19 @@ def _mutate() -> int:
     import os
     import tempfile
 
-    src = (HERE / "desc_count_selftest.py").read_text(encoding="utf-8")
+    # 变异对象是**提取层**（public_subpackages 已搬到 subpkg_claims.py）⇒
+    # 变异后要把模块对象整体换进本模块的全局名，main() 才会真的走变异体
+    # （绑名字的写法换不进去 ⇒ 变异空转 ⇒ 门禁变成「看着在、其实没判」）。
+    src = (HERE / "subpkg_claims.py").read_text(encoding="utf-8")
     anchor = "⇒ 跳过\n        return None"
     assert anchor in src, "变异锚点不存在（public_subpackages 的跳过分支被改了？）"
     mut_src = src.replace(anchor, "⇒ 跳过\n        return set()", 1)
-    tmp = Path(tempfile.mkdtemp()) / "desc_count_mutated.py"
+    tmp = Path(tempfile.mkdtemp()) / "subpkg_claims_mutated.py"
     tmp.write_text(mut_src, encoding="utf-8")
-    spec = importlib.util.spec_from_file_location("desc_count_mutated", tmp)
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules["desc_count_mutated"] = mod
-    spec.loader.exec_module(mod)
+    spec = importlib.util.spec_from_file_location("subpkg_claims_mutated", tmp)
+    mut_mod = importlib.util.module_from_spec(spec)
+    sys.modules["subpkg_claims_mutated"] = mut_mod
+    spec.loader.exec_module(mut_mod)
 
     import matrix
     empty = tempfile.mkdtemp(prefix="desc-mut-empty-")
@@ -153,8 +131,9 @@ def _mutate() -> int:
             rc_orig = e.code
         sys.stdout = sys.__stdout__
         print(f"  （原版在空检出下退出码 = {rc_orig}，期望 2=未核对）")
+        globals()["subpkg_claims"] = mut_mod      # ← main() 从此走变异体
         try:
-            rc_mut = mod.main()
+            rc_mut = main()
         except SystemExit as e:
             rc_mut = e.code
         print(f"  （变异体在空检出下退出码 = {rc_mut}，期望 1=假红被抓住）")
