@@ -84,7 +84,7 @@ description: >-
 | 应用配置 | `core/config` | `LoadBootstrap`（etc/ 约定）/ `LoadFile`（任意路径）/ `Unmarshal`（字节源）共享同一条解码线；严格模式 `WithStrict()` 未知键拒载 | `Unmarshal` 是 yaml 优先于 env——要 12-factor 再调 `ApplyEnvOverlay` |
 | 零依赖嵌入配置 | `pkg/config` | yaml 子集 parser + env 覆盖 + 必填汇总校验 + 敏感字段 Redact dump | 需要完整 yaml/三方能力选 core/config（pkg 是零依赖仓） |
 | 优雅关停 | `core/lifecycle`（`bootstrap` 组合根） | Manager：closer 注册 / Drain 引用计数 / per-job 超时 / panic 隔离；关停序 nns 反注册 → server.Shutdown | 组件 Close 统一 `Close(ctx) error` + sync.Once 幂等 |
-| ID 生成 / 校验 / 哈希 | `kitx` | uidgen（Snowflake 单例 + Extract 元数据 / RFC4122 v4）；validator 校验失败 Unwrap 即 BizError 400；hash 非密码学缓存键 | — |
+| ID 生成 / 校验 / 哈希 | `authx`（原 kitx） | uidgen（Snowflake 单例 + Extract 元数据 / RFC4122 v4）；validator 校验失败 Unwrap 即 BizError 400；hash 非密码学缓存键 | — |
 | 日志后端桥接 / 文件轮转 | `logx/sink` · `logx/hlog` · `logx/hertzlog` · `logx/kitexlog`（嵌套模块按需引入） | 文件/轮转/多目标 Sink；logrus/zap/zerolog/slog 四后端桥 hlog；Kitex klog 桥接 | 防递归：hlog 后端别再传给框架桥（kitexlog panic 防御） |
 | 注册发现 / Nacos 配置 | `registry`（+嵌套 `registry/nacos`·`registry/nacosimpl`），客户端门面 `nns` | SPI 无关：Registrar/Discoverer/ConfigStore + registrymocks 测试替身；Nacos 重依赖在嵌套模块 | — |
 

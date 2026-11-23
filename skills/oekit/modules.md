@@ -9,11 +9,10 @@
 | 模块 | 一句话 | 深入 |
 |---|---|---|
 | [bootstrap](https://github.com/oekit/bootstrap) | 应用生命周期引导——New(WithServiceName/WithShutdownTimeout/WithBeforeServe) + Run(fn) + healthz | `bootstrap/AGENTS.md` |
-| [hertz](https://github.com/oekit/hertz) | Hertz 运行时集成（模块根扁平化）——日志桥接、生命周期、SSE/health/metrics、适配器、OTel、crudh/validatorh（基于 kitx… | `hertz/AGENTS.md` |
+| [hertz](https://github.com/oekit/hertz) | Hertz 运行时集成（模块根扁平化）——日志桥接、生命周期、SSE/health/metrics、适配器、OTel、crudh/validatorh（基于 authx… | `hertz/AGENTS.md` |
 | [kitex](https://github.com/oekit/kitex) | Kitex 生态——日志桥接、治理热更、生命周期、BizError 桥接、kitexotel、istio（xDS 动态熔断，原 istio 微库收编） | `kitex/AGENTS.md` |
 | [middleware](https://github.com/oekit/middleware) | Hertz 标准中间件栈（模块根 mw，双层目录已收平）+ contrib 桥接 + hmw + SheddingMiddleware 自适应降载 + chainmw… | `middleware/AGENTS.md` |
 | [workflow](https://github.com/oekit/workflow) | 组合式流程编排——串行/并行/异步/条件分支 + Hook AOP | `workflow/AGENTS.md` |
-| [kitex-examples](https://github.com/oekit/kitex-examples) | Kitex echo 示例——client/server + IDL + 治理配置 | `kitex-examples/AGENTS.md` |
 | [k8s](https://github.com/oekit/k8s) | Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → KUBECONFIG 显式意图… | `k8s/AGENTS.md` |
 
 ## 通信 · 服务治理
@@ -33,7 +32,7 @@
 | [gormx](https://github.com/oekit/gormx) | SQL/GORM 全家——连接池增强、框架无关 CRUD Service、仓储（原 oekit/gorm，v0.3.0 更名） | `gormx/AGENTS.md` |
 | [redisx](https://github.com/oekit/redisx) | Redis 全家——客户端封装（根包）、分布式缓存 cache/、分布式锁 distlock（Locker 同形可互换；Renew 手动续期（false=锁丢失，不进… | `redisx/AGENTS.md` |
 | [etcdx](https://github.com/oekit/etcdx) | etcd 全家——客户端封装（根包：生产默认值/Health 探活/Close(ctx) 幂等）、registry 注册发现实现（SPI 对接 registry… | `etcdx/AGENTS.md` |
-| [data](https://github.com/oekit/data) | 数据访问门面——复刻 ekit data/ 能力面：cache/rediscache/crud/distlock/gormx/redisx/timertask… | `data/AGENTS.md` |
+| [data](https://github.com/oekit/data) | 数据访问门面——复刻 ekit data/ 能力面：cache/rediscache/crud/distlock/gormx/redisx… | `data/AGENTS.md` |
 | [timertask](https://github.com/oekit/timertask) | 分片定时任务（FNV-1a、心跳续约） | `timertask/AGENTS.md` |
 
 ## 可观测性
@@ -51,7 +50,7 @@
 | [pkg](https://github.com/oekit/pkg) | 微工具集 38 合 1（errors/bloomx/contextx/ctxscope/container/distlock/stringx/slicex/enumx… | `pkg/AGENTS.md` |
 | [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口… | `concurrency/AGENTS.md` |
 | [core](https://github.com/oekit/core) | 应用基建件——governance 治理 schema、config 配置加载（LoadBootstrap/LoadDotEnv/Get* 系、default/env… | `core/AGENTS.md` |
-| [kitx](https://github.com/oekit/kitx) | 标识与校验——uidgen（Snowflake 全局单例+Extract 元数据、手写 RFC 4122 v4 UUID 零第三方依赖、RandomHex… | `kitx/AGENTS.md` |
+| [authx](https://github.com/oekit/authx) | 标识与校验（2026-11-23 自 kitx 改名，消除与 RPC 框架仓 kitex 的一字之差误查面）——uidgen（Snowflake 全局单例+Extract… | `authx/AGENTS.md` |
 
 ## 嵌套模块（12 个可选装——重依赖隔离载体，父仓保持零第三方依赖）
 

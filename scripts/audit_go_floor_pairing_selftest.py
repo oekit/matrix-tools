@@ -3,7 +3,7 @@
 
 **为什么要有这个自测**（matrix-tools#307）：
 这道门禁的上限常量 `GO_FLOOR_BASE_MAX` 曾停在 `(1, 24)`，而基础层已随五波次
-现代化整体抬到 `go 1.26.0` ⇒ pkg/concurrency/logx/core/kitx/metrics **恒红 6 条**
+现代化整体抬到 `go 1.26.0` ⇒ pkg/concurrency/logx/core/authx/metrics **恒红 6 条**
 ⇒ audit 门禁「Fail on drift」对任何 matrix-tools PR 恒不满足——门禁自己把
 仓库焊死。修常量的改动（见 #304 内 cf14415）**没有自测**：常量与
 `GO_FLOOR_BUSINESS_OK` 上界再次分裂时（谁只改了一个），没有任何机器会发现。
