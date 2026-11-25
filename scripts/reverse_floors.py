@@ -58,6 +58,7 @@ go.mod），**不管「谁依赖我」**。但本 org 的模块正被**别的 or
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import re
 import subprocess
@@ -75,6 +76,7 @@ from matrix import (  # noqa: E402
     MODULES, NESTED_MODULES, ORG, latest_tag, enable_tag_cache,
     prefetch_remote_tags, nested_tag_prefix,
 )
+import ghsafe  # noqa: E402
 
 CONSUMERS_JSON = HERE / "cross_org_consumers.json"
 
@@ -100,6 +102,33 @@ def save_consumers(consumers: dict[str, list[str]], path: Path = CONSUMERS_JSON)
                     encoding="utf-8")
 
 
+def fetch_gomod_authenticated(org: str, repo: str) -> str:
+    """认证读法兜底：**私有仓**用匿名 raw 读不到（实测 raw 一律 404）。
+
+    实测（2026-11-25）：yi-nology/bianque 是私有仓——raw 的 `HEAD/go.mod` 与
+    `master/go.mod` 全 404（整个仓任何路径都 404），但 `gh api`（带本机
+    认证）能读到真内容（其 go.mod 确实 require 了 github.com/oekit/pkg）。
+
+    ⇒ 「raw 404」**不能**直接判「此仓不是 Go 模块」——那是把「看不见」当成
+    「没有」，会让私有消费方永久消失在地板视野里（跨 org 地板就少了这一面）。
+
+    读不到抛 RuntimeError：404 = 真没有 go.mod；其它 = 环境故障（未核对）。
+    """
+    try:
+        out, _err = ghsafe.run_gh(["api", f"repos/{org}/{repo}/contents/go.mod"])
+    except ghsafe.GhCommandError as e:
+        if e.is_not_found:
+            raise RuntimeError("HTTP 404") from None
+        raise RuntimeError(f"认证读取失败：{e}") from None
+    except OSError as e:
+        raise RuntimeError(f"认证读取不可用（gh 不可执行）：{e}") from None
+    try:
+        data = json.loads(out)
+        return base64.b64decode(data["content"]).decode("utf-8")
+    except Exception as e:  # noqa: BLE001 —— 解析失败是「读不到」，不是「没有」
+        raise RuntimeError(f"认证读取解析失败：{e}") from None
+
+
 def fetch_gomod(org: str, repo: str, fetcher=None) -> str:
     """消费方默认分支 HEAD 的 go.mod 正文。
 
@@ -108,6 +137,9 @@ def fetch_gomod(org: str, repo: str, fetcher=None) -> str:
         ⇒ 调用方按「登记待核实」处理（提示维护清单，不是网络故障）；
       - 其它（超时/连接错）：环境故障 ⇒ 调用方按「未核对」处理（读不到 ≠ 没有）。
     带一次重试（raw.githubusercontent 偶发超时，实测一次重试足够）。
+
+    **raw 404 ⇒ 先走认证读法兜底**（私有仓匿名不可见，见 fetch_gomod_authenticated）：
+    两条路都 404 才判「没有 go.mod」。
     """
     if fetcher is not None:
         return fetcher(org, repo)
@@ -118,7 +150,10 @@ def fetch_gomod(org: str, repo: str, fetcher=None) -> str:
             with urllib.request.urlopen(url, timeout=RAW_TIMEOUT) as resp:
                 return resp.read().decode("utf-8")
         except urllib.error.HTTPError as e:
-            raise RuntimeError(f"HTTP {e.code}") from None   # 404 不重试（确定无文件）
+            if e.code == 404:
+                # 404 可能是「私有仓匿名不可见」——先走认证读法兜底，再下「没有」的结论
+                return fetch_gomod_authenticated(org, repo)
+            raise RuntimeError(f"HTTP {e.code}") from None   # 其它 4xx/5xx 不重试
         except (urllib.error.URLError, TimeoutError, OSError) as e:
             last_err = e
     raise RuntimeError(f"{last_err}") from None
@@ -466,6 +501,47 @@ def _selftest() -> int:
                                     latest={"github.com/oekit/pkg": "v0.42.0"})
         check("logx" not in cmd3 and any("logx" in w and "读不到" in w for w in warns3),
               f"5b--missing: tag 读不到的模块不进命令且显式警告——实得 {cmd3!r} / {warns3}")
+
+    # ── 5c：私有仓兜底读法（实测 2026-11-25：yi-nology/bianque 是私有仓，
+    #        raw.githubusercontent 对它**任何路径**都 404，认证读法才拿得到
+    #        go.mod）——404 / 成功 / 环境故障三种映射都要对 ──
+    import base64 as _b64
+    import ghsafe as _ghsafe
+    _orig_run_gh = _ghsafe.run_gh
+
+    def _fake_run_gh_404(args, **kw):
+        raise _ghsafe.GhCommandError(args, 1, "", "HTTP 404: Not Found")
+
+    def _fake_run_gh_ok(args, **kw):
+        payload = b"module x" + bytes([10]) + b"require github.com/oekit/pkg v0.60.0"
+        return json.dumps({"content": _b64.b64encode(payload).decode()}), ""
+
+    def _fake_run_gh_broken(args, **kw):
+        raise _ghsafe.GhCommandError(args, 1, "", "connection reset by peer")
+
+    try:
+        _ghsafe.run_gh = _fake_run_gh_404
+        try:
+            fetch_gomod_authenticated("yi-nology", "bianque")
+            check(False, "5c: 认证读法 404 必须抛错（不能静默当成空 go.mod）")
+        except RuntimeError as e:
+            check("HTTP 404" in str(e),
+                  f"5c: 认证读法 404 必须映射成 HTTP 404（=真没有 go.mod）——实得 {e}")
+
+        _ghsafe.run_gh = _fake_run_gh_ok
+        txt = fetch_gomod_authenticated("yi-nology", "bianque")
+        check("github.com/oekit/pkg" in txt,
+              f"5c-ok: 认证读法必须读到真内容（私有仓不是不存在）——实得 {txt!r}")
+
+        _ghsafe.run_gh = _fake_run_gh_broken
+        try:
+            fetch_gomod_authenticated("yi-nology", "bianque")
+            check(False, "5c-err: 认证读法环境故障必须抛错，不能当没有")
+        except RuntimeError as e:
+            check("HTTP 404" not in str(e),
+                  f"5c-err: 环境故障不得伪装成 404（404=真没有，其它=未核对）——实得 {e}")
+    finally:
+        _ghsafe.run_gh = _orig_run_gh
 
 
     #    （集合判定是本修法的核心：变异后半对齐形态只报一个落后者，

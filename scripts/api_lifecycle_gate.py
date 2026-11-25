@@ -24,7 +24,8 @@ matrix-tools **刻意不引 pyyaml**（见 dependabot_dirs.py 的同款纪律：
 ----------------------
 1. 覆盖：清单 ↔ 生产包集合，双向判差（漏登记 / 幽灵登记都不许）；
 2. 标记：清单 level ↔ 包注释标记，级别必须一致且**恰好一处**；
-3. 自洽：每条登记的 reason 必填、since 形如 vX.Y.Z、level 在词表内。
+3. 自洽：每条登记的 reason 必填、since 形如 vX.Y.Z、level 在词表内；
+4. 替代指向：replacement 指向的符号必须真实存在（对齐 kernel 的 checkReplacements）。
 
 用法：
   python3 scripts/api_lifecycle_gate.py --repo <pkg 仓路径>
@@ -40,6 +41,8 @@ from pathlib import Path
 
 LEVELS = {"Experimental", "Stable", "Deprecated"}
 MANIFEST_NAME = "api-lifecycle.yaml"
+# 本仓 module 路径：replacement 只能指向本仓内的符号（对齐 kernel 的 selfModule）
+SELF_MODULE = "github.com/oekit/pkg"
 MARKER_RE = re.compile(r"^生命周期[:：]\s*(Experimental|Stable|Deprecated)\b")
 SINCE_RE = re.compile(r"^v\d+\.\d+\.\d+$")
 
@@ -174,6 +177,177 @@ def scan_markers(root: Path, pkg: str):
     return hits, imports
 
 
+def split_replacement(repl):
+    """拆「import 路径.符号名」⇒ (包相对路径, 符号名)；形态非法返回 None。
+
+    对齐 kernel 的 splitReplacement：末段取符号名（用 rfind 而非 split——
+    包路径本身可含点），import 路径必须落在本仓 module 之下，符号必须是导出名。
+    """
+    i = repl.rfind(".")
+    if i <= 0 or i == len(repl) - 1:
+        return None
+    import_path = repl[:i]
+    name = repl[i + 1:]
+    if not import_path.startswith(SELF_MODULE + "/"):
+        return None
+    head = name[:1]
+    if not head.isalpha() or not head.isupper():
+        return None  # 导出符号：首字母大写（未导出 / 下划线开头一律不算）
+    rel = import_path[len(SELF_MODULE) + 1:]
+    if not rel or ".." in rel:
+        return None
+    return rel, name
+
+
+def _strip_code(src):
+    """去注释与字符串字面量 ⇒ 只留代码骨架（注释里的「type Foo」不算声明）。"""
+    out = []
+    in_block = False
+    bs = chr(92)
+    for raw in src.splitlines():
+        buf = []
+        i = 0
+        n = len(raw)
+        while i < n:
+            ch = raw[i]
+            if in_block:
+                if ch == "*" and i + 1 < n and raw[i + 1] == "/":
+                    in_block = False
+                    i += 2
+                    continue
+                i += 1
+                continue
+            if ch == "/" and i + 1 < n and raw[i + 1] == "/":
+                break
+            if ch == "/" and i + 1 < n and raw[i + 1] == "*":
+                in_block = True
+                i += 2
+                continue
+            if ch == '"' or ch == "'" or ch == "`":
+                quote = ch
+                i += 1
+                while i < n:
+                    if quote != "`" and raw[i] == bs:
+                        i += 2
+                        continue
+                    if raw[i] == quote:
+                        i += 1
+                        break
+                    i += 1
+                buf.append(" ")
+                continue
+            buf.append(ch)
+            i += 1
+        out.append("".join(buf))
+    return out
+
+
+def _first_word(text):
+    """取首个标识符（泛型参数 [T] 与其后的类型都切掉）。"""
+    head = text.split("[")[0].strip()
+    parts = head.split()
+    return parts[0] if parts else ""
+
+
+def declared_names(pkg_dir):
+    """包目录内**顶层**导出声明名（func / type / var / const）⇒ (名字集合, 读不到的文件)。
+
+    与 kernel 的 go/ast 判据的差别：本实现是行解析——gofmt 保证顶层声明在第 0 列，
+    括号分组（type (…)、var (…)、const (…）按「分组内首条的缩进」取条目名。
+    读不到 .go 文件 ⇒ 记进 unreadable（判不了 ≠ 通过，不静默放过）。
+    """
+    names = set()
+    unreadable = []
+    for f in sorted(pkg_dir.glob("*.go")):
+        if f.name.endswith("_test.go"):
+            continue
+        try:
+            src = f.read_text(encoding="utf-8")
+        except OSError:
+            unreadable.append(f.name)
+            continue
+        in_group = False
+        group_indent = -1
+        for raw in _strip_code(src):
+            if not raw.strip():
+                continue
+            indent = len(raw) - len(raw.lstrip())
+            line = raw.strip()
+            if in_group:
+                if line.startswith(")"):
+                    in_group = False
+                    continue
+                if group_indent < 0:
+                    group_indent = indent
+                if indent != group_indent:
+                    continue  # 分组内的嵌套字面量 / 结构体字段，不是声明名
+                body = line.split("=")[0]
+                for part in body.split(","):
+                    nm = _first_word(part)
+                    if nm and nm[0].isalpha():
+                        names.add(nm)
+                continue
+            if indent != 0:
+                continue
+            if line.startswith("func "):
+                rest = line[5:].strip()
+                if rest.startswith("("):
+                    close = rest.find(")")
+                    if close < 0:
+                        continue
+                    rest = rest[close + 1:].strip()
+                nm = _first_word(rest.split("(")[0])
+                if nm and nm[0].isalpha():
+                    names.add(nm)
+                continue
+            if line in ("type (", "var (", "const ("):
+                in_group = True
+                group_indent = -1
+                continue
+            hit = False
+            for kw in ("type ", "var ", "const "):
+                if line.startswith(kw):
+                    nm = _first_word(line[len(kw):])
+                    if nm and nm[0].isalpha():
+                        names.add(nm)
+                    hit = True
+                    break
+            if hit:
+                continue
+    return names, unreadable
+
+
+def check_replacements(repo, entries):
+    """Deprecated 条目的替代指向必须真实存在（对齐 kernel checkReplacements）。
+
+    判据：形态是「<selfModule>/<包>.<导出符号>」，包目录存在，且该包生产代码里
+    确有同名导出顶层声明。指到不存在的符号 = 把调用方引向悬崖，比不给替代更糟。
+    """
+    probs = []
+    for e in entries:
+        if not e.replacement:
+            continue
+        parts = split_replacement(e.replacement)
+        if parts is None:
+            probs.append("%s: replacement %r 不是「%s/<包>.<导出符号>」形态"
+                         % (e.pkg, e.replacement, SELF_MODULE))
+            continue
+        rel, sym = parts
+        d = repo / rel
+        if not d.is_dir():
+            probs.append("%s: replacement 指向的包目录 %s 不存在——替代指向必须指到真的符号"
+                         % (e.pkg, rel))
+            continue
+        names, unreadable = declared_names(d)
+        for fn in unreadable:
+            probs.append("%s: 包目录 %s 里的 %s 读不到——符号存在性**未核对**（判不了 ≠ 通过）"
+                         % (e.pkg, rel, fn))
+        if sym not in names:
+            probs.append("%s: replacement 指向的符号 %s 不存在——替代指向必须指到真的符号"
+                         % (e.pkg, e.replacement))
+    return probs
+
+
 def check(repo: Path) -> list:
     probs = []
     manifest_path = repo / MANIFEST_NAME
@@ -226,6 +400,8 @@ def check(repo: Path) -> list:
             probs.append("%s: 生命周期标记出现 %d 次（%s）——一个包只允许一处" % (e.pkg, len(hits), files))
         elif hits[0][0] != e.level:
             probs.append("%s: 包注释标记 %s 与清单 level %s 不一致（判据面在 %s）" % (e.pkg, hits[0][0], e.level, hits[0][1]))
+    # 替代指向：符号必须真实存在（对齐 kernel checkReplacements）
+    probs.extend(check_replacements(repo, entries))
     return probs
 
 

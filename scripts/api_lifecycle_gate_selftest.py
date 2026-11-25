@@ -19,6 +19,9 @@
 | since 形态非法 | 判红 |
 | level 不在词表 | 判红 |
 | Deprecated 缺 replacement | 判红 |
+| replacement 指向不存在的符号 | 判红 |
+| replacement 形态非法（缺符号名 / 缺模块路径 / 未导出 / 指别的仓） | 判红 |
+| replacement 指向真实存在的导出符号 | 判绿 |
 | 非 Deprecated 却带 replacement | 判红 |
 | 清单字段名拼错 | 判红 |
 | 清单 version 不是 1 | 判红 |
@@ -105,6 +108,54 @@ def edit_manifest(repo: Path, fn):
     p.write_text(fn(p.read_text(encoding="utf-8")), encoding="utf-8")
 
 
+NL = chr(10)
+
+
+def build_deprecated_repo(root: Path, replacement: str):
+    """造一个只有 alpha 一个包的仓：alpha 带 Deprecated 标记 + 若干真实导出符号。"""
+    root.mkdir(parents=True, exist_ok=True)
+    d = root / "alpha"
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "doc.go").write_text(
+        "// Package alpha 测试包。" + NL + "//" + NL
+        + "// 生命周期: Deprecated——测试用标记。" + NL + "package alpha" + NL,
+        encoding="utf-8")
+    (d / "sym.go").write_text(
+        "package alpha" + NL + NL
+        + "func Exported() {}" + NL + NL
+        + "type ExportedType struct{}" + NL + NL
+        + "var ExportedVar = 1" + NL + NL
+        + "const ExportedConst = 2" + NL + NL
+        + "type (" + NL + "GroupedA struct{}" + NL + "GroupedB int" + NL + ")" + NL,
+        encoding="utf-8")
+    lines = ["# 测试清单", "", "version: 1", "", "packages:",
+             "  - pkg: alpha", "    level: Deprecated", "    since: v0.1.0",
+             "    reason: 测试用理由", "    replacement: " + replacement]
+    (root / "api-lifecycle.yaml").write_text(NL.join(lines) + NL, encoding="utf-8")
+    return root
+
+
+def expect_replacement(name, replacement, want_red):
+    """replacement 形态与符号存在性判定：want_red=True 期望判红。"""
+    tmp = Path(tempfile.mkdtemp(prefix="apilife_repl_"))
+    try:
+        repo = tmp / "pkg"
+        build_deprecated_repo(repo, replacement)
+        probs = check(repo)
+        red = bool(probs)
+        if red != want_red:
+            FAILURES.append("%s: 期望%s，实际%s（probs=%s）"
+                            % (name, "判红" if want_red else "判绿",
+                               "判红" if red else "判绿", probs))
+            print("  ✗ %s: 期望%s，实际%s" % (name, "判红" if want_red else "判绿",
+                                             "判红" if red else "判绿"))
+        else:
+            detail = ("判红（%s）" % probs[0][:60]) if red else "判绿"
+            print("  ✓ %s: %s" % (name, detail))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main() -> int:
     print("=== API 生命周期门禁自测 ===")
     expect_green("干净态")
@@ -140,6 +191,30 @@ def main() -> int:
                lambda r: edit_manifest(r, lambda s: s.replace("    since: v0.1.0", "    sice: v0.1.0")))
     expect_red("清单 version 不是 1",
                lambda r: edit_manifest(r, lambda s: s.replace("version: 1", "version: 2")))
+
+    # ── replacement 形态与符号存在性（对齐 kernel checkReplacements）──
+    expect_replacement("replacement 指向真实导出符号（func）",
+                       "github.com/oekit/pkg/alpha.Exported", False)
+    expect_replacement("replacement 指向真实导出符号（type）",
+                       "github.com/oekit/pkg/alpha.ExportedType", False)
+    expect_replacement("replacement 指向真实导出符号（var）",
+                       "github.com/oekit/pkg/alpha.ExportedVar", False)
+    expect_replacement("replacement 指向真实导出符号（const）",
+                       "github.com/oekit/pkg/alpha.ExportedConst", False)
+    expect_replacement("replacement 指向括号分组里的符号",
+                       "github.com/oekit/pkg/alpha.GroupedA", False)
+    expect_replacement("replacement 指向不存在的符号",
+                       "github.com/oekit/pkg/alpha.Missing", True)
+    expect_replacement("replacement 指向未导出符号",
+                       "github.com/oekit/pkg/alpha.exported", True)
+    expect_replacement("replacement 指向别的仓",
+                       "github.com/other/pkg/alpha.Exported", True)
+    expect_replacement("replacement 形态缺符号名",
+                       "github.com/oekit/pkg/alpha", True)
+    expect_replacement("replacement 形态缺模块路径",
+                       "alpha.Exported", True)
+    expect_replacement("replacement 指向不存在的包目录",
+                       "github.com/oekit/pkg/ghost.Exported", True)
 
     # 清单不存在 ⇒ 退出码 2（判不了 ≠ 通过）
     tmp = Path(tempfile.mkdtemp(prefix="apilife_"))
