@@ -13,5 +13,25 @@
     "textx",
     "toolgate",
     "tools"
+  ],
+  "yi-nology": [
+    "agent-memory",
+    "argus-service",
+    "bianque",
+    "code-review-service",
+    "git-ferry",
+    "git-ferry-core",
+    "git-manage-service",
+    "go-git-platform",
+    "go-gongfeng",
+    "goagent-kernel",
+    "goagent-runtime",
+    "gopkg",
+    "jumpserver-exec",
+    "jumpserver-kit",
+    "jumpserver-mgmt",
+    "open-voice-bridge",
+    "zentao-max",
+    "zentao-mini"
   ]
 }
