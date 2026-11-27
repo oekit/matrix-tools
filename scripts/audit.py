@@ -31,6 +31,7 @@ from matrix import (  # noqa: E402
 from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units, check_subpackage_counts  # noqa: E402
 import subpkg_claims  # noqa: E402  子包口径的提取层（与 DESC 子包自测共用同一份提取结果）
 import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
+import dep_gate  # noqa: E402  （分层无环门禁，2026-11-27 P1；只用 classify 契约）
 from install_lines import check_readme_install_lines, nested_units_of  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
@@ -903,6 +904,27 @@ progress("阶段 4/7 独立门禁（breakingIndex oracle / 死路径 / 版本线
 check_breaking_oracle()
 check_dead_paths()
 check_version_line()
+
+# ---------- 分层无环门禁（dep_gate，2026-11-27 演进评审 P1） ----------
+# 「依赖严格自底向上：上层依赖下层，全矩阵无环」此前是零执行承诺（评审定性：
+# 最大隐藏缺口）。dep_gate 把它变成可复算判据：origin/main go.mod 推 36 发版
+# 单元的内部依赖边（#246 数据源纪律），MODULES 声明序验方向 + Tarjan 检环 +
+# 展示分层对账（⚠ 不阻塞）。退出码契约由生产方定义（dep_gate.EXIT_* / classify，
+# 同 gen_matrix_go 模式）：0=成立 / 1=真违例 / 2=读不到（判不了 ≠ 通过，#79）。
+progress("阶段 4/7 分层无环门禁（dep_gate）")
+try:
+    _dg = subprocess.run([sys.executable,
+                          os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "dep_gate.py"), "--json"],
+                         capture_output=True, text=True, timeout=600)
+    _kind, _msg = dep_gate.classify(_dg.returncode, _dg.stdout + _dg.stderr)
+    if _kind == "violation":
+        issues.append(_msg)
+    elif _kind == "unreadable":
+        issues.append(gate_unavailable("分层无环门禁（dep_gate）", RuntimeError(_msg)))
+except Exception as e:  # noqa: BLE001
+    # ⚠ 不可用 ⇒ 判红（#79：判不了 ≠ 通过，与 BOM 检查同款口径）
+    issues.append(gate_unavailable("分层无环门禁（dep_gate）", e))
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
