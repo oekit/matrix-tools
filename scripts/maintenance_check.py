@@ -24,7 +24,7 @@ remote tag 的处理同口径：读不到 ≠ 事实为空。
 `base or os.environ.get("MATRIX_BASE", ...)`——base 非空就把环境变量短路掉。
 本脚本此前硬编码 `parent.parent.parent`，于是 docstring 里写的
 `MATRIX_BASE=repos python3 scripts/maintenance_check.py` 是无效的；
-CI 布局（仓克隆在 `$GITHUB_WORKSPACE/repos/<name>`）下 24 仓全部读不到。
+CI 布局（仓克隆在 `$GITHUB_WORKSPACE/repos/<name>`）下全矩阵仓全部读不到。
 现在 base 解析与 audit.py 同口径（MATRIX_BASE → 本仓上级），--base 可显式覆盖。
 """
 from __future__ import annotations

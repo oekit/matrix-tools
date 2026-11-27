@@ -19,8 +19,8 @@
   python3 scripts/gen_releases.py --repo data --apply
   python3 scripts/gen_releases.py --repo data --tag v0.9.0 --apply   # 只补一个
 
-枚举口径（matrix-tools#251）：MODULES + 伞仓 BOM（BOM_REPO）——伞仓是 37 个
-发版单元里的 1 个，缺了它 BOM 的 tag 永远不会被对账/补建 Release（存量：
+枚举口径（matrix-tools#251）：MODULES + 伞仓 BOM（BOM_REPO）——伞仓也是
+发版单元之一，缺了它 BOM 的 tag 永远不会被对账/补建 Release（存量：
 v0.2.7 有 tag 无 Release）。BOM 的 Release 正文从**该 tag 的 go.mod**渲染
 「本次钉住了哪些版本」（#252，见 bom_release_notes）。
 """
@@ -348,7 +348,7 @@ def go_mod_at(repo_dir_path, tag: str, nested: str | None) -> str | None:
 
 # ---------- BOM（伞仓 oekit）Release 正文（matrix-tools#251 / #252） ----------
 #
-# 伞仓是 37 个发版单元里的 1 个，此前不在 MODULES 枚举 ⇒ BOM 的 tag 永远
+# 伞仓是发版单元之一，此前不在 MODULES 枚举 ⇒ BOM 的 tag 永远
 # 补不上 Release（v0.2.7 有 tag 无 Release 即存量）；而 release_post 建的
 # BOM Release 正文是**写死的占位串** ⇒ 每版都不含「本次钉住了哪些版本」。
 # BOM 这个产物的全部意义就是「声明一组互相兼容的模块版本」⇒ 正文必须从
@@ -420,7 +420,7 @@ def bom_release_notes(oekit_dir, tag: str, prev_tag: str | None,
 def release_repos(only_repo: str | None = None) -> list[str]:
     """逐仓枚举：MODULES + 伞仓 BOM（matrix-tools#251）。
 
-    伞仓是 37 个发版单元里的 1 个，但不在 MODULES ⇒ 旧实现按 `list(MODULES)`
+    伞仓是发版单元之一，但不在 MODULES ⇒ 旧实现按 `list(MODULES)`
     枚举时 BOM 的 tag **永远**不会被对账/补建 Release（v0.2.7 有 tag 无 Release
     即存量足迹）。单数 `--repo` 指定时以调用方为准（含 BOM 自己）。
     """

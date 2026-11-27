@@ -298,7 +298,7 @@ def main() -> None:
     print("align_floors：依赖地板对齐（维护轮工具 / --repo 按需，非常规跟版）")
     plans_all: dict[str, dict[Path, list[tuple[str, str, str]]]] = {}
     skipped: list[str] = []
-    # 远端 tag 缓存：全矩阵 24 仓 × 多个依赖，同一依赖只读一次远端
+    # 远端 tag 缓存：全矩阵各仓 × 多个依赖，同一依赖只读一次远端
     # （不开缓存 ⇒ 每次 ls-remote 都要走 HTTPS，慢一个量级）。
     enable_tag_cache()
     try:

@@ -14,7 +14,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-# 规范模块清单（24 个，依赖自底向上的顺序）
+# 规范模块清单（依赖自底向上的顺序；个数勿在注释里手写——len(MODULES) 即口径）
 MODULES = [
     "pkg", "concurrency", "logx", "core", "authx",
     "metrics", "tracing", "registry",
@@ -23,12 +23,15 @@ MODULES = [
     "bootstrap", "hertz", "kitex", "workflow",
 ]
 
-# kitex-examples 自 BOM 移除（2026-11-23）：端到端示例仓零库消费方，进 require
-# 地板只会让下游模块图挂示例仓 + 每次小版本变动 BOM 空转发版。示例的组合冒烟
-# 价值保留在矩阵 CI（它 require 全套 oekit 模块，天然是编译冒烟载体）。
-EXCLUDED_FROM_BOM = ["kitex-examples"]
+# 矩阵外已知根仓（2026-11-23 kitex-examples 移出 MODULES，matrix-tools#339 收编登记）：
+# 端到端示例仓零库消费方，进 MODULES/BOM 只会让下游模块图挂示例仓 + 每次小版本
+# 变动 BOM 空转发版；示例的组合冒烟价值保留在矩阵 CI（它 require 全套 oekit 模块）。
+# ⚠️ 它**仍是有 go.mod 的物理根仓**——不登记的话：count_units 把它当伞仓数
+# （release_units 37≠36 假红）、check_ghost_roots 判它「矩阵外幽灵」（本地全量
+# 跑必红，CI 克隆不含它所以一直侥幸绿）。两个消费方都读本表，别再写死。
+NON_MATRIX_ROOTS = {"kitex-examples"}
 
-# 嵌套模块清单（7 个，matrix-tools#37）
+# 嵌套模块清单（matrix-tools#37；个数勿手写——len(NESTED_MODULES) 即口径）
 #
 # 嵌套的职责是**依赖隔离**，不是「目录组织」——把重依赖（hertz / kitex / go-redis /
 # 阿里云 Nacos SDK / prometheus+otel）关进子模块，父仓根包保持零第三方依赖。
@@ -71,17 +74,19 @@ NESTED_MODULES = [
 ]
 
 # 对外计数口径（唯一出处，站点文案与审计门禁都以此为准）
-MODULE_COUNT = len(MODULES)                       # 24 个独立发版的模块仓
-NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 12 个嵌套模块
+MODULE_COUNT = len(MODULES)                       # 独立发版的根模块仓数（勿手写数字）
+NESTED_MODULE_COUNT = len(NESTED_MODULES)         # 嵌套模块数（勿手写数字）
 # 伞仓 oekit（BOM）**是独立发版单元**——它有自己的 tag 与 GitHub Release
 # （v0.1.11 等），下游 `go get github.com/oekit/oekit@latest` 是一次独立的
 # 版本获取。按「可独立 go get 的发版单元」口径，它必须计入（裁决：伞仓计入；总数随嵌套模块增减）。
 BOM_RELEASE_UNIT = 1
-GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 37 个 Go module
-# 工作区里的 go.mod 总数 = 36（24 根 + 11 嵌套 + 1 伞仓），与 GO_MODULE_COUNT 相等
+GO_MODULE_COUNT = MODULE_COUNT + NESTED_MODULE_COUNT + BOM_RELEASE_UNIT  # 发版单元总数
+# ⚠️ 注释里的**绝对数字**是「注释不是判据」——人工同步必漂（2026-11-27 P0 实测：
+# 本文件曾同时存在 37 / 36 / 24 三种说法，matrix-tools#339）。机器可核的口径走
+# count_units() / release_unit_count()；对外文案由 verify_bom_readme 门禁守。
 
-# 伞仓 BOM 的仓名（matrix-tools#251）。它是 37 个发版单元里的 1 个，但**不在
-# MODULES**（MODULES 的语义是「24 个根模块仓」，BOM 计数走 BOM_RELEASE_UNIT）
+# 伞仓 BOM 的仓名（matrix-tools#251）。它是发版单元之一，但**不在
+# MODULES**（MODULES 的语义是「根模块仓清单」，BOM 计数走 BOM_RELEASE_UNIT）
 # ⇒ 按 MODULES 枚举的逐仓工具（gen_releases / release_post 等）必须**显式**
 # 把它补进枚举，否则 BOM 的 CHANGELOG / Release / 版本行没有任何工具覆盖
 # （#251 实测：v0.2.7 有 tag 无 Release，gen_releases --apply 永远补不上）。

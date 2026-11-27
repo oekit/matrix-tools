@@ -40,7 +40,7 @@ import ghsafe  # noqa: E402
 
 ORG = "oekit"
 
-# 目标仓：24 个模块仓 + 4 个元仓。
+# 目标仓：len(MODULES) 个模块仓 + 4 个元仓。
 MODULES = [
     "pkg", "concurrency", "logx", "core", "authx",
     "metrics", "tracing", "registry",
