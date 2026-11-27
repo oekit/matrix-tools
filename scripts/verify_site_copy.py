@@ -29,10 +29,10 @@
 
 | 口径 | 实测值 | 含义 |
 |---|---|---|
-| 根矩阵模块数 | 24 | `len(MODULES)`；站点文案用的就是这个，与「矩阵总览（24 活跃模块）」同口径 |
-| 根 go.mod 数 | 25 | 物理事实：24 个矩阵模块仓 + 门面 BOM 仓 `oekit` |
+| 根矩阵模块数 | len(MODULES) | 站点文案用的就是这个，与「矩阵总览（N 活跃模块）」同口径 |
+| 根 go.mod 数 | 文件系统实测 | 物理事实：矩阵模块仓 + 门面 BOM 仓 `oekit`（+矩阵外已知根仓 `kitex-examples`，见 `matrix.NON_MATRIX_ROOTS`） |
 | 嵌套模块数 | 12（快照，真相源=verify_release_units.release_unit_count()） | 深度 ≥2 的 go.mod（bootstrap/nacos、logx/hlog …），各自独立发版 |
-| 发版单元总数 | 37（快照，真相源=verify_release_units.release_unit_count()） | 根矩阵模块 + 嵌套模块 + **伞仓 oekit**（伞仓有独立 tag 与 GitHub Release，`go get github.com/oekit/oekit@latest` 是一次独立的版本获取——按「可独立 go get 的发版单元」口径必须计入） |
+| 发版单元总数 | 36（快照，真相源=verify_release_units.release_unit_count()） | 根矩阵模块 + 嵌套模块 + **伞仓 oekit**（伞仓有独立 tag 与 GitHub Release，`go get github.com/oekit/oekit@latest` 是一次独立的版本获取——按「可独立 go get 的发版单元」口径必须计入） |
 
 报错文案会把这几个数一起打出来，读者不必再猜哪个是哪个。
 
@@ -265,12 +265,18 @@ def check_subpackage_counts(site: Path, truth_map: dict[str, dict]) -> tuple[lis
 
 
 def check_ghost_roots(repos_dir: Path, counts: dict) -> list[str]:
-    """独立 oracle：根 go.mod 必须都能在矩阵里找到名字（否则是矩阵外的幽灵模块）。"""
+    """独立 oracle：根 go.mod 必须都能在矩阵里找到名字（否则是矩阵外的幽灵模块）。
+
+    豁免 `matrix.NON_MATRIX_ROOTS`（matrix-tools#339）：矩阵外**已知**根仓
+    （kitex-examples——11-23 有意移出示例仓）不是幽灵；不豁免的话本地全量
+    工作区必红，而 CI 克隆不含它一直侥幸绿，判据只在一半环境成立。
+    """
+    from matrix import NON_MATRIX_ROOTS  # noqa: F811  局部导入避免顶层循环
     problems: list[str] = []
     for p in sorted(repos_dir.iterdir()):
         if not p.is_dir() or not (p / "go.mod").is_file():
             continue
-        if p.name in MODULES or p.name == BOM_REPO:
+        if p.name in MODULES or p.name == BOM_REPO or p.name in NON_MATRIX_ROOTS:
             continue
         problems.append(f"{p.name}/ 有根 go.mod 但不在矩阵 MODULES 里"
                         f"（矩阵外的幽灵根模块；{_fmt_counts(counts)}）")

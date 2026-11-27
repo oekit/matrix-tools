@@ -11,7 +11,7 @@ import re
 import sys
 
 sys.path.insert(0, str(__file__).rsplit("/", 2)[0])
-from matrix import MODULES, DESC, repo_dir, ensure_clean_all, sibling_deps, sh  # noqa: E402
+from matrix import MODULES, NON_MATRIX_ROOTS, DESC, repo_dir, ensure_clean_all, sibling_deps, sh  # noqa: E402
 
 BASE = os.path.abspath(os.environ.get("MATRIX_BASE", os.path.join(os.path.dirname(__file__), "..", "..")))
 PUSH = "--push" in sys.argv
@@ -43,9 +43,10 @@ def count_units(repos_dir: str | None = None) -> dict:
 
     三个口径不一样，别选一个当「唯一正确值」：
       根矩阵模块数 = len(MODULES)（站点文案用这个，与「矩阵总览」表同口径）
-      根 go.mod 数  = 25（24 矩阵模块 + 门面 BOM 仓 oekit）
+      根 go.mod 数  = 24 或 25（23 矩阵模块 + 门面 BOM 仓 oekit；完整工作区
+                     另有矩阵外根仓 kitex-examples，见 matrix.NON_MATRIX_ROOTS）
       嵌套模块数    = 12（快照，真相源=verify_release_units.release_unit_count()）（仓根以下任意深度的 go.mod，各自独立发版）
-      发版单元总数 = 37（快照，真相源=verify_release_units.release_unit_count()）
+      发版单元总数 = 36（快照，真相源=verify_release_units.release_unit_count()）
                      （伞仓有自己的 tag 与 GitHub Release，v0.1.11 等——下游
                       `go get github.com/oekit/oekit@latest` 是一次独立的版本
                       获取，按「可独立 go get 的发版单元」口径必须计入）
@@ -83,9 +84,13 @@ def count_units(repos_dir: str | None = None) -> dict:
     counts["root_gomods"] = len(roots)
     counts["nested_modules"] = nested
     counts["total_gomods"] = len(roots) + nested
-    # 伞仓数从**文件系统扫出的** root_gomods 里减出来，不写死常量——
+    # 伞仓数从**文件系统扫出的** root_gomods 里数出来，不写死常量——
     # 保持 count_units 的「独立 oracle」性质（只看文件系统，不看任何生成物）。
-    bom_units = max(0, len(roots) - counts["matrix_modules"])
+    # ⚠️ 不能简单用 root_gomods - matrix_modules（matrix-tools#339 实测：完整
+    # 工作区里的矩阵外根仓 kitex-examples 会被当成第 2 个伞仓 ⇒ release_units
+    # 37≠36 假红；CI 克隆不含它所以一直侥幸绿）。矩阵外已知根仓显式排除。
+    _known = set(MODULES) | set(NON_MATRIX_ROOTS)
+    bom_units = sum(1 for p in roots if p.name not in _known)
     counts["release_units"] = counts["matrix_modules"] + nested + bom_units
     return counts
 

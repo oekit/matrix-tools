@@ -178,6 +178,10 @@ jobs:
         run: python3 scripts/gen_versions_selftest.py
       - name: 站点内容门禁自测（deps.json/deps-table/llms.txt 嵌套段集合相等 / 缺产物 fail-loud / 变异自证）
         run: python3 scripts/verify_site_copy_selftest.py
+      - name: BOM README 计数门禁自测（badge/prose/架构表集合/合数/易变数 + 变异自证——#339）
+        run: python3 scripts/verify_bom_readme_selftest.py
+      - name: BOM README 计数门禁自测·变异自证（集合判据短路 ⇒ V5/V6 必须转绿）
+        run: python3 scripts/verify_bom_readme_selftest.py --mutate
       - name: 自测接线漂移门禁（自测文件集合 == workflow 调用集合，漏接必红——#260）
         run: python3 scripts/selftest_wiring_check.py
       - name: 自测接线漂移门禁·变异自证（合成漏接/幽灵引用/目录缺失 ⇒ 必须红）
