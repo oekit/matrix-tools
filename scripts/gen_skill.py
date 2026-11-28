@@ -50,12 +50,20 @@ SKILL_DIR = MT_ROOT / "skills" / "oekit"
 # ---------------------------------------------------------------------------
 
 # 能力层分组（口径与伞仓 README 架构总览一致，纯展示分组）
+#
+# 2026-11-28 #337 裁决（选项 1 重排带表）：dep_gate 首跑抓到 2 处带位与依赖
+# 方向不一致（authx→logx、etcdx→registry——MODULES 序合法、带表说反）。
+# 修法：① 数据访问与通信·服务治理**整带对调**（etcdx 实现 registry SPI ⇒
+# 数据访问构建在治理契约之上，方向即为「数据访问带在上」；整带对调保住
+# gen_diagram 行结构与 ARROWS 同行相邻校验）；② logx 下沉基础库带（logx
+# 零 oekit 依赖是纯地基，authx 等 18 仓 require 它——下沉无条件安全）。
+# 每个带名仍与成员语义相符；对调后 dep_gate 展示带对账 ⚠ 归零。
 LAYERS: list[tuple[str, list[str]]] = [
     ("应用引导 · 框架生态", ["bootstrap", "hertz", "kitex", "middleware", "workflow", "k8s"]),
-    ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
     ("数据访问", ["gormx", "redisx", "etcdx", "data", "timertask"]),
-    ("可观测性", ["logx", "tracing", "metrics"]),
-    ("基础库", ["pkg", "concurrency", "core", "authx"]),
+    ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
+    ("可观测性", ["tracing", "metrics"]),
+    ("基础库", ["pkg", "concurrency", "logx", "core", "authx"]),
 ]
 
 # 场景选型表：scene=我要做什么 / use=用什么（可含子包路径） / tips=组合与姿势 /
