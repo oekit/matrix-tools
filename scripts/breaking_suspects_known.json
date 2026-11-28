@@ -32,7 +32,7 @@
       "ref": "oekit/matrix-tools#323"
     },
     {
-      "repo": "kitx",
+      "repo": "authx",
       "version": "v0.1.0",
       "line_prefix": "**refactor(uidgen)**: UUID 改为标准库手写 RFC 4122 v4（crypto/rand + version/var",
       "verdict": "not-breaking",
