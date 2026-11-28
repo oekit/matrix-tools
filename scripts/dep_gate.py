@@ -95,13 +95,10 @@ class ReaderError(RuntimeError):
 #   - 已登记的边消失 ⇒ 「豁免失配」判红（催删豁免，豁免不是永久身份）。
 #   - 豁免只作用于方向判据，不作用于环/未知路径/承诺句。
 #
-# 现存 2 条（首跑实录 2026-11-27）：MODULES 声明序把 data 排在 gormx/redisx 之前，
-# 但 data 真实直接依赖它们（DAO 门面组合底层件，方向合理、声明漂移）。
-# 清偿单：matrix-tools#336（重排 data → etcdx 之后 + 产物再生成波 + 删豁免）。
-WAIVERS: dict[tuple[str, str], str] = {
-    ("data", "gormx"): "声明序漂移：DAO 门面组合 gormx，MODULES 却把 data 排在其前（#336 重排清偿）",
-    ("data", "redisx"): "声明序漂移：DAO 门面组合 redisx，MODULES 却把 data 排在其前（#336 重排清偿）",
-}
+# 现状（2026-11-28 #336 清偿后）：零登记。首跑曾有的 2 条（data→gormx/redisx
+# 声明序漂移）已由 MODULES 重排（data 移至 etcdx 之后）根治，豁免删除——
+# 机制本体保留：下次出现「方向合理、声明漂移」时按同款格式登记并挂清偿单。
+WAIVERS: dict[tuple[str, str], str] = {}
 
 
 # ---------- 单元表：36 个发版单元的身份、序位、展示层 ----------
