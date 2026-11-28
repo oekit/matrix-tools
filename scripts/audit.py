@@ -796,6 +796,7 @@ except FileNotFoundError as e:
 # （模块改名/删仓后表里留死键，AI 会指向不存在的仓），LAYERS 必须恰好覆盖
 # MODULES（新增模块漏分层在这拦）。
 progress("阶段 4/7 AI skill 门禁")
+_scenario_cov: tuple[int, int, list[str]] | None = None  # #344 进度指标（报告行用；渲染器挂了则 None）
 try:
     import gen_skill  # noqa: E402  （渲染函数 + 手写数据；import 无副作用）
 except Exception as e:  # noqa: BLE001
@@ -808,6 +809,19 @@ else:
     _bad_mods = sorted({m for _, _rows in gen_skill.SCENARIOS for r in _rows
                         for m in r.get("mods", []) if m not in set(MODULES)})
     check(not _bad_mods, f"skills: 场景表引用了矩阵不存在的模块（死键）：{_bad_mods}")
+    # 准入三问之问2 的存量机判（#344，2026-11-28 演进评审 P4）：MODULES 每仓必须
+    # 被 ≥1 场景 mods 引用——写不出场景的模块没人知道何时用它，不该独立成仓。
+    _cov_ok, _cov_miss = gen_skill.scenario_coverage(sorted(MODULES))
+    _scenario_cov = (len(_cov_ok), len(MODULES), sorted(_cov_miss))
+    check(not _cov_miss,
+          f"skills: 场景覆盖缺口（准入三问问2，#344）：{_cov_miss} 未被任何 SCENARIOS.mods "
+          f"引用——补场景，或按三问改走嵌套/并 pkg")
+    # 准入三问文本在场（#344）：rules.py 被清空/删节 ⇒ --new-repo 过闸打印面与
+    # skill rules.md 投影一起消失，三问退化成口头纪律。
+    import rules as _rules_mod
+    _3q = getattr(_rules_mod, "MODULE_ADMISSION_3Q_MD", "")
+    check(all(k in _3q for k in ("独立生命周期", "使用场景", "稳定 API")),
+          "skills: rules.py 准入三问文本缺失/被删节（#344 过闸与 skill 投影的单源）")
     _layered = {m for _, _mods in gen_skill.LAYERS for m in _mods}
     check(_layered == set(MODULES),
           f"skills: LAYERS 与 MODULES 不一致：缺 {sorted(set(MODULES) - _layered)} "
@@ -1658,6 +1672,25 @@ if _reverse_floor_err:
     print(f"⚠ {_reverse_floor_err}")
 for _rf in _reverse_floor_lines:
     print(f"⚠ {_rf}")
+# 进度指标换轨（#344，2026-11-27 演进评审 P4）：战报的尺子 = 场景覆盖 + 承诺
+# 门禁（以自测数代理——每道 selftest 守一个判据），不是模块数。模块数仍是事实面
+# （README badge / 矩阵表照旧），但从此不自证「进步」。
+if _scenario_cov is not None:
+    _cov_s = f"场景覆盖 {_scenario_cov[0]}/{_scenario_cov[1]}"
+    if _scenario_cov[2]:
+        _cov_s += f"（缺口 {', '.join(_scenario_cov[2])}）"
+else:
+    _cov_s = "场景覆盖未核对（skills 渲染器不可用）"
+_lc_have = 0
+for _r in MODULES:
+    try:
+        if (repo_dir(_r, BASE) / "api-lifecycle.yaml").exists():
+            _lc_have += 1
+    except FileNotFoundError:
+        pass
+_gates = len(list(Path(__file__).resolve().parent.glob("*selftest.py")))
+print(f"进度指标（#344 换轨）：{_cov_s} · api-lifecycle 清单 {_lc_have}/{len(MODULES)}"
+      f" · 自测门禁 {_gates} 道（模块数只作事实面，不作进度）")
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
     for i in issues:
