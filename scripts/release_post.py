@@ -23,7 +23,7 @@ go get 抬地板、随本仓版本发出；本命令只处理目标仓的收尾 
   --merge-all       把本命令开的 PR 一并合并
   --help            打印本说明后退出（不执行任何真实动作）
 
-缺省仓枚举含伞仓 BOM（matrix-tools#251）——37 个发版单元里它此前不在任何
+缺省仓枚举含伞仓 BOM（matrix-tools#251）——发版单元里它此前不在任何
 按 MODULES 枚举的工具里，版本行/Release 无工具覆盖。
 """
 from __future__ import annotations
@@ -83,7 +83,7 @@ def main() -> None:
     no_bom = "--no-bom" in args
     bom_release = "--bom-release" in args
     merge_all = "--merge-all" in args
-    # 缺省枚举含伞仓 BOM（matrix-tools#251）：它是 37 个发版单元里的 1 个，
+    # 缺省枚举含伞仓 BOM（matrix-tools#251）：它也是发版单元之一，
     # 版本行纪律（README/AGENTS）对它同样适用——此前按 MODULES 枚举时伞仓
     # 的文档口径没有工具覆盖。
     targets = repos or (list(MODULES) + [BOM_REPO])

@@ -338,7 +338,7 @@ def expected_repo_names() -> list[str]:
       少 clone 一个 ⇒ 那个仓的断言**一条都不查** ⇒ 报告照样干净（假干净）。
       ⇒ 现在期望集合来自**矩阵登记表**（唯一事实源），缺哪个仓必须**点名**。
 
-    ⚠️ 口径：期望集合 = `matrix.MODULES`（24 个模块仓）。**伞仓 oekit（BOM）不在内**
+    ⚠️ 口径：期望集合 = `matrix.MODULES`（len(MODULES) 个模块仓）。**伞仓 oekit（BOM）不在内**
        —— 实测 BOM 仓**根本没有 CHANGELOG.md**（它是 BOM + README，不是版本节载体）
        ⇒ 把它算进期望集合只会造出一条**永久的假告警**。工作区里登记表之外的仓
        （matrix-tools 本仓、站点仓…）照扫，但在清单里单列为「登记表外」。

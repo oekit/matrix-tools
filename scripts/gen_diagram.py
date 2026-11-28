@@ -38,7 +38,6 @@ SHORT = {
     "middleware": "标准栈 · contrib 桥接",
     "k8s": "客户端构建 · Lease 选主",
     "workflow": "串行/并行/异步编排 · Hook",
-    "kitex-examples": "echo 示例 · 治理配置",
     "httpx": "LB · 熔断/重试 · OTel 透传",
     "nns-endpoint": "per-service 熔断 · 换实例重试",
     "network": "WS/NATS/MQ · 连接工具",
@@ -53,7 +52,7 @@ SHORT = {
     "tracing": "OpenTelemetry · trace_id",
     "metrics": "Prometheus · 弹性指标族",
     "pkg": f"微工具集 {PKG_CLAIM_N} 合 1",  # N 从 DESC 派生（曾写死 23，与 31→33 一起过期）
-    "kitx": "UUID/雪花 · 校验门面",
+    "authx": "UUID/雪花 · 校验门面",
     "concurrency": "GoSafe · singleflight · retry",
     "core": "config · transport/chain · lifecycle",
 }
@@ -95,24 +94,29 @@ THEMES = {
 }
 
 LAYERS = [  # 自顶向下；rows 显式分行（每行芯片从左到右），注释框固定驻留 note_row 行右侧
+    # 2026-11-28 #337 裁决（与 gen_skill.LAYERS 同步重排）：数据访问与通信·服务治理
+    # 整带对调（etcdx 实现 registry SPI ⇒ 数据访问构建在治理契约之上）+ logx 下沉
+    # 基础库带（零 oekit 依赖的纯地基，18 仓 require 它）。整带对调保住 rows 结构
+    # 与 ARROWS 同行相邻校验；对调后 dep_gate 展示带对账 ⚠ 归零。
     {"name": "应用引导 · 框架生态", "scheme": "indigo",
-     "rows": [["k8s", "workflow", "kitex-examples"],
+     "rows": [["k8s", "workflow"],
               ["hertz", "bootstrap", "middleware", "kitex"]],
      "note": ["hertz.RunServer / kitex.RunServer → bootstrap 组合根",
               "统一组合与优雅关停：排空连接 → 释放资源"],
-     "emph": {"bootstrap"}, "dashed": {"kitex-examples"}},
+     "emph": {"bootstrap"}},
+    {"name": "数据访问", "scheme": "amber",
+     "rows": [["gormx", "redisx", "etcdx", "data", "timertask"]]},
     {"name": "通信 · 服务治理", "scheme": "teal",
      "rows": [["httpx", "nns-endpoint", "network"],
               ["nns", "registry"]],
      "note": ["hertz / kitex → nns → registry（服务发现链）",
               "nns-endpoint → httpx（端点级弹性）"]},
-    {"name": "数据访问", "scheme": "amber",
-     "rows": [["gormx", "redisx", "etcdx", "data", "timertask"]]},
     {"name": "可观测性", "scheme": "violet",
-     "rows": [["logx", "tracing", "metrics"]],
-     "plain_note": ["全矩阵统一可观测门面", "结构化日志 / OTel 链路 / 指标"]},
+     "rows": [["tracing", "metrics"]],
+     "plain_note": ["OTel 链路 / 指标", "日志门面 logx 在基础库带（零依赖地基）"]},
     {"name": "基础库", "scheme": "slate",
-     "rows": [["pkg", "concurrency", "core", "kitx"]]},
+     "rows": [["pkg", "concurrency", "logx"],
+              ["core", "authx"]]},
 ]
 
 # 芯片间依赖箭头：(from, to, style, 颜色 kind)；h=同行相邻水平，arc=同行经行顶间隙的弧线

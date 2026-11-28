@@ -29,8 +29,10 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from matrix import DESC, MODULES, NESTED_MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
-from rules import HARD_RULES_MD  # noqa: E402
+from matrix import (DESC, MODULES, NESTED_MODULES, SITE_REPO,  # noqa: E402
+                     MODULE_COUNT, NESTED_MODULE_COUNT, BOM_RELEASE_UNIT,
+                     ensure_clean_all, repo_dir)
+from rules import HARD_RULES_MD, MODULE_ADMISSION_3Q_MD  # noqa: E402
 
 # 「N 合 1」的 N **从 DESC 真相源派生**：这个数字曾经被硬编码在本文件三处，
 # pkg 新增子包后（31→33）三处一起过期、skill 与站点标题口径漂移（#117 同款）。
@@ -48,12 +50,20 @@ SKILL_DIR = MT_ROOT / "skills" / "oekit"
 # ---------------------------------------------------------------------------
 
 # 能力层分组（口径与伞仓 README 架构总览一致，纯展示分组）
+#
+# 2026-11-28 #337 裁决（选项 1 重排带表）：dep_gate 首跑抓到 2 处带位与依赖
+# 方向不一致（authx→logx、etcdx→registry——MODULES 序合法、带表说反）。
+# 修法：① 数据访问与通信·服务治理**整带对调**（etcdx 实现 registry SPI ⇒
+# 数据访问构建在治理契约之上，方向即为「数据访问带在上」；整带对调保住
+# gen_diagram 行结构与 ARROWS 同行相邻校验）；② logx 下沉基础库带（logx
+# 零 oekit 依赖是纯地基，authx 等 18 仓 require 它——下沉无条件安全）。
+# 每个带名仍与成员语义相符；对调后 dep_gate 展示带对账 ⚠ 归零。
 LAYERS: list[tuple[str, list[str]]] = [
-    ("应用引导 · 框架生态", ["bootstrap", "hertz", "kitex", "middleware", "workflow", "kitex-examples", "k8s"]),
-    ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
+    ("应用引导 · 框架生态", ["bootstrap", "hertz", "kitex", "middleware", "workflow", "k8s"]),
     ("数据访问", ["gormx", "redisx", "etcdx", "data", "timertask"]),
-    ("可观测性", ["logx", "tracing", "metrics"]),
-    ("基础库", ["pkg", "concurrency", "core", "kitx"]),
+    ("通信 · 服务治理", ["httpx", "nns-endpoint", "network", "nns", "registry"]),
+    ("可观测性", ["tracing", "metrics"]),
+    ("基础库", ["pkg", "concurrency", "logx", "core", "authx"]),
 ]
 
 # 场景选型表：scene=我要做什么 / use=用什么（可含子包路径） / tips=组合与姿势 /
@@ -94,6 +104,11 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "use": "`workflow`",
          "tips": "串行/并行/异步/条件分支 + Hook AOP",
          "mods": ["workflow"]},
+        {"scene": "实时消息通道（WebSocket 房间广播 / NATS）",
+         "use": "`network/wsutil`（广播原语）+ `network/nats`（JetStream）；轻量连接与 MQ 抽象 `network/conn` `network/mq`",
+         "tips": "wsutil 房间广播背压安全（慢连接超时跳过，不拖死循环）+ 单连接有界 `Outbox`（唯一写者，慢消费者不阻塞发送方）；NATS 客户端嵌入式测试友好",
+         "redline": "只要轻量通信就用 network，别拉 httpx 的发现/熔断重语义；`Outbox` 满了**只报告不处置**——背压策略由调用方定",
+         "mods": ["network"]},
     ]),
     ("出站调用与弹性", [
         {"scene": "内部服务 HTTP 调用（发现+熔断+重试+LB）",
@@ -221,9 +236,9 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "redline": "组件 Close 统一 `Close(ctx) error` + sync.Once 幂等",
          "mods": ["core", "bootstrap"]},
         {"scene": "ID 生成 / 校验 / 哈希",
-         "use": "`kitx`",
+         "use": "`authx`（原 kitx）",
          "tips": "uidgen（Snowflake 单例 + Extract 元数据 / RFC4122 v4）；validator 校验失败 Unwrap 即 BizError 400；hash 非密码学缓存键",
-         "mods": ["kitx"]},
+         "mods": ["authx"]},
         {"scene": "日志后端桥接 / 文件轮转",
          "use": "`logx/sink` · `logx/hlog` · `logx/hertzlog` · `logx/kitexlog`（嵌套模块按需引入）",
          "tips": "文件/轮转/多目标 Sink；logrus/zap/zerolog/slog 四后端桥 hlog；Kitex klog 桥接",
@@ -278,8 +293,8 @@ REDLINES_SHORT: list[str] = [
     "缓存命中返回零拷贝引用——改写需 `CloneOnRead`；TTL 必须有限（失效失败时的唯一安全网）",
 ]
 
-SKILL_DESCRIPTION = """\
-在 Go 业务代码中使用/重构时选用 oekit 框架包的选型与用法入口（24 独立模块 + 12 嵌套 + 1 BOM 伞仓）。
+SKILL_DESCRIPTION = f"""\
+在 Go 业务代码中使用/重构时选用 oekit 框架包的选型与用法入口（{MODULE_COUNT} 独立模块 + {NESTED_MODULE_COUNT} 嵌套 + {BOM_RELEASE_UNIT} BOM 伞仓）。
 触发场景：限流/熔断/降载、分布式锁、缓存、日志、配置、出站 HTTP、RPC 服务、定时任务、错误处理、
 SSRF 防护、重试、指标追踪、ID 校验、CRUD、服务启动引导，或不确定该用哪个 oekit 模块/子包时。
 含场景选型表、全矩阵硬红线、pkg 子包速查索引。发版/tag/CHANGELOG 用 oekit-release；
@@ -319,6 +334,59 @@ def desc_head(desc: str, limit: int = 90) -> str:
     return head
 
 
+# ---------------------------------------------------------------------------
+# 场景安装行（matrix-tools#341，P2 场景可执行化）
+# ---------------------------------------------------------------------------
+# 单源 = SCENARIOS.mods。同一行渲染三处出口（SKILL.md / 站点 selection.md /
+# llms.txt），同一文本被 scenario_smoke 原文执行——「文档给用户的行」与
+# 「被验证的行」是同一字符串，不是两份会漂的复制品。
+
+_LLMS_SCENARIO_HEADING = "## 场景安装行（复制即用）"
+
+
+def scenario_install_line(mods: list[str]) -> str:
+    """SCENARIOS.mods → 可复制 go get 行（裸版本，与 README 快速开始同风格）。"""
+    return "go get " + " ".join(f"github.com/oekit/{m}" for m in mods)
+
+
+def scenario_install_lines_md() -> str:
+    """场景 → 安装行的 markdown 列表（skill/站点/llms 共用的正文）。"""
+    out = []
+    for _group, rows in SCENARIOS:
+        for r in rows:
+            out.append(f"- {r['scene']}：`{scenario_install_line(r['mods'])}`")
+    return "\n".join(out)
+
+
+def render_llms_scenario_section() -> str:
+    """llms.txt 规范「场景安装行」段（check_llms_scenarios 字节比对的期望值）。"""
+    return (
+        f"{_LLMS_SCENARIO_HEADING}\n\n"
+        "每行 = 该场景的模块组合安装命令（单源 gen_skill.SCENARIOS，"
+        "冒烟见 matrix-tools scenario_smoke）。\n\n"
+        f"{scenario_install_lines_md()}\n"
+    )
+
+
+def check_llms_scenarios(llms_text: str) -> list[str]:
+    """llms.txt 必须含规范「场景安装行」段——缺段/与渲染漂移都判红。
+
+    与 check_section_consistency（嵌套段）同款纪律：字节比对，不接受「差不多」。
+    再生路径：python3 scripts/gen_skill.py --emit-llms-scenario
+    """
+    want = render_llms_scenario_section()
+    if _LLMS_SCENARIO_HEADING not in llms_text:
+        return [f"llms.txt 缺「{_LLMS_SCENARIO_HEADING}」段——场景组合行对 Agent 不可见"
+                f"（跑 gen_skill.py --emit-llms-scenario 取规范文本）"]
+    m = re.search(re.escape(_LLMS_SCENARIO_HEADING) + r"\n(.*?)(?=^##\s|\Z)",
+                  llms_text, re.M | re.S)
+    got = _LLMS_SCENARIO_HEADING + "\n" + (m.group(1) if m else "")
+    if got.rstrip() != want.rstrip():
+        return ["llms.txt 的「场景安装行」段与规范渲染不一致（SCENARIOS 改了但段没跟着改）"
+                "——跑 gen_skill.py --emit-llms-scenario 取规范文本逐字节替换"]
+    return []
+
+
 def _scenario_tables() -> str:
     out = []
     for group, rows in SCENARIOS:
@@ -347,6 +415,8 @@ def render_rules() -> str:
         "> 由 matrix-tools/scripts/rules.py 单源渲染（与各仓 AGENTS.md 冷启动模板同源）——"
         "改硬规则改 rules.py，勿直接改本文件。\n\n"
         + HARD_RULES_MD
+        + "\n"  # 准入三问（#344）：AI 提「要不要新开一个模块」时看得到判据
+        + MODULE_ADMISSION_3Q_MD
     )
 
 
@@ -402,7 +472,7 @@ def render_skill() -> str:
     )
     body = f"""# oekit 包选型与用法入口
 
-> oekit = Open Easy Kit：24 独立模块 + 12 嵌套模块 + 1 BOM 伞仓，依赖自底向上无环。
+> oekit = Open Easy Kit：{MODULE_COUNT} 独立模块 + {NESTED_MODULE_COUNT} 嵌套模块 + {BOM_RELEASE_UNIT} BOM 伞仓，依赖自底向上无环。
 > 本 skill 由 `matrix-tools/scripts/gen_skill.py` 渲染——场景表/pkg 速查为手写数据、
 > 红线与模块索引为生成产物；修订请改 gen_skill.py 数据区（或 rules.py / matrix.py），勿手改本文件。
 
@@ -417,6 +487,9 @@ def render_skill() -> str:
 ## 场景选型表
 
 {_scenario_tables()}
+### 场景安装行（复制即用）
+
+{scenario_install_lines_md()}
 
 ## 红线速览（完整版 rules.md；各仓 AGENTS.md 同源）
 
@@ -472,6 +545,9 @@ title: 选型速查（场景 → 包）
 ## 场景选型表
 
 {_scenario_tables()}
+### 场景安装行（复制即用）
+
+{scenario_install_lines_md()}
 
 ## pkg 子包速查（{PKG_CLAIM}，零第三方依赖）
 
@@ -510,6 +586,18 @@ def write_all(site: bool = False) -> list[str]:
     return written
 
 
+def scenario_coverage(modules: list[str]) -> tuple[list[str], list[str]]:
+    """准入三问之问2 的存量机判（#344）：MODULES ⊆ SCENARIOS.mods 覆盖。
+
+    返回 (covered 已覆盖, missing 未覆盖)——audit 按 missing 空不空判红：
+    写不出场景的模块 = 没人知道何时用它 = 不该独立成仓（MODULE_ADMISSION_3Q_MD 问2）。
+    死键方向（mods ⊆ MODULES）由 audit 的既有检查管，这里只管反向覆盖。
+    """
+    covered = {m for _, rows in SCENARIOS for r in rows for m in r.get("mods", [])}
+    return ([m for m in modules if m in covered],
+            [m for m in modules if m not in covered])
+
+
 def check_drift() -> list[str]:
     """--check / audit 共用：返回漂移清单（空 = 新鲜）。"""
     drift = []
@@ -533,6 +621,9 @@ def check_drift() -> list[str]:
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    if "--emit-llms-scenario" in argv:
+        print(render_llms_scenario_section(), end="")
+        raise SystemExit(0)
     if "--check" in argv:
         d = check_drift()
         for line in d:

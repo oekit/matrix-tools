@@ -28,8 +28,10 @@ from matrix import (  # noqa: E402
     GO_FLOOR_BASE_MAX, GO_FLOOR_BUSINESS_OK, GO_FLOOR_BASE_LAYER, GO_FLOOR_EXEMPT, DESC,
     RemoteReadError, REMOTE_READ_LOG, enable_tag_cache, prefetch_remote_tags, remote_tags,
 )
-from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units  # noqa: E402
+from verify_site_copy import check_counts as site_check_counts, check_llms_coverage, check_ghost_roots, count_units, check_subpackage_counts  # noqa: E402
+import subpkg_claims  # noqa: E402  子包口径的提取层（与 DESC 子包自测共用同一份提取结果）
 import gen_matrix_go  # noqa: E402  （只用它的退出码契约 EXIT_* / classify_check）
+import dep_gate  # noqa: E402  （分层无环门禁，2026-11-27 P1；只用 classify 契约）
 from install_lines import check_readme_install_lines, nested_units_of  # noqa: E402
 from verify_release_units import (check_llms_units, check_section_consistency,  # noqa: E402
                                   check_filesystem_oracle, derive_nested_versions,
@@ -146,8 +148,8 @@ def remote_latest(repo: str) -> str | None:
 
     **缓存**（2026-10-25）：本函数有**四个**调用点（README 安装行 / AGENTS 当前
     版本行 / 站点 versions.json / 嵌套模块父模块地板），而 `matrix.remote_tags()`
-    没有缓存 ⇒ 24 仓 × 4 处 = **96 次** HTTPS 读，实测把审计拖到 7 分钟以上、
-    后台任务 900s 超时。现在同一仓**只读一次**（96 → 24 次），且 24 仓并发预取；
+    没有缓存 ⇒ 每仓 × 4 处 = **N×4 次** HTTPS 读（24 仓时实测 96 次），把审计
+    拖到 7 分钟以上、后台任务 900s 超时。现在同一仓**只读一次**，且全仓并发预取；
     读失败也缓存（失败仓恰恰最慢），但**仍记一条漂移**（口径不变）。
     详见 matrix.py 的 enable_tag_cache。
     """
@@ -512,9 +514,9 @@ def check_go_floor_pairing(repo: str, d):
 # 为什么放在最前面：本脚本后面有**四个**地方问同一仓的远端最新 tag
 # （README 安装行 / AGENTS 当前版本行 / 站点 versions.json / 嵌套模块地板），
 # gen_releases 的 Release 对账还要**每个仓的完整 tag 列表**；而
-# `matrix.remote_tags()` 不带缓存 ⇒ 24 仓 × 4 处 = 96 次 HTTPS 读
+# `matrix.remote_tags()` 不带缓存 ⇒ 每仓 × 4 处重复读（24 仓时 96 次）
 # （实测 1.4–2.1s/次，拥塞时更久）⇒ 审计本身要跑 281s，后台任务直接
-# 900s 超时（2026-10-25 实测）。这里一次性**并发**读掉 24 仓，之后全是命中。
+# 900s 超时（2026-10-25 实测）。这里一次性**并发**读掉全矩阵，之后全是命中。
 #
 # 缓存**默认关**（matrix.enable_tag_cache）——发布类脚本不能开：它们的产物
 # （BOM / versions.json）必须反映**生成那一刻**的远端事实（#79）。
@@ -716,7 +718,16 @@ try:
     _site_counts = count_units(BASE if os.path.isdir(BASE) else None)
     issues += site_check_counts(site, _site_counts)
     issues += check_llms_coverage(site)
-    # 发版单元全集（根 24 + 嵌套 7 + 伞仓 1 = 32）：verify_site_copy 只管**根模块**条目集合，
+    # 子包口径（2026-11-23 补）：站点手写面的「N 合 1」必须等于事实。
+    # 期望值来自**提取层**（subpkg_claims.truth），与 DESC 子包自测同一份提取
+    # 结果 ⇒ 两张判定面不可能各算各的（站点 CI 只有 VitePress 构建 + 死链检查，
+    # 此前这类数字过期无人拦）。
+    _subpkg_problems, _subpkg_undecided = check_subpackage_counts(
+        site, subpkg_claims.truth(BASE if os.path.isdir(BASE) else None))
+    issues += _subpkg_problems
+    for _u in _subpkg_undecided:
+        print(f"  ⚠ 站点子包声明未归属（未判定，非漂移）：{_u}")
+    # 发版单元全集（canonical 口径见 release_unit_count()）：verify_site_copy 只管**根模块**条目集合，
     # 嵌套模块的独立条目与 go get 安装行是另一件事——llms.txt 是 Agent 唯一会抓的
     # 机器可读索引，嵌套模块（零依赖隔离的载体）不给安装行 = 装不上。
     if llms.exists():
@@ -728,6 +739,13 @@ try:
         issues += check_filesystem_oracle(_repos)
         issues += check_llms_units(_llms_text)
         issues += check_section_consistency(_llms_text, _nested_derived)
+        # 场景安装行段（#341 P2）：llms 必须含规范场景组合行——缺/漂即红。
+        # 渲染单源在 gen_skill.SCENARIOS（发布行 = scenario_smoke 执行行）。
+        try:
+            import gen_skill  # noqa: E402  （延迟导入，站点阶段才需要）
+            issues += [f"llms.txt: {q}" for q in gen_skill.check_llms_scenarios(_llms_text)]
+        except Exception as e:  # noqa: BLE001 — 判据读不到显式红，不许静默跳过（#79）
+            issues.append(gate_unavailable("llms 场景安装行段判据", e))
         # llms.txt 条目里的**反引号标识符**必须在本仓源码里真实存在——
         # 实测抓到 hertz 条目写了 kitex 的 WithReadyAddr（照抄得到 undefined）。
         # 判据只读源码（客观事实），不与被检对象共享任何解析逻辑。
@@ -804,6 +822,7 @@ except FileNotFoundError as e:
 # （模块改名/删仓后表里留死键，AI 会指向不存在的仓），LAYERS 必须恰好覆盖
 # MODULES（新增模块漏分层在这拦）。
 progress("阶段 4/7 AI skill 门禁")
+_scenario_cov: tuple[int, int, list[str]] | None = None  # #344 进度指标（报告行用；渲染器挂了则 None）
 try:
     import gen_skill  # noqa: E402  （渲染函数 + 手写数据；import 无副作用）
 except Exception as e:  # noqa: BLE001
@@ -816,6 +835,19 @@ else:
     _bad_mods = sorted({m for _, _rows in gen_skill.SCENARIOS for r in _rows
                         for m in r.get("mods", []) if m not in set(MODULES)})
     check(not _bad_mods, f"skills: 场景表引用了矩阵不存在的模块（死键）：{_bad_mods}")
+    # 准入三问之问2 的存量机判（#344，2026-11-28 演进评审 P4）：MODULES 每仓必须
+    # 被 ≥1 场景 mods 引用——写不出场景的模块没人知道何时用它，不该独立成仓。
+    _cov_ok, _cov_miss = gen_skill.scenario_coverage(sorted(MODULES))
+    _scenario_cov = (len(_cov_ok), len(MODULES), sorted(_cov_miss))
+    check(not _cov_miss,
+          f"skills: 场景覆盖缺口（准入三问问2，#344）：{_cov_miss} 未被任何 SCENARIOS.mods "
+          f"引用——补场景，或按三问改走嵌套/并 pkg")
+    # 准入三问文本在场（#344）：rules.py 被清空/删节 ⇒ --new-repo 过闸打印面与
+    # skill rules.md 投影一起消失，三问退化成口头纪律。
+    import rules as _rules_mod
+    _3q = getattr(_rules_mod, "MODULE_ADMISSION_3Q_MD", "")
+    check(all(k in _3q for k in ("独立生命周期", "使用场景", "稳定 API")),
+          "skills: rules.py 准入三问文本缺失/被删节（#344 过闸与 skill 投影的单源）")
     _layered = {m for _, _mods in gen_skill.LAYERS for m in _mods}
     check(_layered == set(MODULES),
           f"skills: LAYERS 与 MODULES 不一致：缺 {sorted(set(MODULES) - _layered)} "
@@ -951,11 +983,52 @@ def check_breaking_adjudications():
           f"scripts/breaking_suspects_known.json（matrix-tools#323）")
 
 
-progress("阶段 4/7 独立门禁（裁决登记 / breakingIndex oracle / 死路径 / 版本线）")
+
+progress("阶段 4/7 独立门禁（裁决登记 / breakingIndex oracle / 死路径 / 版本线 / README 计数）")
 check_breaking_adjudications()
 check_breaking_oracle()
 check_dead_paths()
 check_version_line()
+
+# ---------- 分层无环门禁（dep_gate，2026-11-27 演进评审 P1） ----------
+# 「依赖严格自底向上：上层依赖下层，全矩阵无环」此前是零执行承诺（评审定性：
+# 最大隐藏缺口）。dep_gate 把它变成可复算判据：origin/main go.mod 推 36 发版
+# 单元的内部依赖边（#246 数据源纪律），MODULES 声明序验方向 + Tarjan 检环 +
+# 展示分层对账（⚠ 不阻塞）。退出码契约由生产方定义（dep_gate.EXIT_* / classify，
+# 同 gen_matrix_go 模式）：0=成立 / 1=真违例 / 2=读不到（判不了 ≠ 通过，#79）。
+progress("阶段 4/7 分层无环门禁（dep_gate）")
+try:
+    _dg = subprocess.run([sys.executable,
+                          os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                       "dep_gate.py"), "--json"],
+                         capture_output=True, text=True, timeout=600)
+    _kind, _msg = dep_gate.classify(_dg.returncode, _dg.stdout + _dg.stderr)
+    if _kind == "violation":
+        issues.append(_msg)
+    elif _kind == "unreadable":
+        issues.append(gate_unavailable("分层无环门禁（dep_gate）", RuntimeError(_msg)))
+except Exception as e:  # noqa: BLE001
+    # ⚠ 不可用 ⇒ 判红（#79：判不了 ≠ 通过，与 BOM 检查同款口径）
+    issues.append(gate_unavailable("分层无环门禁（dep_gate）", e))
+
+# ---------- BOM 主仓 README 计数门禁（matrix-tools#339，2026-11-27 演进评审 P0） ----------
+# README 的 badge/prose/架构总览表/合数是**最后一个没人守的对外计数面**——站点侧
+# 同类判据（verify_site_copy.check_counts）早已存在，BOM 主仓 README 既无生成器也
+# 无门禁 ⇒ kitex-examples 移出 MODULES、kitx→authx、pkg 23→38 三轮变更后四处漂移
+# 无人拦（#339 实测）。判据纯函数在 verify_bom_readme.py（带 selftest + 变异自证）；
+# 事实源读不到 ⇒ gate_unavailable 判红（#79：判不了 ≠ 通过）。
+try:
+    import verify_bom_readme  # noqa: E402
+    _bom_readme = (repo_dir("oekit", BASE) / "README.md").read_text(encoding="utf-8")
+    _bom_problems = verify_bom_readme.check_bom_readme(
+        _bom_readme, len(MODULES),
+        subpkg_claims.truth(BASE if os.path.isdir(BASE) else None))
+    for _p in _bom_problems:
+        issues.append(f"oekit 主仓 README: {_p}")
+except FileNotFoundError as e:
+    issues.append(gate_unavailable("BOM README 计数门禁", RuntimeError(str(e))))
+except Exception as e:  # noqa: BLE001 — 事实源读不到必须显式红，不许静默跳过
+    issues.append(gate_unavailable("BOM README 计数门禁", e))
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
@@ -1535,7 +1608,7 @@ check_dependabot_directories()
 # 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
 # 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
 # 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
-progress("阶段 5/7 GitHub Release 对账（24 仓 + 伞仓 BOM）")
+progress(f"阶段 5/7 GitHub Release 对账（{len(MODULES)} 仓 + 伞仓 BOM）")
 try:
     from gen_releases import missing_releases, release_repos  # noqa: E402
 
@@ -1663,6 +1736,25 @@ if _reverse_floor_err:
     print(f"⚠ {_reverse_floor_err}")
 for _rf in _reverse_floor_lines:
     print(f"⚠ {_rf}")
+# 进度指标换轨（#344，2026-11-27 演进评审 P4）：战报的尺子 = 场景覆盖 + 承诺
+# 门禁（以自测数代理——每道 selftest 守一个判据），不是模块数。模块数仍是事实面
+# （README badge / 矩阵表照旧），但从此不自证「进步」。
+if _scenario_cov is not None:
+    _cov_s = f"场景覆盖 {_scenario_cov[0]}/{_scenario_cov[1]}"
+    if _scenario_cov[2]:
+        _cov_s += f"（缺口 {', '.join(_scenario_cov[2])}）"
+else:
+    _cov_s = "场景覆盖未核对（skills 渲染器不可用）"
+_lc_have = 0
+for _r in MODULES:
+    try:
+        if (repo_dir(_r, BASE) / "api-lifecycle.yaml").exists():
+            _lc_have += 1
+    except FileNotFoundError:
+        pass
+_gates = len(list(Path(__file__).resolve().parent.glob("*selftest.py")))
+print(f"进度指标（#344 换轨）：{_cov_s} · api-lifecycle 清单 {_lc_have}/{len(MODULES)}"
+      f" · 自测门禁 {_gates} 道（模块数只作事实面，不作进度）")
 if issues:
     print(f"发现 {len(issues)} 项漂移：")
     for i in issues:

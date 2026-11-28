@@ -2,7 +2,7 @@
 """gen_releases BOM（伞仓 oekit）覆盖与 Release 正文的自测（matrix-tools#251 / #252）。
 
 **这两条防的是什么**：
-  - #251：伞仓 BOM 是 37 个发版单元里的 1 个，但此前不在 gen_releases 的
+  - #251：伞仓 BOM 也是发版单元之一，但此前不在 gen_releases 的
     MODULES 枚举 ⇒ BOM 的 tag 永远不会被对账/补建 Release（存量：v0.2.7 有
     tag 无 Release，--apply 也修不上）；
   - #252：release_post 建的 BOM Release 正文是**写死的占位串** ⇒ 每版都不含
@@ -12,7 +12,7 @@
 
 断言（每条都要能判红）：
   1. release_repos：缺省枚举含 BOM_REPO、不含于 MODULES、单数 --repo 直通；
-  2. 口径自检（#251 验收 4）：GO_MODULE_COUNT（37 个发版单元）与
+  2. 口径自检（#251 验收 4）：GO_MODULE_COUNT（发版单元总数）与
      「MODULES + 嵌套 + BOM」一致 ⇒ 枚举少一个单元就能被抓住；
   3. bom_release_notes：正文含「N 个模块」+ 至少一个模块名 + 地板 diff
      （`旧 → 新`）+ 新增/移除标注；prev 缺失 ⇒ 无 diff 段（不编造）；
@@ -88,7 +88,7 @@ def case_release_repos() -> None:
     check(repos == list(matrix.MODULES) + [matrix.BOM_REPO],
           "用例1 枚举 = MODULES + BOM（缺一个单元就是 #251 的缺口形态）")
     check(gen_releases.release_repos("data") == ["data"], "用例1 --repo 单数直通")
-    # 口径自检（#251 验收 4）：37 个发版单元 = 24 根 + 12 嵌套 + 1 BOM
+    # 口径自检（#251 验收 4）：发版单元总数 = 根 + 嵌套 + 1 BOM（数字勿手写）
     check(matrix.GO_MODULE_COUNT == len(matrix.MODULES) + len(matrix.NESTED_MODULES)
           + matrix.BOM_RELEASE_UNIT,
           f"用例2 口径自检失败：GO_MODULE_COUNT={matrix.GO_MODULE_COUNT} "

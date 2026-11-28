@@ -74,6 +74,8 @@ jobs:
         run: python3 scripts/host_version_selftest.py --mutate
       - name: 发布序列门禁自测（版本号回退必须抓得到，已登记例外不许掩盖新问题）
         run: python3 scripts/verify_version_line_selftest.py
+      - name: 分层无环门禁自测（方向/环/豁免三态/展示层对账只报告不阻塞——「全矩阵无环」从零执行承诺变判据）
+        run: python3 scripts/dep_gate_selftest.py
       - name: 维护轮门禁自测（仓读不到不许报「零漂移」，到期不许不报）
         run: python3 scripts/maintenance_check_selftest.py
       - name: flaky 扫描判据自测（git 前置失败/缺仓/在途占用都必须「没跑起来」而非「无失败用例」——#313）
@@ -102,8 +104,12 @@ jobs:
         env:
           MATRIX_BASE: ${{ github.workspace }}/repos
         run: python3 scripts/desc_count_selftest.py
-      - name: AI skill 入口自测（渲染确定性 / 场景表死键 / LAYERS 覆盖 / 红线出处 / frontmatter——skill 是 AI 的选型入口，数据错 = AI 全矩阵走错路）
+      - name: API 生命周期门禁自测（清单 ↔ 包注释 ↔ 生产包集合三处一致；每种漂移形态都必须判得住——判据自己坏了会全绿通过）
+        run: python3 scripts/api_lifecycle_gate_selftest.py
+      - name: AI skill 入口自测（渲染确定性 / 场景表死键 / LAYERS 覆盖 / 红线出处 / frontmatter / 场景覆盖 #344——skill 是 AI 的选型入口，数据错 = AI 全矩阵走错路）
         run: python3 scripts/gen_skill_selftest.py
+      - name: 准入三问过闸自测（缺旗拒冷启动 / 串位不认占位 / 留档段与三问文本在场——#344 fail-closed）
+        run: python3 scripts/gen_agents_selftest.py
       - name: BOM 生成器 Go 地板自测（取不到 go.mod 必须报错，不许兜底假地板）
         run: python3 scripts/gen_matrix_go_selftest.py
       - name: 审计远端事实缓存自测（同仓只读一次，失败态也不许重打网络）
@@ -176,6 +182,18 @@ jobs:
         run: python3 scripts/gen_versions_selftest.py
       - name: 站点内容门禁自测（deps.json/deps-table/llms.txt 嵌套段集合相等 / 缺产物 fail-loud / 变异自证）
         run: python3 scripts/verify_site_copy_selftest.py
+      - name: BOM README 计数门禁自测（badge/prose/架构表集合/合数/易变数 + 变异自证——#339）
+        run: python3 scripts/verify_bom_readme_selftest.py
+      - name: BOM README 计数门禁自测·变异自证（集合判据短路 ⇒ V5/V6 必须转绿）
+        run: python3 scripts/verify_bom_readme_selftest.py --mutate
+      - name: 场景组合冒烟自测（去重/死键/行同源/退出码 + 变异自证——#341）
+        run: python3 scripts/scenario_smoke_selftest.py
+      - name: 场景组合冒烟自测·变异自证（短路去重 ⇒ V1 组合数断言必须失效）
+        run: python3 scripts/scenario_smoke_selftest.py --mutate
+      - name: 组合兼容探测自测（N-1 选择/单元枚举/退出码裁决 + 变异自证——#343）
+        run: python3 scripts/compat_probe_selftest.py
+      - name: 组合兼容探测自测·变异自证（短路 finalize ⇒ V3 裁决断言必须失效）
+        run: python3 scripts/compat_probe_selftest.py --mutate
       - name: 自测接线漂移门禁（自测文件集合 == workflow 调用集合，漏接必红——#260）
         run: python3 scripts/selftest_wiring_check.py
       - name: 自测接线漂移门禁·变异自证（合成漏接/幽灵引用/目录缺失 ⇒ 必须红）
@@ -407,3 +425,57 @@ jobs:
               await github.rest.issues.update({ owner: context.repo.owner,
                 repo: context.repo.repo, issue_number: i.number, state: 'closed' });
             }
+
+  # 场景组合冒烟（#341 P2）：SCENARIOS 的模块组合在消费方视角 go get + build。
+  #
+  # 为什么单开 job（而不是并进 audit）：audit 是纯文本判据（读仓库/远端事实），
+  # 本 job 要 Go 工具链 + module proxy 网络——依赖面不同，混跑会让「网络挂了」
+  # 看起来像「矩阵漂移」。
+  #
+  # 为什么不进 PR 门禁（同 consumer 定位）：它测的是**已发布**模块的组合可编译性，
+  # PR 里的改动尚未发布；且依赖外网，PR 门禁不该为网络波动红。
+  scenario:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: 场景组合冒烟（SCENARIOS 组合 go get + 消费方 build）
+        run: python3 scripts/scenario_smoke.py --json | tee scenario-report.txt
+      - name: Upload scenario report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scenario-report
+          path: scenario-report.txt
+
+  # 组合兼容探测（#343 P3）：探针A=BOM 快照地板组合编译（红级，验显式承诺）；
+  # 探针B=N-1 落后一档（⚠ 0.x 合法演进，可见不阻塞）。
+  #
+  # 为什么不进 PR 门禁（同 consumer/scenario 定位）：它测**已发布**版本组合的
+  # 可编译性，PR 里的改动尚未发布；且依赖外网（module proxy + ls-remote），
+  # PR 门禁不该为网络波动红。无需克隆仓库——纯 go + git ls-remote。
+  compat:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: 组合兼容探测（BOM 快照地板编译 + N-1 落后一档）
+        run: python3 scripts/compat_probe.py --json | tee compat-report.txt
+      - name: Upload compat report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-report
+          path: compat-report.txt

@@ -59,6 +59,11 @@ HISTORIC_SNAPSHOT_EXEMPT = {
     "logx:hertzlog/v0.1.0",
     "logx:sink/v0.1.0",
     "data:all/v0.1.1",
+    # pkg v0.58.0~v0.58.2：2026-11-22 并发发版波先打 tag 后补 CHANGELOG
+    # （绕过 release_train 节先行），三 tag 快照均无自身段、不可变；main 已
+    # 按发布事实补节（pkg#579/#582）。门禁只查最新 tag ⇒ 登记 v0.58.2。
+    # 详见 matrix-tools#328。
+    "pkg:v0.58.2",
     # 2026-11-08 发版潮：修复轮打 tag 时 CHANGELOG 段未先行（段已在 main 补齐，
     # tag 快照不可变）——core/data/gormx/middleware 四仓同因；data v0.20.5 为
     # tag 抢在补段 PR 合入前的脏 tag（v0.20.6 已干净重发，代码一致）。
