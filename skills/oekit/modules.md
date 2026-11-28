@@ -15,16 +15,6 @@
 | [workflow](https://github.com/oekit/workflow) | 组合式流程编排——串行/并行/异步/条件分支 + Hook AOP | `workflow/AGENTS.md` |
 | [k8s](https://github.com/oekit/k8s) | Kubernetes 客户端封装——RESTConfig/Clientset/DynamicClient 构建（显式 kubeconfig → KUBECONFIG 显式意图… | `k8s/AGENTS.md` |
 
-## 通信 · 服务治理
-
-| 模块 | 一句话 | 深入 |
-|---|---|---|
-| [httpx](https://github.com/oekit/httpx) | HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传 | `httpx/AGENTS.md` |
-| [nns-endpoint](https://github.com/oekit/nns-endpoint) | NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池 | `nns-endpoint/AGENTS.md` |
-| [network](https://github.com/oekit/network) | 轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具 | `network/AGENTS.md` |
-| [nns](https://github.com/oekit/nns) | NNS 服务治理客户端——provider 无关发现/配置/实例缓存 | `nns/AGENTS.md` |
-| [registry](https://github.com/oekit/registry) | 注册发现核心（provider 无关 SPI：Registrar/Discoverer/Subscriber… | `registry/AGENTS.md` |
-
 ## 数据访问
 
 | 模块 | 一句话 | 深入 |
@@ -35,11 +25,20 @@
 | [data](https://github.com/oekit/data) | 数据访问门面——复刻 ekit data/ 能力面：cache/rediscache/crud/distlock/gormx/redisx… | `data/AGENTS.md` |
 | [timertask](https://github.com/oekit/timertask) | 分片定时任务（FNV-1a、心跳续约） | `timertask/AGENTS.md` |
 
+## 通信 · 服务治理
+
+| 模块 | 一句话 | 深入 |
+|---|---|---|
+| [httpx](https://github.com/oekit/httpx) | HTTP 客户端 + 负载均衡——服务发现/熔断（规范哨兵 ErrCircuitOpen）/重试/指标/OTel 透传 | `httpx/AGENTS.md` |
+| [nns-endpoint](https://github.com/oekit/nns-endpoint) | NNS 端点工厂——per-service 熔断、换实例重试、gRPC 池 | `nns-endpoint/AGENTS.md` |
+| [network](https://github.com/oekit/network) | 轻量网络客户端——WebSocket/NATS/MQ 抽象、连接与流工具 | `network/AGENTS.md` |
+| [nns](https://github.com/oekit/nns) | NNS 服务治理客户端——provider 无关发现/配置/实例缓存 | `nns/AGENTS.md` |
+| [registry](https://github.com/oekit/registry) | 注册发现核心（provider 无关 SPI：Registrar/Discoverer/Subscriber… | `registry/AGENTS.md` |
+
 ## 可观测性
 
 | 模块 | 一句话 | 深入 |
 |---|---|---|
-| [logx](https://github.com/oekit/logx) | 统一日志门面（多后端可替换 + caller 归属；Sink 已迁嵌套模块 logx/sink，根包纯 stdlib） | `logx/AGENTS.md` |
 | [tracing](https://github.com/oekit/tracing) | OpenTelemetry 追踪 + trace_id 真相源（v0.3.0 起 OTLP 双协议导出：gRPC 缺省… | `tracing/AGENTS.md` |
 | [metrics](https://github.com/oekit/metrics) | Prometheus 门面 + 弹性指标族 | `metrics/AGENTS.md` |
 
@@ -49,6 +48,7 @@
 |---|---|---|
 | [pkg](https://github.com/oekit/pkg) | 微工具集 38 合 1（errors/bloomx/contextx/ctxscope/container/distlock/stringx/slicex/enumx… | `pkg/AGENTS.md` |
 | [concurrency](https://github.com/oekit/concurrency) | 并发与流控原语（async/gopool/group/singleflight/progress/syncx/ratelimit/retry）+ window 滑动窗口… | `concurrency/AGENTS.md` |
+| [logx](https://github.com/oekit/logx) | 统一日志门面（多后端可替换 + caller 归属；Sink 已迁嵌套模块 logx/sink，根包纯 stdlib） | `logx/AGENTS.md` |
 | [core](https://github.com/oekit/core) | 应用基建件——governance 治理 schema、config 配置加载（LoadBootstrap/LoadDotEnv/Get* 系、default/env… | `core/AGENTS.md` |
 | [authx](https://github.com/oekit/authx) | 标识与校验（2026-11-23 自 kitx 改名，消除与 RPC 框架仓 kitex 的一字之差误查面）——uidgen（Snowflake 全局单例+Extract… | `authx/AGENTS.md` |
 
