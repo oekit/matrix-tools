@@ -12,19 +12,19 @@
 Agent 不可见。
 
 verify_site_copy.py 补的是**根模块条目集合**（llms.txt「## 模块」段 == MODULES）；
-本脚本补的是**发版单元全集**（根 24 + 嵌套 9 + **伞仓 1**）与**每个单元的可安装性**。
+本脚本补的是**发版单元全集**（根 + 嵌套 + **伞仓**，canonical 口径见 release_unit_count()）与**每个单元的可安装性**。
 
 ## 伞仓也是发版单元（2026-10-23 实测，issue #82）
 
 伞仓 BOM 仓 `oekit` 有**独立 tag + 独立 GitHub Release**（latest v0.1.29），
 下游 `go get github.com/oekit/oekit@latest` 是一次独立的版本获取
-⇒ 按「可独立 go get 的发版单元」口径，它**就是第 34 个单元**
-（canonical 口径 `gen_tables.count_units` 也这么算：24 根 + 9 嵌套 + 1 伞仓 = 34；
-站点文案一律写 34）。
+⇒ 按「可独立 go get 的发版单元」口径，它**就是发版单元之一**
+（canonical 口径 `gen_tables.count_units` 与 `release_unit_count()` 同算：
+根 + 嵌套 + 伞仓；站点文案同口径——**数字勿在注释里手写**，matrix-tools#339）。
 
 但本脚本原先只校验 24 + 9 = 33，**伞仓漏检**：把 llms.txt 里伞仓那
 （`go get github.com/oekit/oekit@latest`）整段删掉，门禁**照样全绿**
-（实测 exit=0）⇒ 站点「llms.txt 覆盖 34 个发版单元」的承诺**无人守**。
+（实测 exit=0）⇒ 站点「llms.txt 覆盖全部发版单元」的承诺**无人守**。
 
 ⇒ 本脚本现在要求伞仓与嵌套模块**同等**的可安装性，并统一用 canonical 口径
 报数（不再出现「同一个术语，门禁说 33、站点说 34」）。
@@ -46,7 +46,7 @@ matrix-tools/scripts/ 下无任何写 llms.txt 的脚本，其历史全是手写
 ## 两条 oracle 都要有（缺一即有共同盲区）
 
 - **oracle A（正确性）**：解析 llms.txt 全文，抽出全部条目形态，
-  断言 24 个根模块名 + 9 个嵌套模块名**各至少出现一次**，且 9 个嵌套模块
+  断言每个根模块名 + 每个嵌套模块名**各至少出现一次**，且每个嵌套模块
   **各自都有一行 `go get github.com/oekit/<module>`**，且**伞仓 BOM 仓**
   有一行 `go get github.com/oekit/oekit@latest`。不依赖渲染结果。
 - **oracle B（一致性）**：渲染规范「## 嵌套模块」段，与站点里的该段逐字节比对。
@@ -403,8 +403,9 @@ def _umbrella_units() -> int:
 def release_unit_count() -> tuple[int, int, int, int]:
     """(根模块, 嵌套模块, 伞仓, 合计)——发版单元的 canonical 口径。
 
-    合计 = 24 根 + 9 嵌套 + 1 伞仓 = 34，与 `gen_tables.count_units`
+    合计 = 根 + 嵌套 + 伞仓，与 `gen_tables.count_units`
     （独立 oracle：扫文件系统算伞仓数）和站点文案同口径。
+    **数字勿在本 docstring 手写**——人工同步必漂（matrix-tools#339）。
     """
     root, nested = len(MODULES), len(NESTED_MODULES)
     bom = _umbrella_units()
@@ -489,13 +490,14 @@ def check_llms_units(llms_text: str) -> list[str]:
 
     # 伞仓 BOM 仓的可安装性——**与嵌套模块同等要求**（2026-10-23 实测，issue #82）。
     # 它也是独立发版单元（有独立 tag + 独立 Release），站点承诺 llms.txt 覆盖
-    # 34 个发版单元；原先这道检查压根不存在 ⇒ 删掉伞仓那行，门禁照样全绿。
+    # 全部发版单元；原先这道检查压根不存在 ⇒ 删掉伞仓那行，门禁照样全绿。
     if _umbrella_units():
         bom_mod = f"github.com/oekit/{BOM_REPO}"
         if bom_mod not in install_lines:
             problems.append(f"llms.txt 缺伞仓 BOM 仓 {BOM_REPO} 的 go get 安装行"
                             f"（`go get {bom_mod}@latest`）——它也是独立发版单元"
-                            f"（有独立 tag 与 Release），站点承诺 llms.txt 覆盖 34 个发版单元")
+                            f"（有独立 tag 与 Release），站点承诺 llms.txt 覆盖"
+                            f"全部 {release_unit_count()[3]} 个发版单元")
     return problems
 
 

@@ -13,7 +13,7 @@ llms.txt 是 AI Agent 唯一会抓的机器可读索引。实测发现它的 her
   探活目标固定是 server 自动取到的全部 HostPort。
 
 照着 llms.txt 写代码的人会拿到 ``undefined: hertz.WithReadyAddr``。
-这条 DESC 还同时进了 hertz/README.md、hertz/AGENTS.md 与全矩阵 24 仓的矩阵表。
+这条 DESC 还同时进了 hertz/README.md、hertz/AGENTS.md 与全矩阵各仓的矩阵表。
 
 这类错误的特点是：**机器判不了语义，但能判「这个名字在本仓源码里不存在」**。
 

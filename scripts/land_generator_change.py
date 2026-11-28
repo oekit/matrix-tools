@@ -82,7 +82,7 @@ PRODUCTS = {
 # 「多仓文档产物」——生成器改了但产物散在 N 个仓的 README/AGENTS 里，
 # 单仓 regen+PR 模型套不上（matrix-tools#276：只登记 versions/bom 时，
 # 改 gen_tables/refresh_versions/refresh_agents_desc 会得到假的
-# 「✓ 无产物待落地——可直接合入」⇒ 24 仓矩阵表瞬间全漂移）。
+# 「✓ 无产物待落地——可直接合入」⇒ 全矩阵仓的矩阵表瞬间全漂移）。
 # 判定模型：产物已落地 = 该模式的 **plan 归零**（doc_wave --<mode> --plan
 # 以**当前工作树的新生成器**重算受影响仓；0 = 全部仓的产物已是新生成器的
 # 输出 ⇒ 生成器 PR 合入不会再产生漂移）。

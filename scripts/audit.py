@@ -148,8 +148,8 @@ def remote_latest(repo: str) -> str | None:
 
     **缓存**（2026-10-25）：本函数有**四个**调用点（README 安装行 / AGENTS 当前
     版本行 / 站点 versions.json / 嵌套模块父模块地板），而 `matrix.remote_tags()`
-    没有缓存 ⇒ 24 仓 × 4 处 = **96 次** HTTPS 读，实测把审计拖到 7 分钟以上、
-    后台任务 900s 超时。现在同一仓**只读一次**（96 → 24 次），且 24 仓并发预取；
+    没有缓存 ⇒ 每仓 × 4 处 = **N×4 次** HTTPS 读（24 仓时实测 96 次），把审计
+    拖到 7 分钟以上、后台任务 900s 超时。现在同一仓**只读一次**，且全仓并发预取；
     读失败也缓存（失败仓恰恰最慢），但**仍记一条漂移**（口径不变）。
     详见 matrix.py 的 enable_tag_cache。
     """
@@ -488,9 +488,9 @@ def check_go_floor_pairing(repo: str, d):
 # 为什么放在最前面：本脚本后面有**四个**地方问同一仓的远端最新 tag
 # （README 安装行 / AGENTS 当前版本行 / 站点 versions.json / 嵌套模块地板），
 # gen_releases 的 Release 对账还要**每个仓的完整 tag 列表**；而
-# `matrix.remote_tags()` 不带缓存 ⇒ 24 仓 × 4 处 = 96 次 HTTPS 读
+# `matrix.remote_tags()` 不带缓存 ⇒ 每仓 × 4 处重复读（24 仓时 96 次）
 # （实测 1.4–2.1s/次，拥塞时更久）⇒ 审计本身要跑 281s，后台任务直接
-# 900s 超时（2026-10-25 实测）。这里一次性**并发**读掉 24 仓，之后全是命中。
+# 900s 超时（2026-10-25 实测）。这里一次性**并发**读掉全矩阵，之后全是命中。
 #
 # 缓存**默认关**（matrix.enable_tag_cache）——发布类脚本不能开：它们的产物
 # （BOM / versions.json）必须反映**生成那一刻**的远端事实（#79）。
@@ -701,7 +701,7 @@ try:
     issues += _subpkg_problems
     for _u in _subpkg_undecided:
         print(f"  ⚠ 站点子包声明未归属（未判定，非漂移）：{_u}")
-    # 发版单元全集（根 24 + 嵌套 7 + 伞仓 1 = 32）：verify_site_copy 只管**根模块**条目集合，
+    # 发版单元全集（canonical 口径见 release_unit_count()）：verify_site_copy 只管**根模块**条目集合，
     # 嵌套模块的独立条目与 go get 安装行是另一件事——llms.txt 是 Agent 唯一会抓的
     # 机器可读索引，嵌套模块（零依赖隔离的载体）不给安装行 = 装不上。
     if llms.exists():
@@ -713,6 +713,13 @@ try:
         issues += check_filesystem_oracle(_repos)
         issues += check_llms_units(_llms_text)
         issues += check_section_consistency(_llms_text, _nested_derived)
+        # 场景安装行段（#341 P2）：llms 必须含规范场景组合行——缺/漂即红。
+        # 渲染单源在 gen_skill.SCENARIOS（发布行 = scenario_smoke 执行行）。
+        try:
+            import gen_skill  # noqa: E402  （延迟导入，站点阶段才需要）
+            issues += [f"llms.txt: {q}" for q in gen_skill.check_llms_scenarios(_llms_text)]
+        except Exception as e:  # noqa: BLE001 — 判据读不到显式红，不许静默跳过（#79）
+            issues.append(gate_unavailable("llms 场景安装行段判据", e))
         # llms.txt 条目里的**反引号标识符**必须在本仓源码里真实存在——
         # 实测抓到 hertz 条目写了 kitex 的 WithReadyAddr（照抄得到 undefined）。
         # 判据只读源码（客观事实），不与被检对象共享任何解析逻辑。
@@ -900,7 +907,7 @@ def check_version_line():
           + "; ".join(res["unreadable"][:4]))
 
 
-progress("阶段 4/7 独立门禁（breakingIndex oracle / 死路径 / 版本线）")
+progress("阶段 4/7 独立门禁（breakingIndex oracle / 死路径 / 版本线 / README 计数）")
 check_breaking_oracle()
 check_dead_paths()
 check_version_line()
@@ -925,6 +932,25 @@ try:
 except Exception as e:  # noqa: BLE001
     # ⚠ 不可用 ⇒ 判红（#79：判不了 ≠ 通过，与 BOM 检查同款口径）
     issues.append(gate_unavailable("分层无环门禁（dep_gate）", e))
+
+# ---------- BOM 主仓 README 计数门禁（matrix-tools#339，2026-11-27 演进评审 P0） ----------
+# README 的 badge/prose/架构总览表/合数是**最后一个没人守的对外计数面**——站点侧
+# 同类判据（verify_site_copy.check_counts）早已存在，BOM 主仓 README 既无生成器也
+# 无门禁 ⇒ kitex-examples 移出 MODULES、kitx→authx、pkg 23→38 三轮变更后四处漂移
+# 无人拦（#339 实测）。判据纯函数在 verify_bom_readme.py（带 selftest + 变异自证）；
+# 事实源读不到 ⇒ gate_unavailable 判红（#79：判不了 ≠ 通过）。
+try:
+    import verify_bom_readme  # noqa: E402
+    _bom_readme = (repo_dir("oekit", BASE) / "README.md").read_text(encoding="utf-8")
+    _bom_problems = verify_bom_readme.check_bom_readme(
+        _bom_readme, len(MODULES),
+        subpkg_claims.truth(BASE if os.path.isdir(BASE) else None))
+    for _p in _bom_problems:
+        issues.append(f"oekit 主仓 README: {_p}")
+except FileNotFoundError as e:
+    issues.append(gate_unavailable("BOM README 计数门禁", RuntimeError(str(e))))
+except Exception as e:  # noqa: BLE001 — 事实源读不到必须显式红，不许静默跳过
+    issues.append(gate_unavailable("BOM README 计数门禁", e))
 
 # ---------- 架构图（生成器产物一致性，light+dark） ----------
 try:
@@ -1504,7 +1530,7 @@ check_dependabot_directories()
 # 实际一仓没查（#26：23/24 仓被静默跳过，报告照样进 issue）。audit.yml 因此
 # 必须注入 GH_TOKEN。跳过不红（本地跑才是硬门禁），但必须**汇总成一行**：
 # 23 条同形 ⚠ 会把真正的漂移条目淹没在噪音里。
-progress("阶段 5/7 GitHub Release 对账（24 仓 + 伞仓 BOM）")
+progress(f"阶段 5/7 GitHub Release 对账（{len(MODULES)} 仓 + 伞仓 BOM）")
 try:
     from gen_releases import missing_releases, release_repos  # noqa: E402
 

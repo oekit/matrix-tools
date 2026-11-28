@@ -29,7 +29,9 @@ import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent.parent))
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
-from matrix import DESC, MODULES, NESTED_MODULES, SITE_REPO, ensure_clean_all, repo_dir  # noqa: E402
+from matrix import (DESC, MODULES, NESTED_MODULES, SITE_REPO,  # noqa: E402
+                     MODULE_COUNT, NESTED_MODULE_COUNT, BOM_RELEASE_UNIT,
+                     ensure_clean_all, repo_dir)
 from rules import HARD_RULES_MD  # noqa: E402
 
 # 「N 合 1」的 N **从 DESC 真相源派生**：这个数字曾经被硬编码在本文件三处，
@@ -278,8 +280,8 @@ REDLINES_SHORT: list[str] = [
     "缓存命中返回零拷贝引用——改写需 `CloneOnRead`；TTL 必须有限（失效失败时的唯一安全网）",
 ]
 
-SKILL_DESCRIPTION = """\
-在 Go 业务代码中使用/重构时选用 oekit 框架包的选型与用法入口（24 独立模块 + 12 嵌套 + 1 BOM 伞仓）。
+SKILL_DESCRIPTION = f"""\
+在 Go 业务代码中使用/重构时选用 oekit 框架包的选型与用法入口（{MODULE_COUNT} 独立模块 + {NESTED_MODULE_COUNT} 嵌套 + {BOM_RELEASE_UNIT} BOM 伞仓）。
 触发场景：限流/熔断/降载、分布式锁、缓存、日志、配置、出站 HTTP、RPC 服务、定时任务、错误处理、
 SSRF 防护、重试、指标追踪、ID 校验、CRUD、服务启动引导，或不确定该用哪个 oekit 模块/子包时。
 含场景选型表、全矩阵硬红线、pkg 子包速查索引。发版/tag/CHANGELOG 用 oekit-release；
@@ -317,6 +319,59 @@ def desc_head(desc: str, limit: int = 90) -> str:
                 break
         head = head.rstrip() + "…"
     return head
+
+
+# ---------------------------------------------------------------------------
+# 场景安装行（matrix-tools#341，P2 场景可执行化）
+# ---------------------------------------------------------------------------
+# 单源 = SCENARIOS.mods。同一行渲染三处出口（SKILL.md / 站点 selection.md /
+# llms.txt），同一文本被 scenario_smoke 原文执行——「文档给用户的行」与
+# 「被验证的行」是同一字符串，不是两份会漂的复制品。
+
+_LLMS_SCENARIO_HEADING = "## 场景安装行（复制即用）"
+
+
+def scenario_install_line(mods: list[str]) -> str:
+    """SCENARIOS.mods → 可复制 go get 行（裸版本，与 README 快速开始同风格）。"""
+    return "go get " + " ".join(f"github.com/oekit/{m}" for m in mods)
+
+
+def scenario_install_lines_md() -> str:
+    """场景 → 安装行的 markdown 列表（skill/站点/llms 共用的正文）。"""
+    out = []
+    for _group, rows in SCENARIOS:
+        for r in rows:
+            out.append(f"- {r['scene']}：`{scenario_install_line(r['mods'])}`")
+    return "\n".join(out)
+
+
+def render_llms_scenario_section() -> str:
+    """llms.txt 规范「场景安装行」段（check_llms_scenarios 字节比对的期望值）。"""
+    return (
+        f"{_LLMS_SCENARIO_HEADING}\n\n"
+        "每行 = 该场景的模块组合安装命令（单源 gen_skill.SCENARIOS，"
+        "冒烟见 matrix-tools scenario_smoke）。\n\n"
+        f"{scenario_install_lines_md()}\n"
+    )
+
+
+def check_llms_scenarios(llms_text: str) -> list[str]:
+    """llms.txt 必须含规范「场景安装行」段——缺段/与渲染漂移都判红。
+
+    与 check_section_consistency（嵌套段）同款纪律：字节比对，不接受「差不多」。
+    再生路径：python3 scripts/gen_skill.py --emit-llms-scenario
+    """
+    want = render_llms_scenario_section()
+    if _LLMS_SCENARIO_HEADING not in llms_text:
+        return [f"llms.txt 缺「{_LLMS_SCENARIO_HEADING}」段——场景组合行对 Agent 不可见"
+                f"（跑 gen_skill.py --emit-llms-scenario 取规范文本）"]
+    m = re.search(re.escape(_LLMS_SCENARIO_HEADING) + r"\n(.*?)(?=^##\s|\Z)",
+                  llms_text, re.M | re.S)
+    got = _LLMS_SCENARIO_HEADING + "\n" + (m.group(1) if m else "")
+    if got.rstrip() != want.rstrip():
+        return ["llms.txt 的「场景安装行」段与规范渲染不一致（SCENARIOS 改了但段没跟着改）"
+                "——跑 gen_skill.py --emit-llms-scenario 取规范文本逐字节替换"]
+    return []
 
 
 def _scenario_tables() -> str:
@@ -402,7 +457,7 @@ def render_skill() -> str:
     )
     body = f"""# oekit 包选型与用法入口
 
-> oekit = Open Easy Kit：24 独立模块 + 12 嵌套模块 + 1 BOM 伞仓，依赖自底向上无环。
+> oekit = Open Easy Kit：{MODULE_COUNT} 独立模块 + {NESTED_MODULE_COUNT} 嵌套模块 + {BOM_RELEASE_UNIT} BOM 伞仓，依赖自底向上无环。
 > 本 skill 由 `matrix-tools/scripts/gen_skill.py` 渲染——场景表/pkg 速查为手写数据、
 > 红线与模块索引为生成产物；修订请改 gen_skill.py 数据区（或 rules.py / matrix.py），勿手改本文件。
 
@@ -417,6 +472,9 @@ def render_skill() -> str:
 ## 场景选型表
 
 {_scenario_tables()}
+### 场景安装行（复制即用）
+
+{scenario_install_lines_md()}
 
 ## 红线速览（完整版 rules.md；各仓 AGENTS.md 同源）
 
@@ -472,6 +530,9 @@ title: 选型速查（场景 → 包）
 ## 场景选型表
 
 {_scenario_tables()}
+### 场景安装行（复制即用）
+
+{scenario_install_lines_md()}
 
 ## pkg 子包速查（{PKG_CLAIM}，零第三方依赖）
 
@@ -533,6 +594,9 @@ def check_drift() -> list[str]:
 
 if __name__ == "__main__":
     argv = sys.argv[1:]
+    if "--emit-llms-scenario" in argv:
+        print(render_llms_scenario_section(), end="")
+        raise SystemExit(0)
     if "--check" in argv:
         d = check_drift()
         for line in d:

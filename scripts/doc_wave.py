@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """多仓文档波次：DESC/版本行一改全矩阵脏，本工具收成 plan → 开 PR → 合并三步。
 
-背景：改一条 DESC = 24 仓矩阵表全脏；org 开 enforce_admins 后逐仓手工
+背景：改一条 DESC = 全矩阵仓的矩阵表全脏；org 开 enforce_admins 后逐仓手工
 checkout/commit/push/开 PR 的波次开销极重（2026-10-19 pkg v0.15.0 波次 13 个 PR
 全手工）。本工具把机械劳动收成两条命令。
 
