@@ -71,3 +71,27 @@ HARD_RULES_MD = """## 硬规则速览（全矩阵适用）
 - 本仓 README 的「矩阵总览」表由脚本生成，结构变化后需重新生成
 - 历史完整规范见 ekit 单体仓（git.enjoye.top/enjoydream/ekit，冻结维护）的 AGENTS.md 与 docs/
 """
+
+# 模块准入三问（2026-11-28 演进评审 P4 / matrix-tools#344）。
+# 独立于 HARD_RULES_MD：硬规则管「仓内怎么写」，三问管「要不要有这个仓」——
+# 投影面也不同：HARD_RULES_MD 进每个仓的 AGENTS.md/红线，三问进
+# ① gen_agents --new-repo 过闸（缺答案即拒）② 冷启动 AGENTS.md 留档段
+# ③ gen_skill rules.md（AI 提新模块时看得到判据）。
+MODULE_ADMISSION_3Q_MD = """## 模块准入三问（新增/改独立发版单元前必答）
+
+进度的尺子是**场景覆盖数与承诺门禁数**，不是模块数（2026-11-27 演进评审 P4 换轨）。
+新增独立仓前三问答不出，就不独立——并 pkg / 走嵌套（matrix.py NESTED_MODULES，
+#37 裁决不换位置）/ 不做：
+
+1. **独立生命周期**：有独立的发版节奏与矩阵外消费方吗？只是某仓的重依赖隔离壳
+   ⇒ 嵌套模块；通用微工具 ⇒ 先查 `github.com/oekit/pkg` 有没有。
+2. **使用场景**：场景选型表（gen_skill.SCENARIOS）写得出至少一条它的场景吗？
+   写不出 = 没人知道何时用它 = 不该独立成仓。audit 红级机判：MODULES 每仓必须
+   被 ≥1 场景 mods 引用（#344 起）。
+3. **稳定 API**：能承诺导出面的稳定性分级吗？清单住本仓 `api-lifecycle.yaml`
+   （每生产包定级+理由），门禁住 matrix-tools（api_lifecycle_gate 清单↔包注释↔
+   生产包三处一致）——pkg 双面设计是范式，冷启动至少给出首版定级计划。
+
+过闸：`gen_agents.py --new-repo <name>` 要求三个 `--admit-*` 显式答案，缺一即拒；
+答案嵌入新仓 AGENTS.md「准入三问」段留档（谁凭什么是独立仓，白纸黑字）。
+"""

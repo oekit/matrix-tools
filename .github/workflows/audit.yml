@@ -106,8 +106,10 @@ jobs:
         run: python3 scripts/desc_count_selftest.py
       - name: API 生命周期门禁自测（清单 ↔ 包注释 ↔ 生产包集合三处一致；每种漂移形态都必须判得住——判据自己坏了会全绿通过）
         run: python3 scripts/api_lifecycle_gate_selftest.py
-      - name: AI skill 入口自测（渲染确定性 / 场景表死键 / LAYERS 覆盖 / 红线出处 / frontmatter——skill 是 AI 的选型入口，数据错 = AI 全矩阵走错路）
+      - name: AI skill 入口自测（渲染确定性 / 场景表死键 / LAYERS 覆盖 / 红线出处 / frontmatter / 场景覆盖 #344——skill 是 AI 的选型入口，数据错 = AI 全矩阵走错路）
         run: python3 scripts/gen_skill_selftest.py
+      - name: 准入三问过闸自测（缺旗拒冷启动 / 串位不认占位 / 留档段与三问文本在场——#344 fail-closed）
+        run: python3 scripts/gen_agents_selftest.py
       - name: BOM 生成器 Go 地板自测（取不到 go.mod 必须报错，不许兜底假地板）
         run: python3 scripts/gen_matrix_go_selftest.py
       - name: 审计远端事实缓存自测（同仓只读一次，失败态也不许重打网络）

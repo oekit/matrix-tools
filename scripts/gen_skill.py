@@ -32,7 +32,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 from matrix import (DESC, MODULES, NESTED_MODULES, SITE_REPO,  # noqa: E402
                      MODULE_COUNT, NESTED_MODULE_COUNT, BOM_RELEASE_UNIT,
                      ensure_clean_all, repo_dir)
-from rules import HARD_RULES_MD  # noqa: E402
+from rules import HARD_RULES_MD, MODULE_ADMISSION_3Q_MD  # noqa: E402
 
 # 「N 合 1」的 N **从 DESC 真相源派生**：这个数字曾经被硬编码在本文件三处，
 # pkg 新增子包后（31→33）三处一起过期、skill 与站点标题口径漂移（#117 同款）。
@@ -96,6 +96,11 @@ SCENARIOS: list[tuple[str, list[dict]]] = [
          "use": "`workflow`",
          "tips": "串行/并行/异步/条件分支 + Hook AOP",
          "mods": ["workflow"]},
+        {"scene": "实时消息通道（WebSocket 房间广播 / NATS）",
+         "use": "`network/wsutil`（广播原语）+ `network/nats`（JetStream）；轻量连接与 MQ 抽象 `network/conn` `network/mq`",
+         "tips": "wsutil 房间广播背压安全（慢连接超时跳过，不拖死循环）+ 单连接有界 `Outbox`（唯一写者，慢消费者不阻塞发送方）；NATS 客户端嵌入式测试友好",
+         "redline": "只要轻量通信就用 network，别拉 httpx 的发现/熔断重语义；`Outbox` 满了**只报告不处置**——背压策略由调用方定",
+         "mods": ["network"]},
     ]),
     ("出站调用与弹性", [
         {"scene": "内部服务 HTTP 调用（发现+熔断+重试+LB）",
@@ -402,6 +407,8 @@ def render_rules() -> str:
         "> 由 matrix-tools/scripts/rules.py 单源渲染（与各仓 AGENTS.md 冷启动模板同源）——"
         "改硬规则改 rules.py，勿直接改本文件。\n\n"
         + HARD_RULES_MD
+        + "\n"  # 准入三问（#344）：AI 提「要不要新开一个模块」时看得到判据
+        + MODULE_ADMISSION_3Q_MD
     )
 
 
@@ -569,6 +576,18 @@ def write_all(site: bool = False) -> list[str]:
         sel.write_text(render_site(), encoding="utf-8")
         written.append(str(sel))
     return written
+
+
+def scenario_coverage(modules: list[str]) -> tuple[list[str], list[str]]:
+    """准入三问之问2 的存量机判（#344）：MODULES ⊆ SCENARIOS.mods 覆盖。
+
+    返回 (covered 已覆盖, missing 未覆盖)——audit 按 missing 空不空判红：
+    写不出场景的模块 = 没人知道何时用它 = 不该独立成仓（MODULE_ADMISSION_3Q_MD 问2）。
+    死键方向（mods ⊆ MODULES）由 audit 的既有检查管，这里只管反向覆盖。
+    """
+    covered = {m for _, rows in SCENARIOS for r in rows for m in r.get("mods", [])}
+    return ([m for m in modules if m in covered],
+            [m for m in modules if m not in covered])
 
 
 def check_drift() -> list[str]:

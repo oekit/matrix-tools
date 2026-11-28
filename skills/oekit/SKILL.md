@@ -35,6 +35,7 @@ description: >-
 | 健康检查 / K8s 就绪 | `bootstrap/healthz` + `hertz` | liveness/readiness 多 check 并发、panic 隔离；业务健康门过了再 `app.Ready()` | TCP 探活只证端口可建连，不证业务健康 |
 | K8s 客户端 / Lease 选主 | `k8s`（+`k8s/leaderelection`） | kubeconfig→KUBECONFIG→in-cluster 逐级回退；主备单活 OnStarted/StoppedLeading 回调 | 失权与 ctx 取消并存时失权优先上抛 ErrLostLeadership |
 | 组合式流程编排 | `workflow` | 串行/并行/异步/条件分支 + Hook AOP | — |
+| 实时消息通道（WebSocket 房间广播 / NATS） | `network/wsutil`（广播原语）+ `network/nats`（JetStream）；轻量连接与 MQ 抽象 `network/conn` `network/mq` | wsutil 房间广播背压安全（慢连接超时跳过，不拖死循环）+ 单连接有界 `Outbox`（唯一写者，慢消费者不阻塞发送方）；NATS 客户端嵌入式测试友好 | 只要轻量通信就用 network，别拉 httpx 的发现/熔断重语义；`Outbox` 满了**只报告不处置**——背压策略由调用方定 |
 
 ### 出站调用与弹性
 
@@ -97,6 +98,7 @@ description: >-
 - 健康检查 / K8s 就绪：`go get github.com/oekit/bootstrap github.com/oekit/hertz`
 - K8s 客户端 / Lease 选主：`go get github.com/oekit/k8s`
 - 组合式流程编排：`go get github.com/oekit/workflow`
+- 实时消息通道（WebSocket 房间广播 / NATS）：`go get github.com/oekit/network`
 - 内部服务 HTTP 调用（发现+熔断+重试+LB）：`go get github.com/oekit/httpx github.com/oekit/nns`
 - 出站 SSRF 防护：`go get github.com/oekit/pkg github.com/oekit/httpx`
 - RPC 依赖的 HTTP 端点（熔断+换实例重试）：`go get github.com/oekit/nns-endpoint github.com/oekit/nns`

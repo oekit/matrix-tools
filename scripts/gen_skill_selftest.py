@@ -9,6 +9,8 @@
      ——红线精华与单源漂移（改了 rules.py 没同步精华）在这拦
   5. 场景安装行（#341 P2）：每场景组合行三出口在场（skill/site/llms 规范段）、
      行格式 go get + 全 oekit 前缀、计数文案派生自 len()（不许硬编码 24）
+  6. 场景覆盖（#344 P4 准入三问问2）：MODULES ⊆ SCENARIOS.mods，missing 必须空；
+     准入三问文本投影在 rules.md
 
 附：skills/*/SKILL.md 的 frontmatter name 与目录名一致（release/sweep 是手写件，
 没有生成器兜底，拼错 name = ZCode 装载后触发不了）。
@@ -130,9 +132,22 @@ if desc_m:
     desc = " ".join(ln.strip() for ln in desc_m.group(1).splitlines())
     expect(len(desc) <= 1024, f"SKILL description 超长（{len(desc)} > 1024）")
 
+# 7) 场景覆盖机判（#344 准入三问问2）：MODULES ⊆ SCENARIOS.mods，missing 必须空
+_cov_ok, _cov_miss = gen_skill.scenario_coverage(sorted(MODULES))
+expect(not _cov_miss, f"场景覆盖缺口（准入三问问2，#344）：{_cov_miss}")
+expect("network" in _cov_ok, "network 未入任何场景（#344 首个覆盖缺口应已被补上）")
+# 合成夹具：未覆盖的模块必须进 missing（函数不是恒空的摆设）
+_c1, _m1 = gen_skill.scenario_coverage(["pkg", "不存在的仓"])
+expect(_c1 == ["pkg"] and _m1 == ["不存在的仓"],
+       f"scenario_coverage 合成夹具行为异常：covered={_c1} missing={_m1}")
+# 准入三问投影在 rules.md（AI 提新模块时看得到判据）
+from rules import MODULE_ADMISSION_3Q_MD  # noqa: E402
+expect(MODULE_ADMISSION_3Q_MD in gen_skill.render_rules(),
+       "准入三问未投影进 rules.md（render_rules 漏拼）")
+
 if failures:
     print(f"❌ gen_skill 自测失败 {len(failures)} 项：")
     for f in failures:
         print(f"  - {f}")
     raise SystemExit(1)
-print("✓ gen_skill 自测通过（渲染确定性 / 死键 / LAYERS 覆盖 / 红线出处 / frontmatter）")
+print("✓ gen_skill 自测通过（渲染确定性 / 死键 / LAYERS 覆盖 / 红线出处 / frontmatter / 场景覆盖 #344）")
