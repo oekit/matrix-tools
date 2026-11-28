@@ -829,8 +829,80 @@ def breaking_index_by_module(repo: str) -> dict[str, list[dict]]:
     return _split_by_module(breaking_index(repo))
 
 
-def breaking_suspects(repo: str) -> list[dict]:
-    """扫 CHANGELOG.md，收集「疑似破坏性但机器判不了」的条目（供 audit 提示）。"""
+# ---------- 疑似破坏性的**人工裁决登记**（matrix-tools#323） ----------
+#
+# 机器判不了语义（`**refactor(...)**` / `### Changed` 段等），audit 只能打 ⚠
+# 提示人看。人看过之后必须给结论：条目**真破坏**（消费方要改代码/配置/集成，
+# 或运行时契约不兼容）还是**不破坏**（内部重构/依赖地板升级/契约对齐修复/
+# 版本线重置基线说明/保留 Deprecated 别名的迁移）。
+#
+# 登记表 = `scripts/breaking_suspects_known.json`，每条按
+# (repo, version, line_prefix) **精确锚定** CHANGELOG 里的疑似条目：
+#   - verdict=not-breaking ⇒ 不再重复提示（已裁决）；
+#   - verdict=breaking     ⇒ **仍然提示**（「已裁决为破坏性但源仓未标 BREAKING」），
+#     待源仓补标注后由本生成器收入 breakingIndex——不静默吞掉真破坏；
+#   - 锚点失配/命中多条 ⇒ audit 判红（CHANGELOG 改了，裁决必须重新核）。
+#
+# 为什么不直接手改 breakingIndex：产物必须与解析器输出逐条一致（audit 双向
+# 门禁）；手改会报「多出 CHANGELOG 里没有的条目」。真破坏的收口路径是源仓
+# 补 BREAKING 标注 → 重新生成产物。
+ADJUDICATIONS_PATH = Path(__file__).with_name("breaking_suspects_known.json")
+ADJUDICATION_VERDICTS = {"breaking", "not-breaking"}
+
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def load_breaking_adjudications(path=None) -> list[dict]:
+    """读人工裁决登记表；形状/必填字段不合法 ⇒ 抛 ValueError（fail-loud）。"""
+    p = Path(path) if path else ADJUDICATIONS_PATH
+    try:
+        data = json.loads(p.read_text(encoding="utf-8"))
+    except FileNotFoundError as e:
+        raise ValueError(f"breaking 裁决登记表不存在：{p}") from e
+    known = data.get("known")
+    if not isinstance(known, list):
+        raise ValueError(f"{p}: 缺 known 数组")
+    out = []
+    seen = set()
+    for i, item in enumerate(known):
+        if not isinstance(item, dict):
+            raise ValueError(f"{p}: known[{i}] 不是对象")
+        missing = [k for k in ("repo", "version", "line_prefix", "verdict", "reason")
+                   if not str(item.get(k) or "").strip()]
+        if missing:
+            raise ValueError(f"{p}: known[{i}] 缺字段 {missing}")
+        verdict = item["verdict"]
+        if verdict not in ADJUDICATION_VERDICTS:
+            raise ValueError(f"{p}: known[{i}] verdict={verdict!r} 不在 "
+                             f"{sorted(ADJUDICATION_VERDICTS)}")
+        prefix = _norm_ws(item["line_prefix"])
+        if len(prefix) < 12:
+            raise ValueError(f"{p}: known[{i}] line_prefix 过短（<12 字符，锚点会误伤）")
+        key = (item["repo"], item["version"], prefix)
+        if key in seen:
+            raise ValueError(f"{p}: known[{i}] 与前面的条目重复：{key}")
+        seen.add(key)
+        out.append({
+            "repo": item["repo"],
+            "version": item["version"],
+            "line_prefix": prefix,
+            "verdict": verdict,
+            "reason": item["reason"].strip(),
+            "ref": str(item.get("ref") or "").strip(),
+        })
+    return out
+
+
+def _adjudication_match(entry: dict, suspect: dict, repo: str) -> bool:
+    return (entry["repo"] == repo
+            and entry["version"] == suspect.get("version", "")
+            and _norm_ws(suspect.get("line", "")).startswith(entry["line_prefix"]))
+
+
+def _raw_breaking_suspects(repo: str) -> list[dict]:
+    """未经过人工裁决过滤的疑似条目（audit 的锚点校验用这个口径）。"""
     root = repo_dir(repo, BASE)
     out = []
     sources = [(root / "CHANGELOG.md", "")] + [
@@ -843,6 +915,70 @@ def breaking_suspects(repo: str) -> list[dict]:
         for s in suspects:
             s["version"] = _prefix_version(s["version"], prefix)
         out.extend(suspects)
+    return out
+
+
+def breaking_suspects(repo: str, adjudications_path=None) -> list[dict]:
+    """扫 CHANGELOG.md，收集「疑似破坏性但机器判不了」的条目（供 audit 提示）。
+
+    已裁决为 `not-breaking` 的条目按登记表精确锚定后不再返回；已裁决为
+    `breaking` 的条目**照样返回**，并附 `adjudication` 字段——audit 必须把它
+    显示为「真破坏但源仓未标注」，不能静默吞掉。
+
+    锚点**必须唯一命中**：一个 line_prefix 同时命中多条 ⇒ 不据此过滤/标注
+    （宁可多提示，不可误吞），由 audit 的 check_breaking_adjudications 判红。
+    """
+    out = _raw_breaking_suspects(repo)
+    if not out:
+        return out
+    known = load_breaking_adjudications(adjudications_path)
+    # 登记条目**自身**必须唯一命中一条疑似条目；命中 0/多条 ⇒ 该条目不参与
+    # 过滤/标注（否则一个短前缀会把多条疑似条目一起吞掉）。命中多条由
+    # unanchored_breaking_adjudications 报出，audit 判红。
+    counts = [0] * len(known)
+    for s in out:
+        for i, e in enumerate(known):
+            if _adjudication_match(e, s, repo):
+                counts[i] += 1
+    usable = [e for i, e in enumerate(known) if counts[i] == 1]
+    kept = []
+    for s in out:
+        hits = [e for e in usable if _adjudication_match(e, s, repo)]
+        if len(hits) == 1:
+            if hits[0]["verdict"] == "not-breaking":
+                continue
+            s = dict(s)
+            s["adjudication"] = {"verdict": hits[0]["verdict"],
+                                 "reason": hits[0]["reason"],
+                                 "ref": hits[0]["ref"]}
+        kept.append(s)
+    return kept
+
+
+def unanchored_breaking_adjudications(adjudications_path=None) -> list[dict]:
+    """裁决登记表里**锚点失配/命中多条**的条目（audit 判红用）。
+
+    - matched=0：CHANGELOG 条目被改写/删除，登记表与事实脱节；
+    - matched>1：line_prefix 太短或条目重复，会误伤多条。
+
+    仓不可读时跳过——那是「未核对」，由 audit 的逐仓判红单独记账；
+    登记表本身读不到 ⇒ ValueError（不静默当空表）。
+    """
+    known = load_breaking_adjudications(adjudications_path)
+    by_repo: dict[str, list[dict] | None] = {}
+    for repo in {e["repo"] for e in known}:
+        try:
+            by_repo[repo] = _raw_breaking_suspects(repo)
+        except FileNotFoundError:
+            by_repo[repo] = None
+    out = []
+    for e in known:
+        suspects = by_repo.get(e["repo"])
+        if suspects is None:
+            continue
+        n = sum(1 for s in suspects if _adjudication_match(e, s, e["repo"]))
+        if n != 1:
+            out.append({**e, "matched": n})
     return out
 
 

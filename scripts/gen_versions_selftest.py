@@ -34,6 +34,7 @@ from __future__ import annotations
 import contextlib
 import importlib.util
 import io
+import json
 import subprocess
 import sys
 import tempfile
@@ -287,6 +288,109 @@ def case_D2_deps_read_failure_warns(gv=gen_versions) -> None:
                 f"依赖读不到必须告警且说明「不是零依赖」，实得 stderr={out[:240]!r}")
 
 
+# ── 疑似破坏性条目的人工裁决登记（matrix-tools#323） ─────────────────────
+def make_suspect_repo(root: Path, bullets: list[str], name: str = "demo") -> Path:
+    """造一个只有「疑似破坏性」条目的 fixture 仓（无 Breaking 段/关键词）。"""
+    d = root / name
+    d.mkdir(parents=True, exist_ok=True)
+    git(d, "init", "-q", "-b", "main")
+    git(d, "config", "user.email", "selftest@example.invalid")
+    git(d, "config", "user.name", "selftest")
+    (d / "go.mod").write_text("module example.invalid/demo\n\ngo 1.24.0\n",
+                              encoding="utf-8")
+    (d / "README.md").write_text("# fixture\n", encoding="utf-8")
+    body = "\n".join(f"- {b}" for b in bullets)
+    (d / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [v0.2.0] — 2026-11-01\n\n" + body + "\n",
+        encoding="utf-8")
+    return d
+
+
+def _ledger(root: Path, entries: list[dict]) -> Path:
+    p = root / "breaking_suspects_known.json"
+    p.write_text(json.dumps({"known": entries}, ensure_ascii=False, indent=2) + "\n",
+                 encoding="utf-8")
+    return p
+
+
+def _entry(prefix: str, verdict: str = "not-breaking") -> dict:
+    return {"repo": "demo", "version": "v0.2.0", "line_prefix": prefix,
+            "verdict": verdict, "reason": "selftest 裁决理由", "ref": "test#1"}
+
+
+def case_E1_adjudicated_not_breaking_filtered(gv=gen_versions) -> None:
+    """not-breaking 裁决 ⇒ 按 (repo, version, prefix) 精确锚定后不再提示。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        make_suspect_repo(root, ["**fix(cache)**: only internal refactor, no API change"])
+        ledger = _ledger(root, [_entry("**fix(cache)**: only internal refactor")])
+        with _base_at(gv, str(root)):
+            kept = gv.breaking_suspects("demo", adjudications_path=ledger)
+            stale = gv.unanchored_breaking_adjudications(adjudications_path=ledger)
+        ok = kept == [] and stale == []
+        _record("E1", ok,
+                f"not-breaking 裁决必须精确过滤且锚点唯一：kept={kept} stale={stale}")
+
+
+def case_E2_adjudicated_breaking_stays_visible(gv=gen_versions) -> None:
+    """breaking 裁决 ⇒ 条目**仍然返回**（附理由），不许被「已登记」吞掉。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        make_suspect_repo(root, ["**fix(policy)**: default key changed, migrate config"])
+        ledger = _ledger(root, [_entry("**fix(policy)**: default key changed", "breaking")])
+        with _base_at(gv, str(root)):
+            kept = gv.breaking_suspects("demo", adjudications_path=ledger)
+            stale = gv.unanchored_breaking_adjudications(adjudications_path=ledger)
+        ok = (len(kept) == 1 and kept[0].get("adjudication", {}).get("verdict") == "breaking"
+              and stale == [])
+        _record("E2", ok,
+                f"breaking 裁决必须仍然可见并带理由（不许静默吞掉）：kept={kept} stale={stale}")
+
+
+def case_E3_stale_anchor_detected(gv=gen_versions) -> None:
+    """CHANGELOG 改写导致锚点失配 ⇒ 必须能被 unanchored 判出来（不许静默沿用旧裁决）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        make_suspect_repo(root, ["**fix(cache)**: only internal refactor, no API change"])
+        ledger = _ledger(root, [_entry("**fix(absent)**: anchor no longer exists")])
+        with _base_at(gv, str(root)):
+            kept = gv.breaking_suspects("demo", adjudications_path=ledger)
+            stale = gv.unanchored_breaking_adjudications(adjudications_path=ledger)
+        ok = len(kept) == 1 and len(stale) == 1 and stale[0]["matched"] == 0
+        _record("E3", ok,
+                f"锚点失配必须判出且不过滤：kept={kept} stale={stale}")
+
+
+def case_E4_ambiguous_prefix_not_filtered(gv=gen_versions) -> None:
+    """一个前缀命中多条 ⇒ 不得据此过滤（宁可多提示），且必须判红。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        make_suspect_repo(root, [
+            "**fix(cache)**: shared prefix alpha",
+            "**fix(cache)**: shared prefix beta",
+        ])
+        ledger = _ledger(root, [_entry("**fix(cache)**: shared prefix")])
+        with _base_at(gv, str(root)):
+            kept = gv.breaking_suspects("demo", adjudications_path=ledger)
+            stale = gv.unanchored_breaking_adjudications(adjudications_path=ledger)
+        ok = (len(kept) == 2 and len(stale) == 1 and stale[0]["matched"] == 2)
+        _record("E4", ok,
+                f"锚点命中多条必须不过滤且判红：kept={kept} stale={stale}")
+
+
+def case_E5_invalid_verdict_fails_loud(gv=gen_versions) -> None:
+    """verdict 非法 ⇒ 加载期必须报错（不许静默当 not-breaking 过滤）。"""
+    with tempfile.TemporaryDirectory() as td:
+        root = Path(td)
+        ledger = _ledger(root, [_entry("**fix(cache)**: whatever", "maybe")])
+        raised = False
+        try:
+            gv.load_breaking_adjudications(ledger)
+        except ValueError:
+            raised = True
+        _record("E5", raised, "非法 verdict 必须在加载期抛 ValueError")
+
+
 # ── 用例表 ────────────────────────────────────────────────────────────────
 CASES = [
     ("C1 改造C：嵌套 CHANGELOG 扫全深度（深度 4 不脱离判据）",
@@ -308,6 +412,11 @@ CASES = [
     ("D1 改造D：读不到仓 ⇒ 明确告警", case_D1_missing_repo_warns, ["D1"]),
     ("D2 改造D：读不到的模块不静默进产物", case_D1_missing_repo_warns, ["D2"]),
     ("D3 改造D：依赖读不到 ⇒ 告警「不是零依赖」", case_D2_deps_read_failure_warns, ["D3"]),
+    ("E1 裁决登记：not-breaking 精确锚定后不再提示", case_E1_adjudicated_not_breaking_filtered, ["E1"]),
+    ("E2 裁决登记：breaking 仍然可见（不静默吞掉）", case_E2_adjudicated_breaking_stays_visible, ["E2"]),
+    ("E3 裁决登记：锚点失配必须判出且不过滤", case_E3_stale_anchor_detected, ["E3"]),
+    ("E4 裁决登记：锚点命中多条不得过滤且必须判红", case_E4_ambiguous_prefix_not_filtered, ["E4"]),
+    ("E5 裁决登记：非法 verdict 加载期 fail-loud", case_E5_invalid_verdict_fails_loud, ["E5"]),
 ]
 
 
@@ -390,6 +499,34 @@ def _mutate_silent_deps():
     )])
 
 
+def _mutate_adjudication_filter_off():
+    """裁决登记退回旧行为：not-breaking 也不过滤（提示照旧）。"""
+    return _load_mutated("gv_mut_adj_off", [(
+        """        if len(hits) == 1:
+            if hits[0]["verdict"] == "not-breaking":
+                continue""",
+        """        if len(hits) == 1:
+            if False:
+                continue""",
+    )])
+
+
+def _mutate_adjudication_ambiguity_ignored():
+    """裁决登记退回旧行为：命中多条也当唯一命中（前缀太短会误伤多条）。"""
+    return _load_mutated("gv_mut_adj_amb", [(
+        "    usable = [e for i, e in enumerate(known) if counts[i] == 1]",
+        "    usable = list(known)",
+    )])
+
+
+def _mutate_unanchored_detection_off():
+    """锚点校验退回旧行为：失配/多条都不判（旧裁决静默失效）。"""
+    return _load_mutated("gv_mut_adj_stale", [(
+        "        if n != 1:",
+        "        if False:",
+    )])
+
+
 MUTATIONS = [
     # ⚠️ 期望集合必须**按该缺陷的实际影响面列全**（同 host_version_selftest 的纪律）：
     #   「嵌套 CHANGELOG 只扫一层」这一个缺陷，会同时打红 C1（深度 4 收不到）、
@@ -405,6 +542,12 @@ MUTATIONS = [
      _mutate_silent_missing_repo, {"D1"}),
     ("改造D 退回旧写法：依赖读不到 ⇒ 静默置空",
      _mutate_silent_deps, {"D3"}),
+    ("裁决登记退回旧行为：not-breaking 不过滤（提示照旧）",
+     _mutate_adjudication_filter_off, {"E1"}),
+    ("裁决登记退回旧行为：命中多条也当唯一（会误伤多条）",
+     _mutate_adjudication_ambiguity_ignored, {"E4"}),
+    ("锚点校验退回旧行为：失配/多条都不判（旧裁决静默失效）",
+     _mutate_unanchored_detection_off, {"E3", "E4"}),
 ]
 
 

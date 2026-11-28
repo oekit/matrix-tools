@@ -1,0 +1,227 @@
+{
+  "_comment": [
+    "已人工裁决的「疑似破坏性变更未标注」条目（matrix-tools#323，2026-11-17 全量复核）。",
+    "",
+    "生成器（gen_versions.breaking_suspects）按 (repo, version, line_prefix) 精确锚定：",
+    "verdict=not-breaking 的条目不再作为 ⚠ 提示；verdict=breaking 的条目仍会提示",
+    "（「已裁决为破坏性但源仓 CHANGELOG 未标 BREAKING」），待源仓补标注后由",
+    "gen_versions 收入 breakingIndex——不静默吞掉真破坏。",
+    "",
+    "这张表不是漏报的口子：每条都必须写明裁决理由；CHANGELOG 条目改动导致",
+    "锚点失配/命中多条时，audit 的 check_breaking_adjudications 会判红并点名条目。",
+    "",
+    "裁决口径：breaking = 消费方必须改代码/配置/集成，或运行时契约发生不兼容变化；",
+    "not-breaking = 内部重构/依赖地板升级（破坏归属被依赖仓）/契约对齐 bug 修复/",
+    "版本线重置基线说明/保留 Deprecated 别名的迁移。"
+  ],
+  "known": [
+    {
+      "repo": "logx",
+      "version": "v0.5.1",
+      "line_prefix": "**fix(std)**：`NewStdLogger` 无参默认级别 `LevelDebug` → **`LevelInfo`**（#11）。",
+      "verdict": "not-breaking",
+      "reason": "对齐文档契约的默认值修复（文档承诺默认 INFO，此前 iota 零值误取 Debug）；无 API/签名变更，消费方无需改代码。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "logx",
+      "version": "v0.1.10",
+      "line_prefix": "**fix**：slog 后端 kv/Attr 中的 error 值渲染为 `Error()` 文本——原实现直接 `json.Marshal`",
+      "verdict": "not-breaking",
+      "reason": "日志文本渲染修复（error 值改输出 Error() 文本，对齐 log/slog JSONHandler）；无 API 变更，仅自定义 error 的输出文本变化。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "authx",
+      "version": "v0.1.0",
+      "line_prefix": "**refactor(uidgen)**: UUID 改为标准库手写 RFC 4122 v4（crypto/rand + version/var",
+      "verdict": "not-breaking",
+      "reason": "去 google/uuid 依赖的内部重构；5 个导出函数签名与输出语义逐字节不变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "data",
+      "version": "v0.6.0",
+      "line_prefix": "**fix(cached)**: 嵌套 `RunInTx` 透传 fn 导致内层写绕过失效收集—— 提交后不失效、点读读到 TTL 窗口内旧值；",
+      "verdict": "not-breaking",
+      "reason": "缓存失效记账 bug 修复（嵌套 RunInTx 内层写不再绕过失效收集）；无 API 变更。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "data",
+      "version": "v0.6.0",
+      "line_prefix": "**fix(cached)**: 缺省 ID 探测在结构体类型上查 `GetID`，而指针接收者 方法（gormx.BaseModel 的 Ge",
+      "verdict": "not-breaking",
+      "reason": "GetID 指针接收者探测修复（原本静默失效的纯 GetID 实体恢复缓存键）；无 API 变更。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "data",
+      "version": "v0.6.0",
+      "line_prefix": "**fix(cached)**: 指纹防碰撞加固——`driver.Valuer` 风格非导出字段参数 恒编 `{}`/`null`，不同取值同",
+      "verdict": "not-breaking",
+      "reason": "指纹防碰撞加固（不可区分参数 fail-closed 拒绝降级直通，修复串数据）；受支持输入的契约未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "gormx",
+      "version": "v0.5.1",
+      "line_prefix": "仓库结构重置后的首个版本（历史与旧版本号 v0.1.0–v0.3.0 已清空重做，从 v0.5.1 起算）。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "redisx",
+      "version": "v0.4.0",
+      "line_prefix": "import 路径正名：`github.com/oekit/data/data/cache` → `github.com/oekit/data/",
+      "verdict": "not-breaking",
+      "reason": "描述的是 data 仓的 import 路径正名（破坏归属 data，已由其 breakingIndex 收录）；redisx 自身 API 未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "httpx",
+      "version": "v0.3.0",
+      "line_prefix": "仓库结构重置后的首个版本（历史与旧版本号 v0.1.0–v0.2.0 已清空重做，从 v0.3.0 起算）。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "network",
+      "version": "v0.5.0",
+      "line_prefix": "全新起点：历史与旧版本号已全部清空，自本版重新起算。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "middleware",
+      "version": "v0.9.0",
+      "line_prefix": "根包 `RecoveryMiddleware`/`AccessLogMiddleware` 改为 chainmw 内核薄壳： panic 捕获/",
+      "verdict": "not-breaking",
+      "reason": "内部重构且条目明示对外行为零变化：SkipPaths/SentryReporter/响应格式/日志字段与公开 API 签名全部不变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "middleware",
+      "version": "v0.9.0",
+      "line_prefix": "根包内置 hertz→core/transport 服务端适配器（与 hertz/transportx 同构； 不能 import hertz/",
+      "verdict": "not-breaking",
+      "reason": "纯增益：根包内置 hertz→core/transport 适配器，ctx 新增一个键，无移除/签名变更。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "middleware",
+      "version": "v0.7.0",
+      "line_prefix": "依赖升级：registry v0.4.0（SPI 包提升至模块根）、core v0.7.0",
+      "verdict": "not-breaking",
+      "reason": "依赖地板升级；破坏归属 registry v0.4.0（已由其 breakingIndex 收录），middleware 自身 API 未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "middleware",
+      "version": "v0.6.0",
+      "line_prefix": "**fix(ratelimit)**：默认 KeyFunc 去端口——`RemoteAddr().String()` 含端口， 限流桶按 TCP",
+      "verdict": "not-breaking",
+      "reason": "限流绕过 bug 修复（连接桶→地址桶）；KeyFunc 扩展点与直连地址语义不变，代理拓扑既有配置方式不变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "middleware",
+      "version": "v0.5.0",
+      "line_prefix": "仓库结构重置后的首个版本（历史与旧版本号 v0.1.0–v0.4.0 已清空重做，从 v0.5.0 起算）。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "bootstrap",
+      "version": "v0.5.0",
+      "line_prefix": "仓库结构重置后的首个版本（历史与旧版本号 v0.1.0–v0.4.2 已清空重做，从 v0.5.0 起算）。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.9.0",
+      "line_prefix": "**fix(transportx)**：reply header 的 `Add` 误用 `Set`（**覆盖**而非追加）⇒ 与同文件 requ",
+      "verdict": "not-breaking",
+      "reason": "按 core/transport 契约修正 Add 语义（追加而非覆盖）；无签名变更，属契约对齐修复。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.9.0",
+      "line_prefix": "**fix(hertzotel)**：`NewServerMiddleware` 丢弃 `NewServerTracer` 返回的 server",
+      "verdict": "not-breaking",
+      "reason": "显式诊断 + 包注释订正；成对入口 NewServerTracing 已存在，中间件 API 未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.9.0",
+      "line_prefix": "**fix(governance)**：策略键用 `string(c.Path())`（**原始路径**）⇒ 带路径参数的路由（如 `/orde",
+      "verdict": "breaking",
+      "reason": "真破坏：path 级策略匹配键由原始路径改为路由模板，按具体实例路径配置的策略必须迁移到模板键。源仓 CHANGELOG 未标 BREAKING，登记待补标注（补标后随生成进 breakingIndex）。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.9.0",
+      "line_prefix": "**fix(metrics)**：`MetricsHandlerFor` 每次调用新建 `promhttp.HandlerFor`（无缓存）⇒",
+      "verdict": "not-breaking",
+      "reason": "性能修复 + 删除未导出类型上的空 Flush（非公开 API，promhttp 不使用）；无对外契约变化。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.9.0",
+      "line_prefix": "**refactor(versionh)**：改用 `mw.Response` 统一信封（对外 JSON 逐字不变：键序 / `message:",
+      "verdict": "not-breaking",
+      "reason": "统一信封重构，对外 JSON 逐字不变（键序/message/trace_id 来源均不变）。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.6.0",
+      "line_prefix": "依赖升级：registry v0.4.0 / nns v0.4.0 / core v0.7.0 / middleware v0.7.0 （reg",
+      "verdict": "not-breaking",
+      "reason": "依赖地板升级；破坏归属 registry/nns v0.4.0（已由各自 breakingIndex 收录），hertz 自身 API 未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.5.4",
+      "line_prefix": "**fix(lint)**：`health_test.go` 循环内 `resp` 改复用外层声明（govet shadow）—— v0.5.2",
+      "verdict": "not-breaking",
+      "reason": "测试 lint 修复，并说明 v0.5.2 tag 重指向导致的校验和问题；v0.5.4 本身无 API/行为变更。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "hertz",
+      "version": "v0.5.1",
+      "line_prefix": "仓库结构重置后的首个版本（历史与旧版本号 v0.1.0–v0.5.0 已清空重做，从 v0.5.1 起算）。",
+      "verdict": "not-breaking",
+      "reason": "版本线重置的基线说明（旧版本号已清空重做），不是当前版本线的行为变更，无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "kitex",
+      "version": "v0.6.0",
+      "line_prefix": "依赖升级：registry v0.4.0 / nns v0.4.0 / core v0.7.0（前两者包提升至模块根）",
+      "verdict": "not-breaking",
+      "reason": "依赖地板升级；破坏归属 registry/nns v0.4.0（已由各自 breakingIndex 收录），kitex 自身 API 未变。",
+      "ref": "oekit/matrix-tools#323"
+    },
+    {
+      "repo": "kitex",
+      "version": "v0.3.10",
+      "line_prefix": "**refactor**：klog→logx 日志桥接（`kitex.NewLogger`）迁至 [oekit/logx](https://gi",
+      "verdict": "not-breaking",
+      "reason": "日志桥接迁至 logx/kitexlog，但保留 kitex.NewLogger 的 Deprecated 别名且行为完全一致；无迁移要求。",
+      "ref": "oekit/matrix-tools#323"
+    }
+  ]
+}
