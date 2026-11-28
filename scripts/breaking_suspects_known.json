@@ -162,14 +162,6 @@
     {
       "repo": "hertz",
       "version": "v0.9.0",
-      "line_prefix": "**fix(governance)**：策略键用 `string(c.Path())`（**原始路径**）⇒ 带路径参数的路由（如 `/orde",
-      "verdict": "breaking",
-      "reason": "真破坏：path 级策略匹配键由原始路径改为路由模板，按具体实例路径配置的策略必须迁移到模板键。源仓 CHANGELOG 未标 BREAKING，登记待补标注（补标后随生成进 breakingIndex）。",
-      "ref": "oekit/matrix-tools#323"
-    },
-    {
-      "repo": "hertz",
-      "version": "v0.9.0",
       "line_prefix": "**fix(metrics)**：`MetricsHandlerFor` 每次调用新建 `promhttp.HandlerFor`（无缓存）⇒",
       "verdict": "not-breaking",
       "reason": "性能修复 + 删除未导出类型上的空 Flush（非公开 API，promhttp 不使用）；无对外契约变化。",
