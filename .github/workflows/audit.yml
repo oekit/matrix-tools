@@ -190,6 +190,10 @@ jobs:
         run: python3 scripts/scenario_smoke_selftest.py
       - name: 场景组合冒烟自测·变异自证（短路去重 ⇒ V1 组合数断言必须失效）
         run: python3 scripts/scenario_smoke_selftest.py --mutate
+      - name: 组合兼容探测自测（N-1 选择/单元枚举/退出码裁决 + 变异自证——#343）
+        run: python3 scripts/compat_probe_selftest.py
+      - name: 组合兼容探测自测·变异自证（短路 finalize ⇒ V3 裁决断言必须失效）
+        run: python3 scripts/compat_probe_selftest.py --mutate
       - name: 自测接线漂移门禁（自测文件集合 == workflow 调用集合，漏接必红——#260）
         run: python3 scripts/selftest_wiring_check.py
       - name: 自测接线漂移门禁·变异自证（合成漏接/幽灵引用/目录缺失 ⇒ 必须红）
@@ -449,3 +453,29 @@ jobs:
         with:
           name: scenario-report
           path: scenario-report.txt
+
+  # 组合兼容探测（#343 P3）：探针A=BOM 快照地板组合编译（红级，验显式承诺）；
+  # 探针B=N-1 落后一档（⚠ 0.x 合法演进，可见不阻塞）。
+  #
+  # 为什么不进 PR 门禁（同 consumer/scenario 定位）：它测**已发布**版本组合的
+  # 可编译性，PR 里的改动尚未发布；且依赖外网（module proxy + ls-remote），
+  # PR 门禁不该为网络波动红。无需克隆仓库——纯 go + git ls-remote。
+  compat:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-go@v7
+        with:
+          go-version: '1.26'
+      - name: 组合兼容探测（BOM 快照地板编译 + N-1 落后一档）
+        run: python3 scripts/compat_probe.py --json | tee compat-report.txt
+      - name: Upload compat report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compat-report
+          path: compat-report.txt
