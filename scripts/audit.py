@@ -712,6 +712,13 @@ try:
         issues += check_filesystem_oracle(_repos)
         issues += check_llms_units(_llms_text)
         issues += check_section_consistency(_llms_text, _nested_derived)
+        # 场景安装行段（#341 P2）：llms 必须含规范场景组合行——缺/漂即红。
+        # 渲染单源在 gen_skill.SCENARIOS（发布行 = scenario_smoke 执行行）。
+        try:
+            import gen_skill  # noqa: E402  （延迟导入，站点阶段才需要）
+            issues += [f"llms.txt: {q}" for q in gen_skill.check_llms_scenarios(_llms_text)]
+        except Exception as e:  # noqa: BLE001 — 判据读不到显式红，不许静默跳过（#79）
+            issues.append(gate_unavailable("llms 场景安装行段判据", e))
         # llms.txt 条目里的**反引号标识符**必须在本仓源码里真实存在——
         # 实测抓到 hertz 条目写了 kitex 的 WithReadyAddr（照抄得到 undefined）。
         # 判据只读源码（客观事实），不与被检对象共享任何解析逻辑。

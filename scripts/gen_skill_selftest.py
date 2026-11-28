@@ -7,6 +7,8 @@
   3. LAYERS 恰好覆盖 MODULES：新增模块忘分层在这拦（audit 同款检查，双保险）
   4. REDLINES_SHORT 出处：前五条判据的关键 token 必须能在 HARD_RULES_MD 找到
      ——红线精华与单源漂移（改了 rules.py 没同步精华）在这拦
+  5. 场景安装行（#341 P2）：每场景组合行三出口在场（skill/site/llms 规范段）、
+     行格式 go get + 全 oekit 前缀、计数文案派生自 len()（不许硬编码 24）
 
 附：skills/*/SKILL.md 的 frontmatter name 与目录名一致（release/sweep 是手写件，
 没有生成器兜底，拼错 name = ZCode 装载后触发不了）。
@@ -78,6 +80,36 @@ expect(not missing, f"rules.py 单源里找不到这些 token（提取漂移？�
 for t in ("BizError", "Delegating", "GoSafe", "Close(ctx)", "XxxOption"):
     blob = "\n".join(gen_skill.REDLINES_SHORT)
     expect(t in blob, f"REDLINES_SHORT 缺关键判据 {t}（红线精华失守）")
+
+# 4b) 场景安装行三出口在场 + 行格式（#341 P2 单源纪律）
+_skill_md = gen_skill.render_skill()
+_site_md = gen_skill.render_site()
+_llms_sec = gen_skill.render_llms_scenario_section()
+expect("### 场景安装行（复制即用）" in _skill_md, "SKILL.md 缺场景安装行块")
+expect("### 场景安装行（复制即用）" in _site_md, "selection.md 缺场景安装行块")
+expect(gen_skill.check_llms_scenarios(_llms_sec) == [], "规范 llms 场景段自检不通过")
+expect(gen_skill.check_llms_scenarios("## 文档\nx") != [], "llms 缺场景段未判红")
+_n_scenes = 0
+for _g, _rows in gen_skill.SCENARIOS:
+    for _r in _rows:
+        _n_scenes += 1
+        _line = gen_skill.scenario_install_line(_r["mods"])
+        expect(_line in _skill_md, f"SKILL.md 缺场景行：{_line}")
+        expect(_line in _site_md, f"selection.md 缺场景行：{_line}")
+        expect(_line.split()[:2] == ["go", "get"], f"场景行非 go get：{_line}")
+        expect(all(x.startswith("github.com/oekit/") for x in _line.split()[2:]),
+               f"场景行含非 oekit 路径：{_line}")
+expect(_n_scenes > 0, "SCENARIOS 为空")
+
+# 4c) 计数文案派生（P0 教训：AI 面硬编码计数必漂）——渲染产物里不许出现
+#     「写死的模块数」与 len(MODULES) 不一致的情况
+# 扫描产物里所有「N 独立模块」声明，必须全部 == len(MODULES)——
+# 不写死当前值（写死 23 在模块数变 24 时又漂，P0 的老路）
+import re as _re2
+for _m in _re2.finditer(r"(\d+) 独立模块", _skill_md):
+    expect(int(_m.group(1)) == len(MODULES),
+           f"SKILL.md 计数 {_m.group(1)} ≠ len(MODULES)={len(MODULES)}")
+expect(f"{len(MODULES)} 独立模块" in _skill_md, "SKILL.md 计数未派生自 len(MODULES)")
 
 # 5) frontmatter name 与目录名一致（三个 skill）
 for s in ("oekit", "oekit-release", "oekit-sweep"):
