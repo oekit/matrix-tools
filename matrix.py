@@ -15,10 +15,14 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 # 规范模块清单（依赖自底向上的顺序；个数勿在注释里手写——len(MODULES) 即口径）
+#
+# 2026-11-28 #336 重排：data 移到 etcdx 之后——data 作为 DAO 门面直接 require
+# gormx/redisx，旧序把 data 排在它们前面（dep_gate 首跑抓到的 2 条声明序漂移，
+# 现以豁免登记挂着）。重排后声明序与编译事实对齐，豁免删除（dep_gate 零豁免）。
 MODULES = [
     "pkg", "concurrency", "logx", "core", "authx",
     "metrics", "tracing", "registry",
-    "data", "gormx", "redisx", "etcdx", "httpx", "network", "timertask", "middleware", "k8s",
+    "gormx", "redisx", "etcdx", "data", "httpx", "network", "timertask", "middleware", "k8s",
     "nns", "nns-endpoint",
     "bootstrap", "hertz", "kitex", "workflow",
 ]
